@@ -1,0 +1,1307 @@
+/* sc-theme.css */
+
+@theme {
+  --color-bg-primary: rgba(10, 10, 12, 0.95);
+  --color-bg-glass: rgba(255, 255, 255, 0.03);
+  --color-bg-glass-hover: rgba(255, 255, 255, 0.06);
+  --color-bg-glass-active: rgba(255, 255, 255, 0.09);
+  --color-border-glass: rgba(255, 255, 255, 0.06);
+  --color-border-glass-hi: rgba(255, 255, 255, 0.12);
+  --color-text-primary: rgba(255, 255, 255, 0.92);
+  --color-text-secondary: rgba(255, 255, 255, 0.55);
+  --color-text-tertiary: rgba(255, 255, 255, 0.25);
+  --color-accent: #ff5500;
+  --color-accent-hover: #ff6a1a;
+  --color-accent-glow: rgba(255, 85, 0, 0.2);
+  --color-accent-selection: rgba(255, 85, 0, 0.3);
+  --color-accent-contrast: #ffffff;
+
+  --font-sans: "Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --ease-apple: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ── Performance modes ──────────────────────────────────────────
+   One central gate for the liquid-glass cost. `:root` carries the full "beauty"
+   values, so the absence of the attribute === beauty and the rich design is the
+   default. ThemeProvider writes html[data-perf]; components read usePerfMode()
+   (lib/perf.ts) to gate inline-styled blur / particles / atmosphere, which a CSS
+   class can't override. backdrop-filter:blur is the single most expensive CSS op,
+   so these vars + the light-mode solid-tint swaps below are the biggest lever. */
+:root {
+    --glass-blur: 40px; /* .glass and frosted panels */
+    --glass-blur-strong: 60px; /* .glass-featured (SoundWave blocks) */
+    --glass-blur-soft: 28px; /* .npb-glass (now-playing pill) */
+}
+
+[data-perf="medium"] {
+    --glass-blur: 18px;
+    --glass-blur-strong: 26px;
+    --glass-blur-soft: 16px;
+}
+
+[data-perf="light"] {
+    --glass-blur: 0px;
+    --glass-blur-strong: 0px;
+    --glass-blur-soft: 0px;
+}
+
+/* Light mode: drop the live backdrop blur, keep the dark frosted look via a flat
+   solid tint (visually close on a dark UI, zero per-repaint blur cost). */
+[data-perf="light"] .glass,
+[data-perf="light"] .glass-flat {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: rgba(22, 22, 26, 0.82);
+}
+
+[data-perf="light"] .glass-featured {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: rgba(16, 16, 20, 0.86);
+}
+
+[data-perf="light"] .npb-glass {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: linear-gradient(
+            180deg,
+            rgba(255, 255, 255, 0.06),
+            rgba(255, 255, 255, 0.015) 44%,
+            rgba(255, 255, 255, 0.008)
+    ),
+    rgba(15, 15, 19, 0.92);
+}
+
+[data-perf="light"] .npb-glass::after {
+    display: none;
+}
+
+/* Global idle-animation gate — the WebView never throttles a hidden window, so
+   pause every animation while minimized (all modes, zero visual change while shown). */
+[data-app-hidden="1"] *,
+[data-app-hidden="1"] *::before,
+[data-app-hidden="1"] *::after {
+    animation-play-state: paused !important;
+}
+
+/* Light mode: stop decorative idle motion carried on CSS classes. Inline-styled
+   motion (star fields, aurora orbs, prismatic text) is gated in JS via usePerfMode;
+   functional motion (spinners, dialog transitions, live progress) is left alone. */
+[data-perf="light"] .skeleton-shimmer,
+[data-perf="light"] .soundwave-bar,
+[data-perf="light"] .vp-chev,
+[data-perf="light"] .vp-mote,
+[data-perf="light"] .lyric-line[data-state="active"] .note-gradient-text,
+[data-perf="light"] .npb-dock[data-playing="true"] .npb-ring,
+[data-perf="light"] .npb-dock[data-playing="true"] .npb-play::after {
+    animation: none !important;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* Drop sticky :hover while content scrolls under a stationary cursor — WebKitGTK
+   doesn't re-hit-test on wheel scroll, so cards otherwise "stick" or light up the
+   wrong tile. The guard is set on scroll and cleared on pointer move/down (see
+   AppShell), so real hover/click intent re-enables instantly. */
+main[data-scrolling] *,
+main[data-scrolling] *::before,
+main[data-scrolling] *::after {
+    pointer-events: none !important;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.01em;
+}
+
+#root {
+  background: rgb(8, 8, 10);
+  overflow: hidden;
+}
+
+/* ── Text selection ─────────────────────────────────────────────
+   Desktop chrome should feel native: nothing is selectable by default (no more
+   highlighting a random div). `body` covers Radix/sonner portals too. Real text
+   content opts back in with `.selectable`; inputs/editables are always selectable. */
+body {
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+input,
+textarea,
+select,
+[contenteditable="true"],
+.selectable {
+    user-select: text;
+    -webkit-user-select: text;
+}
+
+/* ── Scrollbar ─────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* ── Glass ──────────────────────────────────────────────────── */
+.glass {
+  background: rgba(255, 255, 255, 0.025);
+    backdrop-filter: blur(var(--glass-blur)) saturate(1.8);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.glass-hover:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.glass-flat {
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* ── Shimmer ───────────────────────────────────────────────── */
+@keyframes skeleton-pulse {
+    0%,
+    100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.45;
+    }
+}
+
+.skeleton-shimmer {
+  background: rgba(255, 255, 255, 0.05);
+  animation: skeleton-pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .skeleton-shimmer {
+        animation: none;
+    }
+}
+
+/* ── Scrollbar hide ────────────────────────────────────────── */
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* ── Selection ─────────────────────────────────────────────── */
+::selection {
+  background: var(--color-accent-selection);
+  color: white;
+}
+
+/* ── Focus reset ───────────────────────────────────────────── */
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+/* ── Feed animations ──────────────────────────────────────── */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fadeInUp 0.5s var(--ease-apple) both;
+}
+
+.hero-greeting {
+  color: rgba(255, 255, 255, 0.96);
+}
+
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  .hero-greeting {
+    background-image: linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 1),
+      rgba(255, 255, 255, 0.8),
+      rgba(255, 85, 0, 0.8)
+    );
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+  }
+}
+
+/* ── Dialog animations (Radix data-state) ────────────────── */
+@keyframes dialogOverlayIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes dialogOverlayOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+@keyframes dialogContentIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -48%) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+@keyframes dialogContentOut {
+  from {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, -48%) scale(0.96);
+  }
+}
+
+.dialog-overlay[data-state="open"] {
+  animation: dialogOverlayIn 0.2s var(--ease-apple) forwards;
+}
+.dialog-overlay[data-state="closed"] {
+  animation: dialogOverlayOut 0.15s var(--ease-apple) forwards;
+}
+.dialog-content[data-state="open"] {
+  animation: dialogContentIn 0.25s var(--ease-apple) forwards;
+}
+.dialog-content[data-state="closed"] {
+  animation: dialogContentOut 0.15s var(--ease-apple) forwards;
+}
+
+/* ── Custom modal shell (components/ui/Modal.tsx) — JS-toggled transitions ──
+ * data-state is flipped in JS (open ⇄ closed); plain CSS transitions do the
+ * animation. No Radix, no @keyframes — works reliably under WebKitGTK. */
+.modal-overlay {
+  opacity: 0;
+  transition: opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.modal-overlay[data-state="open"] {
+  opacity: 1;
+}
+
+.modal-content {
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.96);
+  transition: opacity 0.24s cubic-bezier(0.16, 1, 0.3, 1),
+  transform 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform, opacity;
+}
+
+.modal-content[data-state="open"] {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+/* ── Featured card glass ──────────────────────────────────── */
+.glass-featured {
+  background: rgba(255, 255, 255, 0.02);
+    backdrop-filter: blur(var(--glass-blur-strong)) saturate(2);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.03) inset,
+    0 8px 40px rgba(0, 0, 0, 0.3);
+}
+
+.glass-featured:hover {
+  background: rgba(255, 255, 255, 0.035);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+/* ── Synced lyrics lines ─────────────────────────────────── */
+.lyric-line {
+  cursor: pointer;
+  padding: 10px 0;
+  line-height: 1.32;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: rgba(255, 255, 255, 0.26);
+  opacity: 0.4;
+  transform-origin: left center;
+  transform: scale(0.972) translate3d(0, 0, 0);
+  will-change: transform, opacity, color;
+  transition:
+    color 0.45s var(--ease-apple),
+    opacity 0.45s var(--ease-apple),
+    transform 0.45s var(--ease-apple),
+    filter 0.45s var(--ease-apple);
+  -webkit-font-smoothing: antialiased;
+  filter: drop-shadow(0 0 0 transparent);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.lyric-line[data-state="active"] {
+  color: #fff;
+  opacity: 1;
+  transform: scale(1.02) translate3d(0, 0, 0);
+  filter: drop-shadow(0 0 18px rgba(255, 255, 255, 0.38));
+}
+
+.lyric-line[data-state="past-near"] {
+  color: rgba(255, 255, 255, 0.78);
+  opacity: 0.78;
+  transform: scale(0.992) translate3d(-4px, 0, 0);
+}
+
+.lyric-line[data-state="past"] {
+  color: rgba(255, 255, 255, 0.42);
+  opacity: 0.48;
+  transform: scale(0.98) translate3d(-8px, 0, 0);
+}
+
+.lyric-line[data-state="next-near"] {
+  color: rgba(255, 255, 255, 0.55);
+  opacity: 0.66;
+  transform: scale(0.988) translate3d(6px, 0, 0);
+}
+
+.lyric-line[data-state="next"] {
+  color: rgba(255, 255, 255, 0.32);
+  opacity: 0.28;
+  transform: scale(0.968) translate3d(12px, 0, 0);
+}
+
+/* ── Lyrics pause marker (♪♪♪) ─────────────────────────── */
+.lyric-pause {
+  cursor: default;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.lyric-pause-track {
+  margin-top: 10px;
+  height: 3px;
+  width: 96px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.lyric-pause-bar {
+  height: 100%;
+  width: 0%;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.7);
+  transition: none;
+}
+
+.lyric-pause-bar[data-state="active"] {
+  width: 100%;
+  transition: width var(--pause-duration, 2s) linear;
+}
+
+.lyric-pause-bar[data-state="past"] {
+  width: 100%;
+}
+
+@keyframes noteGradientFlow {
+  0% {
+    background-position: 0 50%;
+  }
+  100% {
+    background-position: 144px 50%;
+  }
+}
+
+.note-gradient-text {
+  display: inline-block;
+  color: rgba(255, 255, 255, 0.32);
+  background-image: none;
+  background-size: 144px 100%;
+  background-repeat: repeat-x;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  transition:
+    color 0.3s var(--ease-apple),
+    filter 0.3s var(--ease-apple);
+  will-change: background-position, color;
+}
+
+.lyric-line[data-state="active"] .note-gradient-text {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  -webkit-background-clip: text;
+  background-clip: text;
+  background-image: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.06) 0px,
+    rgba(255, 255, 255, 0.06) 16px,
+    rgba(255, 255, 255, 0.18) 32px,
+    rgba(255, 255, 255, 0.45) 50px,
+    rgba(255, 255, 255, 0.95) 72px,
+    rgba(255, 255, 255, 0.45) 94px,
+    rgba(255, 255, 255, 0.18) 112px,
+    rgba(255, 255, 255, 0.06) 128px,
+    rgba(255, 255, 255, 0.06) 144px
+  );
+  filter: drop-shadow(0 0 18px rgba(255, 255, 255, 0.38));
+  animation: noteGradientFlow 3.2s linear infinite both;
+}
+
+.lyric-line[data-state="past"] .note-gradient-text,
+.lyric-line[data-state="past-near"] .note-gradient-text {
+  color: rgba(255, 255, 255, 0.92);
+  filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.08));
+}
+
+/* ── Active-line karaoke fill — driven by --lyric-progress (rAF) ── */
+.lyric-fill {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  white-space: pre-wrap;
+  vertical-align: top;
+  color: rgba(255, 255, 255, 0.32);
+}
+
+/* Light mode renders the active line as one .lyric-fill span (no per-char nodes),
+   so brighten its text directly — the per-char sweep that lights beauty is absent. */
+[data-perf="light"] .lyric-line[data-state="active"] .lyric-fill {
+    color: #fff;
+}
+
+/* A "word" wrapper just keeps characters from breaking mid-word. */
+.lyric-word {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+/* Per-character animated highlight driven by rAF.
+   --char-progress 0..1 sweeps left-to-right across the active line. */
+.lyric-char {
+  display: inline-block;
+  position: relative;
+  color: rgba(255, 255, 255, calc(0.26 + 0.74 * var(--char-progress, 0)));
+  text-shadow:
+    0 0 calc(10px * var(--char-progress, 0))
+    rgba(255, 255, 255, calc(0.18 * var(--char-progress, 0))),
+    0 0 calc(24px * var(--char-progress, 0))
+    rgba(255, 255, 255, calc(0.1 * var(--char-progress, 0)));
+  transform: translateY(calc(-1.5px * var(--char-progress, 0)))
+    scale(calc(1 + 0.022 * var(--char-progress, 0)));
+  transform-origin: center 80%;
+  transition:
+    color 90ms linear,
+    text-shadow 130ms linear,
+    transform 140ms ease-out;
+  will-change: color, text-shadow, transform;
+}
+
+/* Past line — all chars fully lit */
+.lyric-line[data-state="past"] .lyric-char,
+.lyric-line[data-state="past-near"] .lyric-char {
+  color: rgba(255, 255, 255, 1);
+  text-shadow: 0 0 22px rgba(255, 255, 255, 0.18);
+  transform: none;
+}
+
+/* Next line — fully dim */
+.lyric-line[data-state="next"] .lyric-char,
+.lyric-line[data-state="next-near"] .lyric-char {
+  color: rgba(255, 255, 255, 0.3);
+  text-shadow: none;
+  transform: none;
+}
+
+/* Pause: kill micro-transitions while frozen */
+.lyrics-paused .lyric-line[data-state="active"] .lyric-char {
+  transition-duration: 0ms;
+}
+
+/* ── Artwork zoom-in modal ─────────────────────────────────── */
+@keyframes zoomIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-zoom-in {
+  animation: zoomIn 0.4s var(--ease-apple) both;
+}
+
+/* ── Star modal scroll ──────────────────────────────────────── */
+.star-scroll {
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    black 16px,
+    black calc(100% - 16px),
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    black 16px,
+    black calc(100% - 16px),
+    transparent 100%
+  );
+}
+
+.star-scroll::-webkit-scrollbar {
+  width: 3px;
+}
+
+.star-scroll::-webkit-scrollbar-thumb {
+  background: rgba(168, 85, 247, 0.2);
+  border-radius: 10px;
+}
+
+.star-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(168, 85, 247, 0.4);
+}
+
+/* ── Star subscription particles ────────────────────────────── */
+@keyframes star-float {
+  from {
+    transform: translateY(0) scale(1);
+    opacity: 0.3;
+  }
+  to {
+    transform: translateY(-6px) scale(1.3);
+    opacity: 0.7;
+  }
+}
+
+/* ── SoundWave hero block ──────────────────────────────────── */
+@keyframes sw-bar {
+  0%,
+  100% {
+    transform: scaleY(0.22);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+/* Particle drift — translate+opacity only (no scale). Scale on ~20 elements
+   forces relayout of their composite rect every frame; pure translate stays
+   on the GPU compositor. */
+@keyframes sw-drift {
+  0% {
+    transform: translate3d(0, 0, 0);
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.7;
+  }
+  100% {
+    transform: translate3d(0, -22px, 0);
+    opacity: 0;
+  }
+}
+
+/* Aurora orbs carry a heavy `filter: blur()`; rotate/scale would force the
+   blur kernel to recompute every frame (huge GPU cost). Stick to translate —
+   that's a cheap composite transform, blur result stays cached. */
+@keyframes sw-aurora {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(3%, -1.5%, 0);
+  }
+}
+
+@keyframes sw-shine {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(220%);
+  }
+}
+
+@keyframes sw-pulse-ring {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.75;
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+
+/* ── Liquid Glass Portal (vp-) — vibe-search CTA in the SoundWave hero ──
+   Composite-only motion: transform / opacity / box-shadow. Pointer lensing
+   (--mx/--my/--px) is written from JS to CSS vars. Blur layers (vp-aurora,
+   vp-lens) carry contain:strict + translateZ(0) to live on their own GPU
+   layer; the content wrapper is isolation:isolate so its repaints never
+   recompute those blurs. */
+
+/* Idle chevron breathing; accelerates on hover so the » "opens" toward search. */
+@keyframes vp-chev {
+    0%,
+    100% {
+        transform: translate3d(0, 0, 0);
+    }
+    50% {
+        transform: translate3d(3px, 0, 0);
+    }
+}
+
+/* One-shot specular sweep across the lozenge on hover. */
+@keyframes vp-gleam {
+    to {
+        transform: translateX(560%);
+    }
+}
+
+.vp-portal {
+    transition: transform 0.4s var(--ease-apple),
+    box-shadow 0.4s var(--ease-apple);
+}
+
+.vp-portal:active {
+    transform: scale(0.992);
+}
+
+.vp-portal:focus-visible .vp-ring {
+    opacity: 1;
+}
+
+/* Marching » chevrons. will-change is intent-scoped to :hover only. */
+.vp-chev {
+    animation: vp-chev 1.9s ease-in-out infinite;
+}
+
+.vp-portal:hover .vp-chev {
+    animation-duration: 0.85s;
+    will-change: transform;
+}
+
+/* Gleam sweeps once per hover (skew lives on the inner span, unanimated). */
+.vp-portal:hover .vp-gleam {
+    animation: vp-gleam 1.05s var(--ease-apple);
+}
+
+/* Sigil lifts and its hairline ring expands on hover. */
+.vp-sigil {
+    transition: transform 0.45s var(--ease-apple);
+}
+
+.vp-portal:hover .vp-sigil {
+    transform: scale(1.06);
+}
+
+.vp-sigil-ring {
+    opacity: 0;
+    transform: scale(1);
+    transition: transform 0.55s var(--ease-apple),
+    opacity 0.55s var(--ease-apple);
+}
+
+.vp-portal:hover .vp-sigil-ring {
+    opacity: 0.5;
+    transform: scale(1.22);
+}
+
+/* Motes drift at rest, then are drawn toward the » well on hover. The drift
+   animation is dropped (not paused) on hover so the base value + pull
+   transition take over — a paused animation would keep overriding transform. */
+.vp-mote {
+    animation-name: sw-drift;
+    animation-timing-function: ease-in-out;
+    animation-iteration-count: infinite;
+    transition: transform var(--vp-pdur, 520ms) var(--ease-apple),
+    opacity 0.4s ease-out;
+}
+
+.vp-portal:hover .vp-mote {
+    animation-name: none;
+    transform: translate3d(var(--vp-dx, 0), var(--vp-dy, 0), 0) scale(0.4);
+    opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .vp-chev,
+    .vp-portal:hover .vp-chev,
+    .vp-portal:hover .vp-gleam,
+    .vp-aurora,
+    .vp-mote,
+    .vp-portal:hover .vp-mote {
+        animation: none !important;
+    }
+}
+
+.soundwave-bar {
+  transform-origin: center;
+  animation: sw-bar 1.4s ease-in-out infinite;
+  will-change: transform;
+}
+
+/* Progress-based waveform: two stacked bar layers, the accent one clipped
+   by --sw-progress (0%–100%). Only the clip-path changes at runtime — GPU
+   composite-only, zero layout, zero React re-renders during playback. */
+.sw-bars {
+  --sw-progress: 0%;
+}
+
+.sw-bar {
+  min-height: 3px;
+  border-radius: 1.5px;
+}
+
+.sw-layer-muted .sw-bar {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.sw-layer-accent {
+  clip-path: inset(0 calc(100% - var(--sw-progress)) 0 0);
+  -webkit-clip-path: inset(0 calc(100% - var(--sw-progress)) 0 0);
+  transition:
+    clip-path 0.12s linear,
+    -webkit-clip-path 0.12s linear;
+  will-change: clip-path;
+}
+
+.sw-layer-accent .sw-bar {
+  background: var(--color-accent);
+  box-shadow: 0 0 6px var(--color-accent-glow);
+}
+
+.soundwave-title {
+  background-image: linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0.98) 0%,
+    rgba(255, 255, 255, 0.72) 40%,
+    var(--color-accent) 100%
+  );
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+/* ── Now Playing Bar — Liquid Pill Dock ──────────────────────────
+   A single floating frosted capsule. The glass (backdrop-filter) lives in
+   its OWN isolated layer (.npb-glass); all live/interactive content sits in
+   a sibling .npb-content layer ABOVE it, so 60fps progress repaints never
+   re-run the blur. There is no idle motion; the looping "now playing" cues
+   (vinyl ring, eq bars, play pulse) run only while [data-playing] is true
+   (= playing AND window visible). */
+.npb {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 50;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding: 11px 16px 15px;
+    /* overlay: empty areas around the pill let clicks fall through to the page */
+    pointer-events: none;
+    animation: npb-rise 0.7s var(--ease-apple) both;
+}
+
+@keyframes npb-rise {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+/* accent under-glow plate behind the pill (cheap gradient, no backdrop-filter) */
+.npb-underglow {
+    position: absolute;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(62%, 660px);
+    height: 70px;
+    pointer-events: none;
+    z-index: 0;
+    background: radial-gradient(60% 100% at 50% 100%, var(--color-accent-glow) 0%, transparent 72%);
+    filter: blur(8px);
+    opacity: 0.85;
+    transition: opacity 0.4s var(--ease-apple);
+}
+
+.npb:hover .npb-underglow {
+    opacity: 1;
+}
+
+/* the floating capsule — frame carries shadow + the gentle float */
+.npb-dock {
+    position: relative;
+    z-index: 1;
+    pointer-events: auto;
+    width: max-content;
+    max-width: calc(100% - 32px);
+    border-radius: 28px;
+    box-shadow: 0 30px 70px -22px rgba(0, 0, 0, 0.78),
+    0 0 64px -18px var(--color-accent-glow);
+}
+
+/* the ONLY backdrop-filter — isolated in its own GPU layer */
+.npb-glass {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 0;
+    background: linear-gradient(
+            180deg,
+            rgba(255, 255, 255, 0.09),
+            rgba(255, 255, 255, 0.022) 44%,
+            rgba(255, 255, 255, 0.01)
+    ),
+    rgba(15, 15, 19, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.11);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.2) inset,
+    0 -10px 26px -18px rgba(0, 0, 0, 0.7) inset;
+    backdrop-filter: blur(var(--glass-blur-soft)) saturate(1.6);
+    -webkit-backdrop-filter: blur(var(--glass-blur-soft)) saturate(1.6);
+    contain: strict;
+    transform: translateZ(0);
+}
+
+/* accent tint in the corner */
+.npb-glass::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(120% 180% at 6% 0%, var(--color-accent-glow) 0%, transparent 42%);
+    opacity: 0.5;
+}
+
+/* fine grain for material realism */
+.npb-glass::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    opacity: 0.04;
+    mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* content layer — repaints here never re-blur the glass below */
+.npb-content {
+    position: relative;
+    z-index: 1;
+    isolation: isolate;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 10px 18px 8px;
+}
+
+.npb-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.npb-sep {
+    width: 1px;
+    height: 30px;
+    flex: 0 0 auto;
+    background: linear-gradient(180deg, transparent, rgba(255, 255, 255, 0.16), transparent);
+}
+
+/* meta (art + title) */
+.npb-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+
+.npb-art {
+    position: relative;
+    width: 48px;
+    height: 48px;
+    flex: 0 0 auto;
+    border-radius: 13px;
+    overflow: hidden;
+    cursor: pointer;
+    box-shadow: 0 8px 20px -8px rgba(0, 0, 0, 0.75),
+    0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+    transition: transform 0.3s var(--ease-apple),
+    box-shadow 0.3s var(--ease-apple);
+}
+
+.npb-art:hover {
+    transform: scale(1.05) rotate(-1.5deg);
+    box-shadow: 0 10px 26px -8px rgba(0, 0, 0, 0.8),
+    0 0 0 1px rgba(255, 255, 255, 0.2) inset,
+    0 0 30px -8px var(--color-accent-glow);
+}
+
+.npb-art img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.npb-artfb {
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(140deg, var(--color-accent), #3a2bd0);
+}
+
+.npb-ring {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    background: conic-gradient(
+            from 0deg,
+            transparent 0 74%,
+            rgba(255, 255, 255, 0.55) 84%,
+            transparent 92%
+    );
+    -webkit-mask: radial-gradient(circle, transparent 56%, #000 58%);
+    mask: radial-gradient(circle, transparent 56%, #000 58%);
+    opacity: 0;
+    transition: opacity 0.3s var(--ease-apple);
+}
+
+.npb-eq {
+    position: absolute;
+    left: 6px;
+    bottom: 6px;
+    display: flex;
+    align-items: flex-end;
+    gap: 1.5px;
+    height: 11px;
+    opacity: 0;
+    transition: opacity 0.3s var(--ease-apple);
+    pointer-events: none;
+}
+
+.npb-eq i {
+    width: 2px;
+    height: 11px;
+    border-radius: 1px;
+    background: #fff;
+    box-shadow: 0 0 6px var(--color-accent-glow);
+    transform-origin: bottom;
+    transform: scaleY(0.32);
+}
+
+.npb-dock[data-playing="true"] .npb-ring {
+    opacity: 0.5;
+    animation: npb-spin 7s linear infinite;
+}
+
+.npb-dock[data-playing="true"] .npb-eq {
+    opacity: 1;
+}
+
+.npb-dock[data-playing="true"] .npb-eq i {
+    animation: npb-eq 900ms ease-in-out infinite;
+}
+
+.npb-eq i:nth-child(1) {
+    animation-delay: -200ms;
+}
+
+.npb-eq i:nth-child(2) {
+    animation-delay: -560ms;
+}
+
+.npb-eq i:nth-child(3) {
+    animation-delay: -80ms;
+}
+
+.npb-eq i:nth-child(4) {
+    animation-delay: -380ms;
+}
+
+@keyframes npb-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@keyframes npb-eq {
+    0%,
+    100% {
+        transform: scaleY(0.32);
+    }
+    50% {
+        transform: scaleY(1);
+    }
+}
+
+.npb-txt {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    max-width: 150px;
+}
+
+.npb-ttl {
+    font-size: 13px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    color: rgba(255, 255, 255, 0.95);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    transition: color 0.2s var(--ease-apple);
+}
+
+.npb-ttl:hover {
+    color: #fff;
+}
+
+.npb-sub {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.5);
+    min-width: 0;
+    transition: color 0.2s var(--ease-apple);
+}
+
+.npb-sub.is-link {
+    cursor: pointer;
+}
+
+.npb-sub.is-link:hover {
+    color: rgba(255, 255, 255, 0.72);
+}
+
+.npb-sub span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* play orb — the hero */
+.npb-play {
+    position: relative;
+    width: 48px;
+    height: 48px;
+    flex: 0 0 auto;
+    margin: 0 3px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    cursor: pointer;
+    border: 0;
+    background: radial-gradient(
+            125% 125% at 32% 24%,
+            var(--color-accent-hover),
+            var(--color-accent) 68%
+    );
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.26) inset,
+    0 8px 20px -5px var(--color-accent-glow),
+    0 0 30px -6px var(--color-accent-glow);
+    transition: transform 0.25s var(--ease-apple),
+    box-shadow 0.25s var(--ease-apple);
+}
+
+.npb-play:hover {
+    transform: translateY(-1px) scale(1.06);
+}
+
+.npb-play:active {
+    transform: scale(0.95);
+}
+
+.npb-play::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    pointer-events: none;
+    border: 1.5px solid var(--color-accent);
+    opacity: 0;
+}
+
+.npb-dock[data-playing="true"] .npb-play::after {
+    animation: npb-pulse 2.8s var(--ease-apple) infinite;
+}
+
+@keyframes npb-pulse {
+    0% {
+        transform: scale(1);
+        opacity: 0.7;
+    }
+    70% {
+        transform: scale(1.4);
+        opacity: 0;
+    }
+    100% {
+        opacity: 0;
+    }
+}
+
+/* progress lane (full pill width) */
+.npb-lane {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+
+.npb-times {
+    display: flex;
+    justify-content: space-between;
+    font-size: 9.5px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+    color: rgba(255, 255, 255, 0.42);
+    padding: 0 1px 1px;
+}
+
+.npb-times b {
+    color: rgba(255, 255, 255, 0.9);
+    font-weight: 700;
+}
+
+/* track loading (SC → SCD): the capsule traces its own glowing accent outline,
+   the artwork shows a % veil, and the halo brightens. No idle motion — the ring
+   just fills to the real download progress via a transition. */
+.npb-dock.is-loading {
+    box-shadow: 0 30px 70px -22px rgba(0, 0, 0, 0.78),
+    0 0 90px -10px var(--color-accent-glow);
+}
+
+.npb-loadring {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 2;
+    pointer-events: none;
+    overflow: visible;
+}
+
+.npb-loadring rect {
+    x: 1px;
+    y: 1px;
+    width: calc(100% - 2px);
+    height: calc(100% - 2px);
+    rx: 27px;
+    ry: 27px;
+    fill: none;
+}
+
+.npb-loadring-track {
+    stroke: rgba(255, 255, 255, 0.07);
+    stroke-width: 2;
+}
+
+.npb-loadring-fill {
+    stroke: var(--color-accent);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-dasharray: 100 100;
+    filter: drop-shadow(0 0 5px var(--color-accent-glow));
+    transition: stroke-dashoffset 0.3s var(--ease-apple);
+}
+
+.npb-art-load {
+    position: absolute;
+    inset: 0;
+    z-index: 4;
+    display: grid;
+    place-items: center;
+    border-radius: inherit;
+    background: linear-gradient(180deg, rgba(8, 8, 10, 0.34), rgba(8, 8, 10, 0.62));
+    font-size: 11px;
+    font-weight: 750;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+    color: #fff;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+@media (max-width: 1040px) {
+    .npb .npb-vol-slider {
+        display: none;
+    }
+
+    .npb-txt {
+        max-width: 112px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .npb,
+    .npb-dock[data-playing="true"] .npb-ring,
+    .npb-dock[data-playing="true"] .npb-eq i,
+    .npb-dock[data-playing="true"] .npb-play::after {
+        animation: none;
+    }
+}
