@@ -1,12 +1,14 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
-  import { currentTrack, isPlaying, progress } from '$lib/stores';
+  import { get } from 'svelte/store';
+  import { currentTrack, isPlaying, progress, lyricsStatus } from '$lib/stores';
   import { getLyrics } from '$lib/api';
-  import { Loader2 } from '@lucide/svelte';
+  import { Loader2, AlignLeft } from '@lucide/svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { listen } from '@tauri-apps/api/event';
-  import type { UnlistenFn } from '@tauri-apps/api/event';
   import { settings } from '$lib/stores';
+
+  /** Включена ли посимвольная караоке-подсветка. Тайминг строк работает в обоих режимах. */
+  export let letterSync = true;
 
   interface LyricLine {
     time: number;
@@ -28,12 +30,33 @@
   let pauseBarsRef: HTMLElement[] = [];
   let manualScroll = false;
   let lastScrollTs = 0;
+  /**
+   * Сколько текст «не мешает» после того, как его прокрутили руками. Раньше `manualScroll`
+   * снимался только кликом по строке (`handleSeek`), поэтому одно движение колесом
+   * выключало слежение навсегда: спеть могло полтрека, а текст стоял там, где его
+   * оставили, и вернуть его можно было лишь щелчком — то есть с перемоткой звука.
+   * Пять секунд — это заметно дольше любого «пролистну посмотреть, что дальше», но
+   * достаточно быстро, чтобы не успеть решить, будто слежение сломалось.
+   */
+  const FOLLOW_RESUME_MS = 5000;
+  let followResumeTimer: ReturnType<typeof setTimeout> | null = null;
   let lineProgress = 0;
-  let unlistenActiveLine: UnlistenFn;
   let rafId: number;
+  let previousLetterSync = letterSync;
+  let reduceMotion = false;
 
   function clamp01(v: number) {
     return v < 0 ? 0 : v > 1 ? 1 : v;
+  }
+
+  // Roughly how long a line takes to sing: a short lead-in plus ~85ms per character
+  // (≈12 chars/sec, which is a comfortable vocal pace). Never longer than the gap it
+  // has to fit into, never so short that the fill snaps.
+  function estimateSungDuration(text: string, gap: number) {
+    const chars = text.replace(/\s+/g, ' ').trim().length;
+    const est = 0.28 + chars * 0.085;
+    const ceiling = Math.max(0.9, gap - 1.0);
+    return Math.min(Math.max(est, 0.9), ceiling);
   }
 
   function buildDisplayLines(rawText: string) {
@@ -63,11 +86,17 @@
       if (prev) {
         const gap = cur.time - prev.time;
         if (gap >= PAUSE_GAP_THRESHOLD) {
+          // The pause marker becomes the `next` line for `prev`, and the karaoke fill
+          // uses `next.time - cur.time` as the line's duration. Anchoring the marker
+          // 0.5s after `prev` therefore told the animation to sing a whole line in half
+          // a second, which is why the text raced right before the ♪♪♪ row. Estimate how
+          // long the line is actually sung instead, and park the marker after it.
+          const sung = estimateSungDuration(prev.text, gap);
           out.push({
-            time: prev.time + 0.5,
+            time: prev.time + sung,
             text: PAUSE_MARKER,
             pause: true,
-            duration: gap - 0.6,
+            duration: Math.max(0.5, gap - sung - 0.1),
           });
         }
       } else if (cur.time >= PAUSE_GAP_THRESHOLD) {
@@ -83,12 +112,10 @@
     displayLines = out;
   }
 
-  $: if (displayLines.length > 0 && $settings.lyricsOffset !== undefined) {
-    const offsetSecs = ($settings.lyricsOffset || 0) / 1000 - 0.4;
-    invoke('audio_set_lyrics_timeline', {
-      lines: displayLines.map(l => ({ timeSecs: Math.max(0, l.time + offsetSecs), text: l.text }))
-    });
-  }
+  $: hasTimedLyrics = displayLines.length > 0 && displayLines.every((line) => line.time >= 0);
+  // В построчном режиме ручной оффсет выключен в интерфейсе, поэтому не оставляем скрытое
+  // старое значение влиять на строки. Базовая компенсация задержки аудио остаётся общей.
+  $: lyricsOffsetSecs = (letterSync ? ($settings.lyricsOffset || 0) / 1000 : 0) - 0.4;
 
   $: if ($currentTrack) {
     loadLyrics();
@@ -102,23 +129,27 @@
     charRefs = [];
     activeIndex = -1;
     
-    const text = await getLyrics($currentTrack.title, $currentTrack.artist);
+    const text = await getLyrics($currentTrack.title, $currentTrack.artist, $currentTrack);
+    // Тот же ответ нужен кнопке «Показать текст» в полноэкранном режиме — иначе она
+    // продолжала бы звать в пустую панель, которую человек только что закрыл.
+    lyricsStatus.set(text ? 'found' : 'none');
     if (text) {
       lyrics = text;
       buildDisplayLines(text);
+      isLoading = false;
       await tick();
-      setupRaf();
+      syncActiveLine(get(progress), true, 'auto');
+      if (letterSync && hasTimedLyrics) setupRaf();
     } else {
-      lyrics = 'Текст не найден';
+      lyrics = 'Текста пока нет';
       displayLines = [];
-      invoke('audio_clear_lyrics_timeline');
+      isLoading = false;
     }
-    isLoading = false;
   }
 
-  function setLineState(i: number, state: string) {
+  function setLineState(i: number, state: string, force = false) {
     if (!lineRefs[i]) return;
-    if (lineRefs[i].dataset.state === state) return;
+    if (!force && lineRefs[i].dataset.state === state) return;
     lineRefs[i].dataset.state = state;
 
     const line = displayLines[i];
@@ -132,6 +163,59 @@
       if (bar && line.pause) bar.dataset.state = '';
     } else if (state === 'active') {
       if (bar && line.pause) bar.dataset.state = 'active';
+    }
+  }
+
+  function applyLineStates(idx: number, force = false) {
+    for (let i = 0; i < lineRefs.length; i++) {
+      let state;
+      if (i === idx) state = 'active';
+      else if (i === idx - 1) state = 'past-near';
+      else if (i === idx + 1) state = 'next-near';
+      else if (idx >= 0 && i < idx) state = 'past';
+      else state = 'next';
+      setLineState(i, state, force);
+    }
+  }
+
+  function activeLineAt(position: number): number {
+    if (!hasTimedLyrics) return -1;
+    const adjusted = Math.max(0, Number(position) || 0) - lyricsOffsetSecs;
+    let low = 0;
+    let high = displayLines.length - 1;
+    let found = -1;
+
+    while (low <= high) {
+      const middle = (low + high) >> 1;
+      if (displayLines[middle].time <= adjusted) {
+        found = middle;
+        low = middle + 1;
+      } else {
+        high = middle - 1;
+      }
+    }
+    return found;
+  }
+
+  /**
+   * Активная строка считается прямо из общего прогресса плеера. Раньше компонент ждал
+   * отдельное событие Rust-таймлайна; после смены режима оно могло остаться на прежнем
+   * индексе, и тогда строка зависала, хотя сам seek продолжал работать.
+   */
+  function syncActiveLine(position: number, force = false, behavior?: ScrollBehavior) {
+    const idx = activeLineAt(position);
+    const prev = activeIndex;
+    if (!force && idx === prev) return;
+
+    activeIndex = idx;
+    lineProgress = 0;
+    applyLineStates(idx, force);
+
+    if (idx >= 0 && idx < lineRefs.length && !manualScroll) {
+      const gap = performance.now() - lastScrollTs;
+      scrollToActive(
+        behavior ?? (gap < 220 || prev === -1 || Math.abs(idx - prev) > 2 ? 'auto' : 'smooth')
+      );
     }
   }
 
@@ -178,6 +262,10 @@
 
   function setupRaf() {
     if (rafId) cancelAnimationFrame(rafId);
+    if (!letterSync || !hasTimedLyrics) {
+      rafId = 0;
+      return;
+    }
     let lastTickTs = 0;
     const FRAME_BUDGET_MS = 33;
 
@@ -195,8 +283,12 @@
       const cur = displayLines[idx];
       const next = displayLines[idx + 1];
       
-      const offsetSecs = ($settings.lyricsOffset || 0) / 1000 - 0.4;
-      const adjustedProgress = Math.max(0, $progress - offsetSecs);
+      const offsetSecs = lyricsOffsetSecs;
+      // `get(progress)` instead of `$progress`: the auto-subscription invalidated this
+      // component 10x/s (the backend tick rate) and forced a full flush + fragment
+      // diff, even though the value is only ever read here inside the rAF loop. This
+      // frame already runs at most every 33 ms and writes to the DOM directly.
+      const adjustedProgress = Math.max(0, get(progress) - offsetSecs);
       
       const dur = Math.max(0.4, (next?.time ?? cur.time + 2.6) - cur.time);
       const target = clamp01((adjustedProgress - cur.time) / dur);
@@ -210,57 +302,72 @@
     rafId = requestAnimationFrame(tickFrame);
   }
 
-  onMount(() => {
-    (async () => {
-      unlistenActiveLine = await listen('lyrics:active_line', (event) => {
-      if (!containerRef || lineRefs.length === 0) return;
+  async function handleLetterModeChange() {
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = 0;
 
-      const idx = typeof event.payload === 'number' ? event.payload : -1;
-      if (idx === activeIndex) return;
+    // Внутренний keyed-блок пересоздаёт строки при смене режима. Ссылки очищаем до `tick`,
+    // а после него сразу восстанавливаем активную строку из текущей позиции плеера.
+    lineRefs = [];
+    charRefs = [];
+    pauseBarsRef = [];
+    await tick();
+    syncActiveLine(get(progress), true, 'auto');
+    if (letterSync && hasTimedLyrics) setupRaf();
+  }
 
-      const prev = activeIndex;
-      activeIndex = idx;
-      lineProgress = 0;
+  $: if (letterSync !== previousLetterSync) {
+    previousLetterSync = letterSync;
+    void handleLetterModeChange();
+  }
 
-      for (let i = 0; i < lineRefs.length; i++) {
-        let state;
-        if (i === idx) state = 'active';
-        else if (i === idx - 1) state = 'past-near';
-        else if (i === idx + 1) state = 'next-near';
-        else if (idx >= 0 && i < idx) state = 'past';
-        else state = 'next';
-        setLineState(i, state);
-      }
-
-      if (idx >= 0 && idx < lineRefs.length && !manualScroll) {
-        const el = lineRefs[idx];
-        if (el) {
-          const top = el.offsetTop - containerRef.clientHeight / 2 + el.clientHeight / 2;
-          const now = performance.now();
-          const behavior = now - lastScrollTs < 220 || prev === -1 || Math.abs(idx - prev) > 2 ? 'auto' : 'smooth';
-          containerRef.scrollTo({ top, behavior });
-          lastScrollTs = now;
-        }
-      }
+  /**
+   * Поставить активную строку в центр контейнера. Вынесено из обработчика
+   * прогресса, потому что ровно это же нужно при возврате слежения: если просто
+   * снять `manualScroll` и ждать следующей строки, на длинной строке текст «оживёт» лишь
+   * через несколько секунд после таймера — и выглядеть это будет как случайный рывок, а не
+   * как ответ на то, что человек перестал листать.
+   */
+  function scrollToActive(behavior: ScrollBehavior) {
+    if (!containerRef) return;
+    const el = lineRefs[activeIndex];
+    if (!el) return;
+    containerRef.scrollTo({
+      top: el.offsetTop - containerRef.clientHeight / 2 + el.clientHeight / 2,
+      behavior: reduceMotion ? 'auto' : behavior
     });
-    })();
+    lastScrollTs = performance.now();
+  }
+
+  onMount(() => {
+    const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const syncMotionPreference = () => {
+      reduceMotion = motionQuery.matches;
+    };
+    syncMotionPreference();
+    motionQuery.addEventListener('change', syncMotionPreference);
+
+    // Подписка вызывает callback сразу и затем на каждом `audio:tick`, поэтому после
+    // переключения режима или seek строка восстанавливается без ожидания отдельного IPC.
+    const unsubscribeProgress = progress.subscribe((position) => syncActiveLine(position));
 
     const onVisibility = () => {
-      if (document.visibilityState !== 'hidden' && !rafId) {
+      if (letterSync && hasTimedLyrics && document.visibilityState !== 'hidden' && !rafId) {
         setupRaf();
       }
     };
     document.addEventListener('visibilitychange', onVisibility);
 
     return () => {
+      unsubscribeProgress();
       document.removeEventListener('visibilitychange', onVisibility);
+      motionQuery.removeEventListener('change', syncMotionPreference);
     };
   });
 
   onDestroy(() => {
     if (rafId) cancelAnimationFrame(rafId);
-    if (unlistenActiveLine) unlistenActiveLine();
-    invoke('audio_clear_lyrics_timeline');
+    cancelFollowResume();
   });
 
   function splitChars(text: string) {
@@ -290,14 +397,30 @@
       const now = performance.now();
       if (now - lastSeekTime < 300) return;
       lastSeekTime = now;
+      cancelFollowResume();
       manualScroll = false;
-      const offsetSecs = ($settings.lyricsOffset || 0) / 1000 - 0.4;
-      invoke('audio_seek', { position: Math.max(0, time + offsetSecs) });
+      const targetPosition = Math.max(0, time + lyricsOffsetSecs);
+      syncActiveLine(targetPosition, true, 'auto');
+      invoke('audio_seek', { position: targetPosition }).catch(e => console.error(e));
     }
   }
 
+  function cancelFollowResume() {
+    if (followResumeTimer) clearTimeout(followResumeTimer);
+    followResumeTimer = null;
+  }
+
+  // Каждое движение колеса отодвигает возврат: отсчёт идёт от последнего касания, а не от
+  // первого, иначе слежение включилось бы посреди длинной прокрутки и выдернуло страницу
+  // из-под руки.
   function markManual() {
     manualScroll = true;
+    cancelFollowResume();
+    followResumeTimer = setTimeout(() => {
+      followResumeTimer = null;
+      manualScroll = false;
+      scrollToActive('smooth');
+    }, FOLLOW_RESUME_MS);
   }
 
   function registerChar(node: HTMLElement, { lineIndex }: { lineIndex: number }) {
@@ -311,6 +434,27 @@
       }
     };
   }
+
+  /**
+   * Текст без синхронизации приходит одним блоком, и раньше его так и выводили —
+   * `whitespace-pre-wrap` + `leading-loose`: строки растягивались во всю ширину панели,
+   * а каждая пустая строка источника превращалась в дыру. Разбираем блок сами: строка
+   * остаётся строкой, а любая пачка пустых строк сворачивается в один межстрофный
+   * отступ. `displayLines` для этого не годится — там пустые строки уже потеряны.
+   */
+  function toPlainBlocks(text: string): { text: string; isBreak: boolean }[] {
+    const blocks: { text: string; isBreak: boolean }[] = [];
+    for (const raw of (text || '').split('\n')) {
+      const line = raw.trim();
+      if (line) blocks.push({ text: line, isBreak: false });
+      else if (blocks.length && !blocks[blocks.length - 1].isBreak) blocks.push({ text: '', isBreak: true });
+    }
+    // Отступ в самом конце — такой же мусор, как лишняя пустая строка в источнике.
+    if (blocks.length && blocks[blocks.length - 1].isBreak) blocks.pop();
+    return blocks;
+  }
+
+  $: plainBlocks = toPlainBlocks(lyrics);
 </script>
 
 <!-- svelte-ignore a11y-no-static-element-interactions -->
@@ -326,54 +470,73 @@
     <div class="h-full flex items-center justify-center text-white/50">
       <Loader2 class="animate-spin w-8 h-8" />
     </div>
-  {:else if displayLines.length > 0 && displayLines[0].time !== -1}
-    <div class="flex flex-col gap-2">
-      {#each displayLines as line, i}
-        {#if line.pause}
-          <div 
-            bind:this={lineRefs[i]}
-            class="lyric-line lyric-pause" 
-            style="--pause-duration: {line.duration ?? 2}s"
-          >
-            <span class="note-gradient-text">{PAUSE_MARKER}</span>
-            <div class="lyric-pause-track">
-              <div class="lyric-pause-bar" bind:this={pauseBarsRef[i]}></div>
+  {:else if hasTimedLyrics}
+    {#key letterSync}
+      <div class="selectable flex flex-col gap-2" class:lyrics-line-sync={!letterSync}>
+        {#each displayLines as line, i}
+          {#if line.pause}
+            <div
+              bind:this={lineRefs[i]}
+              class="lyric-line lyric-pause"
+              style="--pause-duration: {line.duration ?? 2}s"
+            >
+              <span class="note-gradient-text">{PAUSE_MARKER}</span>
+              <div class="lyric-pause-track">
+                <div class="lyric-pause-bar" bind:this={pauseBarsRef[i]}></div>
+              </div>
             </div>
-          </div>
+          {:else}
+            <!-- svelte-ignore a11y-click-events-have-key-events -->
+            <!-- svelte-ignore a11y-no-static-element-interactions -->
+            <div
+              bind:this={lineRefs[i]}
+              class="lyric-line"
+              on:click={() => handleSeek(line.time)}
+            >
+              {#if letterSync}
+                {@const cells = splitChars(line.text)}
+                {@const groups = splitWordsForChars(cells)}
+                <span class="lyric-fill">
+                  {#each groups as group}
+                    {#if !group[0].animated}
+                      <span>{group.map(c => c.ch).join('')}</span>
+                    {:else}
+                      <span class="lyric-word">
+                        {#each group as c}
+                          <span class="lyric-char" use:registerChar={{ lineIndex: i }}>{c.ch}</span>
+                        {/each}
+                      </span>
+                    {/if}
+                  {/each}
+                </span>
+              {:else}
+                <span class="lyric-line-text">{line.text}</span>
+              {/if}
+            </div>
+          {/if}
+        {/each}
+      </div>
+    {/key}
+  {:else if displayLines.length > 0}
+    <div class="selectable lyrics-plain">
+      <!-- Плашка объясняет, почему ничего не подсвечивается: это не сломанное караоке,
+           а текст, для которого просто нет тайминга. -->
+      <div class="lyrics-plain-head">
+        <AlignLeft size={11} />
+        без синхронизации
+      </div>
+      {#each plainBlocks as block}
+        {#if block.isBreak}
+          <div class="lyrics-plain-break" aria-hidden="true"></div>
         {:else}
-          {@const cells = splitChars(line.text)}
-          {@const groups = splitWordsForChars(cells)}
-          <!-- svelte-ignore a11y-click-events-have-key-events -->
-          <!-- svelte-ignore a11y-no-static-element-interactions -->
-          <div 
-            bind:this={lineRefs[i]}
-            class="lyric-line" 
-            on:click={() => handleSeek(line.time)}
-          >
-            <span class="lyric-fill">
-              {#each groups as group, gi}
-                {#if !group[0].animated}
-                  <span>{group.map(c => c.ch).join('')}</span>
-                {:else}
-                  <span class="lyric-word">
-                    {#each group as c, ci}
-                      <span class="lyric-char" use:registerChar={{ lineIndex: i }}>{c.ch}</span>
-                    {/each}
-                  </span>
-                {/if}
-              {/each}
-            </span>
-          </div>
+          <p class="lyrics-plain-line">{block.text}</p>
         {/if}
       {/each}
     </div>
-  {:else if displayLines.length > 0}
-    <div class="text-[22px] text-white/70 font-semibold whitespace-pre-wrap leading-loose tracking-tight">
-      {lyrics}
-    </div>
   {:else}
-    <div class="h-full flex items-center justify-center text-white/50">
-      {lyrics || 'Нет текста'}
+    <div class="h-full flex flex-col items-center justify-center gap-1.5">
+      <div class="display-title">{lyrics || 'Текста нет'}</div>
+      <div class="empty-hint !mt-0 text-center">Для этого трека никто ещё не выложил слова.</div>
     </div>
   {/if}
   <div class="h-[40vh]"></div>

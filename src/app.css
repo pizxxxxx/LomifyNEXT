@@ -1,5 +1,9 @@
 @import "tailwindcss";
 @import "./sc-theme.css";
+/* Альтернативный глобальный дизайн. Все его правила висят на `body[data-design="aurora"]`
+   (а токены — на `html body[...]`), поэтому по специфичности они всегда перебивают
+   базовые классы независимо от порядка @import — а базовый дизайн остаётся неизменным. */
+@import "./design-aurora.css";
 
 @theme {
   --color-primary: var(--app-primary);
@@ -29,6 +33,160 @@
   --ease-linear:        linear;
   --ease-bounce:        cubic-bezier(0.34, 1.36, 0.64, 1);
   --ease-bounce-strong: cubic-bezier(0.34, 3.85, 0.64, 1);
+
+  /* ── Кривая и длительность наведения ──────────────────────────────────────
+     Единственная пара, которой описывается реакция на курсор во всём приложении:
+     карточки, кнопки, тумблеры. Раньше у каждого элемента были свои 120/250/400/600 мс
+     и своя кривая, из-за чего одно и то же движение в разных местах шло с разной
+     скоростью — это и читалось как «рывки». Кривая — стандартная material-easing:
+     быстрый старт, мягкая остановка, без перелёта.
+     Правило анимации: на этой паре ездят ТОЛЬКО transform и opacity (композит).
+     Всё, что вызывает layout (width/height/margin/top) или paint (box-shadow,
+     background, filter), в переходах по наведению не участвует — тень и подсветка
+     живут на псевдоэлементах и включаются прозрачностью. */
+  --ease-standard:   cubic-bezier(0.4, 0, 0.2, 1);
+  --duration-hover:  300ms;
+
+  /* ── Проблеск по плоским карточкам ────────────────────────────────────────
+     Полоса света, один раз проезжающая по карточке на входе курсора. Раньше жила только в
+     дизайне Aurora, со своим набором токенов — теперь это базовое поведение обоих, дизайну
+     оставлена только сила (`--sheen-alpha`).
+
+     Поверхности разделены: полоса идёт по плоскому (строки, кнопки, плитки без обложки), а
+     по обложке ходит отражение (`--spec-*`), потому что обложка наклоняется и о наклоне
+     проход ничего не знает. На одной поверхности блик один — совмещение двух и читалось
+     рябью.
+
+     Скорость привязана к `--duration-hover`, и это не экономия на токене. Проблеск и подъём
+     карточки — один жест: карточка поднимается под курсор за 300 мс, а полоса раньше шла
+     550 мс, то есть продолжала ехать по уже неподвижной плитке — движение распадалось на
+     два. Совпадение времён и делает из них одно событие.
+
+     `--sheen-fade` — проявление и гашение на концах пути. Держится заметно меньше самого
+     прохода: это его кромки, а не проход. */
+  --sheen-angle: 115deg;
+  --sheen-width: 45%;
+  --sheen-skew: -20deg;
+  --sheen-speed: var(--duration-hover);
+  --sheen-fade: 70ms;
+  /* Сила полосы. В Aurora стекло темнее и полосе нужно больше, чтобы читаться. */
+  --sheen-alpha: 0.18;
+
+  /* ── Отражение на обложке ─────────────────────────────────────────────────
+     Обложка — глянцевая плоскость, и на ней ровно ОДИН блик: отражение источника света,
+     положение которого считает `$lib/utils/tilt` из угла наклона (вывод — там же). Полосы
+     `--sheen-*` на обложке нет: две белые ленты на одном слое, под похожими углами и по
+     разным законам, читались рябью, а не отражением, и одна поверхность отражает один
+     источник, а не два.
+
+     Угол оси у отражения и у полосы общий (`--sheen-angle`): свет в приложении один.
+
+     `--spec-w` — полуширина мягкой ленты по оси градиента. Шире полосы прохода: отражение
+     точечного источника на неидеальном глянце — это размытое пятно, а не кромка. */
+  --spec-w: 26%;
+  --spec-alpha: 0.3;
+
+  /* ── Глубина при наведении ────────────────────────────────────────────────
+     Раньше здесь жил `--lift-hover: -4px` и карточка при наведении уезжала вверх по
+     экрану. Движение вверх — это движение ВДОЛЬ плоскости страницы: карточка меняла
+     положение относительно соседей, из-за чего в плотной полке казалось, что съехала
+     вся раскладка, а не отреагировал один элемент. Правильная метафора — глубина:
+     элемент отходит от зрителя, оставаясь на своём месте в сетке.
+
+     Делает это `perspective(P) translateZ(-Z)`. Важно понимать, что под перспективой
+     сдвиг по Z — это замаскированное равномерное масштабирование с коэффициентом
+     P/(P+|Z|), то есть уменьшение к центру элемента. Отсюда два следствия:
+
+       1. Значения обязаны быть маленькими. При P=900px и Z=-10px масштаб равен 0.989 —
+          движение читается как отход в глубину, но текст внутри уменьшается всего на
+          1.1%. Больше брать нельзя: сильное масштабирование заставляет движок
+          перерастеризовать содержимое, и подписи под курсором становятся мылом (по этой
+          же причине из проекта раньше убрали статический `scale(1.01)`).
+       2. Перспектива указана внутри `transform`, а не свойством `perspective` у
+          родителя: свойство на родителе создало бы общую точку схода для всей полки, и
+          карточки по краям уходили бы в глубину с перекосом, каждая в свою сторону.
+          Внутри `transform` точка схода у каждого элемента своя — по его центру.
+
+     Нажатие уводит глубже наведения: сообщение «вдавили» получается тем же жестом.
+
+     И главное ограничение, из-за которого ход по Z остался только у НАЖАТИЯ. Масштаб
+     меняет не только картинку, но и размер зоны наведения. Уменьшенный элемент выходит
+     из-под курсора, стоявшего у кромки, — ховер снимается, элемент возвращается в полный
+     размер, курсор снова внутри, ховер возвращается. Это самоподдерживающийся цикл:
+     карточка пульсирует, пока курсор не сдвинут. У `:active` такого нет — состояние
+     держится захватом указателя и от ухода элемента из-под курсора не слетает. Поэтому
+     `--depth-hover` остался только у мелких кнопок, а строки и плитки под курсором
+     геометрию не меняют вовсе. */
+  --depth-perspective: 900px;
+  --depth-hover: -10px;
+  --depth-press: -22px;
+
+  /* Перспектива интерактивного наклона обложки (3D-Tilt). Отдельно от
+     `--depth-perspective` по величине: та стоит на карточке целиком, здесь же точка схода
+     нужна близкая — обложка меньше карточки, и на 900px её поворот читался бы как плоский
+     сдвиг вместо ухода в глубину.
+
+     Сам угол живёт в `$lib/utils/tilt` — он вычисляется от положения курсора, то есть
+     значение попадает в CSS уже готовым (`--tilt-rx` / `--tilt-ry`), а перспектива остаётся
+     чисто оформительской ручкой: это единственное, чем «сила» наклона настраивается на
+     уровне дизайна. Наклоняется НЕ карточка, а слой обложки внутри неё — почему именно так,
+     подробно в заголовке `tilt.ts` и в блоке `[data-tilt]` ниже. */
+  --tilt-perspective: 620px;
+
+  /* Ход боковой панели: подъём под курсором и просадка под нажатием. Обе величины —
+     смещения по Y, а не ход по Z, и это одно решение, а не два.
+
+     Панель матовая (`backdrop-filter`), шириной 256px и высотой во весь экран. Любой
+     нецелый масштаб — а `perspective(900px) translateZ(-14px)` это масштаб 0.985 —
+     пересобирает на ней ВЕСЬ текст пунктов и логотип и вместе с ними пересчитывает
+     размытие фона под уменьшенной панелью. У ховера это убрали ещё раньше, потому что
+     состояние держится секундами. У нажатия оставляли, оправдываясь краткостью: 120ms
+     туда, и палец отпущен. Но нажатие попросили сделать медленнее и мягче — а чем дольше
+     держится дробный масштаб, тем виднее замыленный текст, то есть ровно та жалоба, из-за
+     которой масштаб убирали. Поэтому «вдавили» здесь читается не масштабом, а сдвигом
+     вниз: с −3px под курсором панель уезжает на +4px, семь пикселей хода видно хорошо, а
+     буквы остаются попиксельно теми же — слой просто переезжает. */
+  --panel-lift: -3px;
+  --panel-press: 4px;
+
+  /* Тайминги нажатия панели. Их два, и они разные — в этом весь «тактильный» характер.
+
+     Ход вниз (`--panel-press-in`) идёт по кривой БЕЗ перелёта: палец давит, панель мягко
+     проседает и останавливается. Перелёт здесь читался бы как отскок от нажатия, то есть
+     как дребезг кнопки, а не как погружение.
+
+     Возврат (`--panel-press-out`) почти вдвое длиннее и с перелётом — это «отдача»: панель
+     всплывает, чуть проскакивает исходное положение и оседает. Перелёт мягкий, 12% против
+     56% у `--ease-spring`: на семи пикселях хода 56% дают четыре пикселя подскока и
+     ощущаются щелчком, 12% — упругостью.
+
+     Технически разделение бесплатное: длительность и кривая — обычные свойства, и пока
+     держится `:active`, применяются его значения; как только он снят, значения снова
+     берутся из базового правила, и обратный ход едет уже по ним.
+
+     Числа ниже — вторая итерация: нажатие попросили сделать мягче, плавнее и чуть медленнее.
+     Что именно поменялось и почему так, а не «просто больше миллисекунд»:
+       • 300 → 420ms вниз и 520 → 760ms обратно. Медленнее, но соотношение хода и отдачи
+         сохранено примерно 1:1.8 — именно оно читается как «упруго», а не как «тормозит»;
+       • кривая хода стала мягче на старте. У `cubic-bezier(0.3, 0.86, …)` начальная скорость
+         ≈2.9 от средней: панель почти прыгала вниз и дальше доезжала еле-еле, и на 420ms это
+         стало заметно как рывок в начале. У `(0.36, 0.62, …)` — ≈1.7: движение начинается
+         ощутимо, но без щелчка, и остаток пути распределён ровнее;
+       • перелёт отдачи 20% → 12%. На 7px хода это 0.8px подскока вместо 1.4px. Меньше — не
+         значит слабее: на длинной кривой глаз читает не высоту подскока, а то, что панель
+         «не остановилась мгновенно», и мягкий перелёт даёт это честнее, чем заметный;
+       • хвост отдачи растянут (`0.3` → `0.26` во второй паре): последние доли пикселя
+         оседают дольше, и момента «всё, приехали» на глаз нет вообще. */
+  --panel-press-in: 420ms;
+  --panel-press-out: 760ms;
+  --ease-panel-press: cubic-bezier(0.36, 0.62, 0.3, 1);
+  --ease-panel-recoil: cubic-bezier(0.2, 1.12, 0.26, 1);
+
+  /* Пружина — вторая (и последняя) кривая наведения. `--ease-standard` сознательно без
+     перелёта: ею ездят плитки и кнопки, где подскок читался бы как дребезг. Панелям
+     наоборот нужна физика — просадка под курсором и упругое всплытие, — и это ровно
+     тот случай, когда перелёт за конечную точку и есть смысл движения. */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 
   --distance-micro:   4px;
   --distance-small:   6px;
@@ -103,6 +261,15 @@ body[data-global-theme="true"] {
   --color-dark-gradient: color-mix(in srgb, #1d1d1f 85%, var(--color-primary));
 }
 
+/* Registering the accent as a real color lets it *interpolate*: unregistered
+   custom properties snap, so the cover-art accent would jump between tracks
+   instead of easing across. See lib/utils/coverAccent.ts. */
+@property --color-primary {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #1db954;
+}
+
 html, body {
   background-color: var(--color-dark);
   color: white;
@@ -112,13 +279,569 @@ html, body {
   user-select: none;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
+  /* Both follow the accent, so a track change carries them along together. */
+  transition: background-color var(--duration-very-slow) var(--ease-smooth-out),
+              --color-primary var(--duration-very-slow) var(--ease-smooth-out);
 }
+
+/* ── Text selection ──────────────────────────────────────────────────────────
+   `user-select: none` on <body> is right for window chrome and list rows (it
+   keeps drag gestures clean), but it also made lyrics, titles and artist names
+   impossible to copy — and people copy a line of lyrics constantly, into a
+   message or a search box. Opt content back in with `.selectable` instead of
+   forbidding it everywhere. */
+.selectable,
+.selectable * {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-primary) 38%, transparent);
+  color: #fff;
+}
+
+/* ── Materials ───────────────────────────────────────────────────────────────
+   Three surfaces, not one. `.glass-panel` used to back empty states, list
+   wells, cards *and* modals — when everything is frosted at the same blur with
+   the same 1px white border, the eye can no longer tell "this floats above the
+   page" from "this is the page". Each layer now means one thing:
+
+     .plate    static backing. No blur, no border, no shadow.
+     .surface  a row or card you can click. Tint only, cheap hover.
+     .glass-*  genuinely floating: modals, popovers, the player bar.
+
+   It also cuts a lot of backdrop-filter passes, which are the single most
+   expensive thing on this page. */
+.plate {
+  background: rgba(255, 255, 255, 0.028);
+  /* A hairline, not a 1px 15%-white outline — the edge should be findable, not
+     drawn. Without it a plate against #0a0a0c has no boundary at all. */
+  border: 1px solid rgba(255, 255, 255, 0.035);
+  border-radius: 1.5rem;
+}
+
+.surface {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 1rem;
+  transition: background-color var(--duration-micro) var(--ease-out),
+              border-color var(--duration-micro) var(--ease-out);
+}
+
+.surface:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.09);
+}
+
+/* ── Typography ──────────────────────────────────────────────────────────────
+   Every heading in the app was `font-bold`, which reads as a dashboard: with no
+   weight contrast there is no voice. Large text goes light with a tightened
+   track (the way the lyrics view already does it), small text carries the
+   weight instead. Four steps, and *size + colour* carry the hierarchy — the
+   weight ladder never leaves 400-500, so nothing shouts. */
+.page-title {
+  font-size: 34px;
+  font-weight: 400;
+  letter-spacing: -0.032em;
+  line-height: 1.15;
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.display-title {
+  font-size: 27px;
+  font-weight: 400;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.section-title {
+  font-size: 19px;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  line-height: 1.25;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.empty-hint {
+  font-size: 13.5px;
+  line-height: 1.5;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.42);
+  margin-top: 7px;
+  max-width: 34ch;
+}
+
+/* Timecodes and counters were all `font-mono`, which fixes the digit jitter but
+   drags a terminal typeface into the middle of a sentence. Tabular figures give
+   the same fixed advance in the UI font — the numbers stop dancing without
+   looking like a log line. Real monospace stays where it belongs: file paths. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* Big numbers in Profile were `font-weight: 400` while every other figure in the app
+   is bold, so the stats read as a thinner, foreign typeface. Same optical size, but
+   with the weight and tabular figures the rest of the UI uses. */
+.stat-value {
+  font-size: 31px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  color: rgba(255, 255, 255, 0.96);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.stat-label {
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: 0.005em;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* «Треки слева» (settings.leftAlignTracks). This used to shift the whole page
+   container, so headings, buttons and every plate slid left with the tracks. Now only
+   the track grids/lists re-anchor: they give up the extra width on the right and hug
+   the left edge, while the surrounding interface stays exactly where it was. */
+.tracks-left .track-collection {
+  max-width: min(100%, 1080px);
+  margin-left: 0;
+  margin-right: auto;
+}
+
+/* --- Settings rows -------------------------------------------------------------
+   Every option in Settings was a hand-rolled `flex justify-between bg-black/20 p-4`
+   with a `font-bold` label, so the rows drifted apart in padding, radius and weight.
+   One shape, one rhythm — the description carries the meaning, the label stays calm. */
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 15px 18px;
+  border-radius: 15px;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.045);
+  transition: background 200ms ease, border-color 200ms ease;
+}
+
+.setting-row:hover {
+  background: rgba(0, 0, 0, 0.24);
+  border-color: rgba(255, 255, 255, 0.07);
+}
+
+.setting-title {
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -0.008em;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.setting-hint {
+  font-size: 12.5px;
+  line-height: 1.45;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.4);
+  margin-top: 3px;
+  max-width: 54ch;
+}
+
+.wave-filter-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.wave-filter-card::before {
+  content: "";
+  position: absolute;
+  top: -70px;
+  right: -40px;
+  width: 190px;
+  height: 190px;
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--color-primary) 16%, transparent), transparent 68%);
+  pointer-events: none;
+}
+
+.wave-filter-head {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 22px;
+}
+
+.wave-filter-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  border-radius: 13px;
+  color: color-mix(in srgb, var(--color-primary) 76%, white);
+  background: color-mix(in srgb, var(--color-primary) 13%, rgba(255, 255, 255, 0.035));
+  border: 1px solid color-mix(in srgb, var(--color-primary) 18%, transparent);
+}
+
+.wave-filter-grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(180px, 0.65fr);
+  gap: 14px;
+}
+
+.wave-filter-grid[aria-disabled="true"] {
+  opacity: 0.48;
+}
+
+.wave-filter-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 9px;
+  padding: 14px;
+  border-radius: 1rem;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.wave-filter-label {
+  color: rgba(255, 255, 255, 0.48);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.wave-filter-field .seg-control {
+  width: 100%;
+}
+
+.wave-genre-select {
+  width: 100%;
+  min-height: 38px;
+  padding: 0 34px 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 0.78rem;
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.055);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background-color 180ms var(--ease-out), border-color 180ms var(--ease-out);
+}
+
+.wave-genre-select:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.085);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.wave-genre-select:disabled,
+.wave-filter-field .seg-item:disabled {
+  cursor: not-allowed;
+}
+
+.wave-provider-note {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-top: 14px;
+  padding: 11px 13px;
+  border-radius: 0.9rem;
+  color: rgba(255, 255, 255, 0.57);
+  background: rgba(255, 184, 77, 0.065);
+  border: 1px solid rgba(255, 184, 77, 0.12);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.wave-provider-note svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: #ffc46b;
+}
+
+.wave-filter-footnote {
+  position: relative;
+  margin: 13px 2px 0;
+  color: rgba(255, 255, 255, 0.34);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+@media (max-width: 900px) {
+  .wave-filter-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* --- Группы настроек -----------------------------------------------------------
+   Страница настроек была плоским столбцом из полутора десятков плашек в порядке, в котором
+   их когда-то добавляли: автозапуск, системные пути, привязка SoundCloud, привязка Яндекса,
+   офлайн-режим, Discord, easter egg, источник аудио, тема… Найти в такой странице нужное
+   можно было только прокруткой сверху донизу — «где искать» в ней попросту не задано, а
+   родственные настройки (тема, дизайн, стиль интерфейса) стояли на разных концах списка,
+   разделённые Discord'ом и системными путями.
+
+   Заголовок группы — метка ряда, а не рамка вокруг плашек: он стоит НАД ними и набран
+   мельче их собственных заголовков. Крупнее было бы хуже, а не солиднее: на странице
+   появилось бы два уровня одинаково громких заголовков, и группы читались бы как ещё один
+   список того же ранга. Отсюда же прописная разрядка — она отличает метку от содержания без
+   прибавки в размере. */
+.settings-group {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 0 4px 14px;
+}
+
+.settings-group-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.34);
+  white-space: nowrap;
+}
+
+/* Линия добирает остаток строки. `flex: 1`, а не фиксированная ширина: иначе у короткой
+   метки она не доходила бы до края, а у длинной уезжала бы за него. Гаснет к правому
+   краю — так она разделяет, но не рисует ещё одну рамку поперёк страницы. */
+.settings-group-rule {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0));
+}
+
+/* A real switch instead of five copies of the same nine Tailwind classes. Driven by
+   `aria-checked`, so the accessible state and the visual state cannot disagree. */
+.switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 46px;
+  height: 26px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.11);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  transition: background 200ms ease, border-color 200ms ease;
+  cursor: pointer;
+}
+
+.switch:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.switch[aria-checked='true'] {
+  background: var(--color-primary);
+  border-color: transparent;
+}
+
+.switch[aria-checked='true']:hover {
+  background: color-mix(in srgb, var(--color-primary) 88%, white);
+}
+
+.switch-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  /* Смещение вынесено в переменную, потому что нажатие добавляет к нему масштаб, а
+     `transform` — одно свойство: без переменной правило нажатия перезаписало бы сдвиг и
+     колечко на включённом тумблере прыгало бы к левому краю. */
+  transform: translateX(var(--knob-x));
+  transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Оба значения объявлены на самом тумблере, а не на колечке, и это не стилистика.
+   Своё объявление у элемента сильнее унаследованного при любой специфичности родителя:
+   пока `--knob-x: 0px` стояла на `.switch-knob`, значение `20px` с включённого тумблера до
+   колечка не доходило вовсе — оно оставалось у левого края и во включённом положении.
+   Проверено в браузере: `transform` у колечка включённого тумблера был `matrix(1,0,0,1,0,0)`. */
+.switch {
+  --knob-x: 0px;
+}
+
+.switch[aria-checked='true'] {
+  --knob-x: 20px;
+}
+
+/* Отклик на нажатие. Тумблер его не имел: правила `:active` у него не было ни одного, и
+   единственным ответом было колечко, приезжающее за 240 мс, — то есть в момент нажатия не
+   менялось ничего. Растёт колечко, а не вдавливается весь тумблер: 46×26 слишком мелкий бокс,
+   чтобы уход на глубину читался (при P=900 и z=22 это масштаб 0.976, меньше полпикселя по
+   высоте), а выросшее под курсором колечко видно сразу — так же, как на системном
+   переключателе. Действие при этом выполняется на нажатии, не на отпускании
+   (`$lib/utils/press`), поэтому рост колечка и его переезд начинаются одним движением. */
+.switch:active:not(:disabled) .switch-knob {
+  transform: translateX(var(--knob-x)) scale(1.14);
+  transition-duration: var(--duration-micro);
+}
+
+body[data-fx-press="off"] .switch:active:not(:disabled) .switch-knob {
+  transform: translateX(var(--knob-x));
+}
+
+/* Theme palette: a swatch is a colour plus its name, read left to right like a label —
+   not a centred card that needs `scale-105` and a white ring to say "selected". */
+.theme-swatch {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.028);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.72);
+  text-align: left;
+  transition: background 200ms ease, border-color 200ms ease, color 200ms ease;
+}
+
+.theme-swatch:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.055);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.theme-swatch.is-active {
+  background: color-mix(in srgb, var(--color-primary) 14%, transparent);
+  border-color: color-mix(in srgb, var(--color-primary) 55%, transparent);
+  color: #fff;
+}
+
+.theme-swatch:disabled {
+  cursor: default;
+}
+
+/* Строка списка устройств вывода. Форма взята у .theme-swatch — это тот же выбор одного из
+   списка, — но со второй строкой подписи: у устройства кроме имени есть состояние («по
+   умолчанию», «не подключено»), и без него список из двух похожих названий не различить.
+   Подпись — grid-строка, а не абсолютный блок: у части устройств её нет вовсе, и высота
+   строки должна сжиматься сама. */
+.output-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.028);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.72);
+  text-align: left;
+  transition: background 200ms ease, border-color 200ms ease, color 200ms ease;
+}
+
+.output-row:hover:not(:disabled):not(.is-missing) {
+  background: rgba(255, 255, 255, 0.055);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.output-row.is-active {
+  background: color-mix(in srgb, var(--color-primary) 14%, transparent);
+  border-color: color-mix(in srgb, var(--color-primary) 55%, transparent);
+  color: #fff;
+}
+
+/* Выбранное, но отсутствующее устройство. Не кнопка и не активная строка: нажимать не на
+   что, а показать выбор надо. Пунктир отличает её от рабочих строк на глаз. */
+.output-row.is-missing {
+  border-style: dashed;
+  border-color: rgba(255, 255, 255, 0.14);
+  background: transparent;
+  opacity: 0.62;
+}
+
+/* Выбор в процессе: остальные строки гаснут, но не «выключаются» — открытие Bluetooth-
+   приёмника занимает секунды, и список не должен на это время выглядеть сломанным. */
+.output-row:disabled {
+  cursor: default;
+}
+
+.output-row:disabled:not(.is-active) {
+  opacity: 0.5;
+}
+
+.output-row-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+}
+
+.output-row.is-active .output-row-icon {
+  background: color-mix(in srgb, var(--color-primary) 22%, transparent);
+  color: var(--color-primary);
+}
+
+.output-row-name {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.output-row-hint {
+  display: block;
+  margin-top: 2px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: rgba(255, 255, 255, 0.42);
+}
+
+/* Destructive actions. One shape for all of them, so "сбросить" and "удалить всё" don't
+   look like they came from different apps — the solid variant is for the one that can't
+   be undone at all. */
+.danger-btn {
+  flex-shrink: 0;
+  padding: 10px 20px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.13);
+  border: 1px solid rgba(239, 68, 68, 0.18);
+  transition: background 180ms ease, color 180ms ease, border-color 180ms ease;
+}
+.danger-btn:hover {
+  background: rgba(239, 68, 68, 0.9);
+  border-color: transparent;
+  color: #fff;
+}
+.danger-btn.is-solid {
+  background: rgba(220, 38, 38, 0.9);
+  border-color: transparent;
+  color: #fff;
+}
+.danger-btn.is-solid:hover {
+  background: #dc2626;
+}
+
+/* Artist avatar. The ring and glow used to be a hardcoded cyan, which fought with every
+   theme the user could pick and looked like a leftover from another app. */
+.artist-avatar {
+  border: 4px solid color-mix(in srgb, var(--color-primary) 22%, transparent);
+  box-shadow: 0 0 30px color-mix(in srgb, var(--color-primary) 20%, transparent);
+}
+
 
 /* Glassmorphism utility classes */
 .glass-panel {
   background: rgba(255, 255, 255, 0.12);
-  backdrop-filter: blur(20px) saturate(150%);
-  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  backdrop-filter: blur(10px) saturate(150%);
+  -webkit-backdrop-filter: blur(10px) saturate(150%);
   border: 1px solid rgba(255, 255, 255, 0.15);
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3), inset 0 0 0 1px rgba(255, 255, 255, 0.05);
   border-radius: 1.5rem;
@@ -126,36 +849,90 @@ html, body {
 
 .glass-button {
   background: rgba(255, 255, 255, 0.12);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   border: 1px solid rgba(255, 255, 255, 0.1);
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
-  transition: all var(--duration-fast) var(--ease-smooth-out);
+  /* Единая кривая наведения: transform едет по композитору, цвет фона и кромки —
+     единственный paint, который здесь оправдан (кнопка обязана меняться цветом), и он
+     идёт той же длительностью, чтобы движение и подсветка не расходились. */
+  transition: transform var(--duration-hover) var(--ease-standard),
+              background-color var(--duration-hover) var(--ease-standard),
+              border-color var(--duration-hover) var(--ease-standard);
+  /* Точка отсчёта усадки — под курсором, иначе кнопка уезжает из-под него и теряет клик
+     (разбор у `.interactive-item:active`). */
+  transform-origin: var(--press-ox, 50%) var(--press-oy, 50%);
   border-radius: 1rem;
-  transform: translateZ(0);
+  position: relative;
 }
 
+/* Наведение геометрию не трогает, и это исправление, а не упрощение.
+   Здесь стоял `perspective(900px) translateZ(calc(var(--depth-hover) * 0.6))`, то есть
+   масштаб 0.9934. Оправдание было записано рядом: «на элементе шириной 40–200px полоса
+   срыва получается меньше пикселя». Оно верно ровно для мелких кнопок — а `.glass-button`
+   носят и растянутые: «Светлее»/«Темнее» в настройках стоят через `flex-1` и выходят
+   346px, кнопки источника и вкладок — тоже во всю полку.
+
+   На 346px в Aurora (там правило дизайна отдаёт полный `--depth-hover`, без коэффициента
+   0.6, — масштаб 900/910 = 0.98901) кромка уходит из-под курсора на 1.9px. Дальше идёт тот
+   же цикл, что описан у `.interactive-item` ниже: курсор у кромки → ховер → кнопка сжалась
+   → курсор снаружи → ховер снят → кнопка вернулась → ховер. Кнопка мигает, а `pointerdown`
+   в этот момент попадает то в неё, то в панель под ней — отсюда и «визуально нажимается, а
+   не срабатывает» вдобавок к потере `mouseup` при нажатии.
+
+   Ховер на карточках от этого вылечили отказом от масштаба (разбор у `.interactive-item`),
+   и здесь ровно та же болезнь и то же лекарство. Отклик на наведение остаётся полностью:
+   фон и кромка светлеют — это paint, зоны наведения он не касается. Ход по глубине живёт
+   только в `:active`, где от цикла защищает захват указателя. */
 .glass-button:hover {
   background: rgba(255, 255, 255, 0.15);
   border-color: rgba(255, 255, 255, 0.3);
-  transform: translateY(-2px) scale(1.02);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
 }
 
-button, a, input, [role="button"] {
-  outline: none !important;
+/* ── Focus ───────────────────────────────────────────────────────────────────
+   This was `outline: none !important` on every button, link and input, so
+   anyone driving the app from the keyboard saw nothing at all. `:focus-visible`
+   only paints for keyboard and assistive navigation — a pointer user sees
+   exactly what they saw before. */
+button, a, input, select, textarea, [role="button"] {
+  outline: none;
 }
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role="button"]:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+}
+
+/* Здесь же стоял `border-radius: 8px`, и он менял форму не кольца, а самого элемента: у
+   правила специфичность (0,1,1), то есть выше, чем у любого одиночного класса, — так что
+   круглая кнопка воспроизведения (999px), кружки управления окном и скруглённые плитки на
+   время клавиатурного фокуса становились одинаковыми квадратиками со скруглением 8px.
+   Форма прыгала от нажатия Tab и возвращалась от Esc.
+
+   Смысл в объявлении был, но исчез: раньше `outline` рисовался строго прямоугольником, и
+   скругление элемента было единственным способом получить скруглённое кольцо. Начиная с
+   Chromium 94 и Safari 16.4 обводка сама повторяет `border-radius` — а движки здесь ровно
+   эти (WebView2 и WKWebView). Кольцу теперь ничего не нужно, оно и так по форме. */
 
 .glass-button:active {
-  transform: translateY(1px) scale(var(--scale-large));
-  transition: all var(--duration-micro) var(--ease-in-out);
+  /* `transition: all` перезапускал переход по каждому свойству кнопки, включая фон и
+     размытие, — нажатие получалось «вязким». Едет только смещение по глубине: нажатие
+     продавливает кнопку дальше наведения, а не возвращает её на место. */
+  transform: perspective(var(--depth-perspective)) translateZ(calc(var(--depth-press) * 0.6));
+  transition: transform var(--duration-micro) var(--ease-standard);
 }
 
 /* Style 2 Overrides (Vision Pro / SoundCloud-Desktop Glass UI) */
 [data-ui-style="style2"] .glass-panel {
   background: linear-gradient(165deg, rgba(255,255,255,0.12) 0%, rgba(255,255,255,0.06) 50%, rgba(255,255,255,0.08) 100%);
-  backdrop-filter: blur(20px) saturate(160%);
-  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  backdrop-filter: blur(10px) saturate(160%);
+  -webkit-backdrop-filter: blur(10px) saturate(160%);
   border: 0.5px solid rgba(255, 255, 255, 0.08);
   border-radius: 2rem;
   box-shadow: 0 30px 80px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.06);
@@ -177,11 +954,14 @@ button, a, input, [role="button"] {
 
 [data-ui-style="style2"] .glass-button {
   background: rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   border: 0.5px solid rgba(255, 255, 255, 0.06);
   border-radius: 1.5rem;
-  transform: translateZ(0);
+  /* Здесь стоял `transform: translateZ(0)`. Правило идёт по файлу ниже
+     `.glass-button:hover` и имеет ту же специфичность (0,2,0), поэтому оно молча
+     затирало подъём при наведении — в этом стиле кнопки просто не реагировали на
+     курсор. Слой под backdrop-filter браузер создаёт и без подсказки. */
 }
 
 [data-ui-style="style2"] .glass-button:hover {
@@ -189,26 +969,117 @@ button, a, input, [role="button"] {
   border-color: rgba(255, 255, 255, 0.12);
 }
 
-/* Interactive item animation */
+/* ── Интерактивная карточка ───────────────────────────────────────────────────
+   Тут было три источника рывков разом:
+
+   1. `will-change: transform, box-shadow` — и это на каждой из шести десятков плиток
+      на экране. Браузер честно поднимал каждую в отдельный композитный слой и держал
+      их так постоянно: десятки слоёв в памяти GPU ради анимации, которая идёт максимум
+      у одной карточки под курсором. Свойство убрано — transform браузер промотирует
+      сам на время перехода, и ровно у того элемента, который реально движется.
+   2. `scale(1.01)` — масштабирование заставляет заново растеризовать текст внутри
+      карточки (буквы «плывут» и щёлкают обратно), а соседи по сетке визуально
+      начинают дышать. Осталось только вертикальное смещение.
+   3. `box-shadow` в списке transition — это paint на каждом кадре. Тень переехала на
+      `::before` и включается прозрачностью, то есть на композиторе.
+
+   В итоге сам элемент анимирует единственное свойство — transform. */
 .interactive-item {
-  transition: transform 600ms var(--ease-smooth-out), box-shadow 600ms var(--ease-smooth-out);
-  will-change: transform, box-shadow;
   position: relative;
+  /* Вдавливание считается вокруг точки нажатия, а не центра — разбор у `:active` ниже. */
+  transform-origin: var(--press-ox, 50%) var(--press-oy, 50%);
+  transition: transform var(--duration-hover) var(--ease-standard);
 }
 
-/* Specular Highlight (Liquid Glass effect) */
+/* Тень наведения. Псевдоэлемент прозрачен, а `box-shadow` без `inset` рисуется только
+   снаружи его рамки — контент под ним виден полностью, поэтому слой не мешает ни
+   визуально, ни по событиям. Анимируется opacity, а не сама тень.
+
+   Белого ореола (`0 0 16px rgba(255,255,255,0.04)`) здесь больше нет, и это исправление.
+   Нулевое смещение с нулевым разбросом — это не свечение, а обводка: полоса шириной в
+   размытие, повторяющая рамку элемента по всему периметру. На скруглённой карточке с фоном
+   она читалась как блик по кромке, а на прямоугольной — как рамка, проступающая при
+   наведении. Глубину и так несёт тёмная тень, поэтому ореол просто снят. */
+.interactive-item::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: 0 14px 34px -14px rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  transition: opacity var(--duration-hover) var(--ease-standard);
+  pointer-events: none;
+}
+
+/* Плитки полок из этой тени исключены, и причина в устройстве самого `box-shadow`.
+   Внешняя тень не рисуется внутри рамки элемента — область под ним вырезается. Обычно
+   вырез не виден: его закрывает собственный фон элемента. Но обёртка плитки прозрачна и
+   без скругления, так что вырезанный прямоугольник виден целиком, а его нижняя кромка
+   проходит ровно под именем автора — последним элементом карточки. Отсюда и бралась резкая
+   полоса под подписью: не тень «вылезала», а был виден срез контейнера.
+
+   Смягчить это подбором размытия нельзя: на кромке выреза тень всегда в полную силу, обрыв
+   там математический, а не оптический. Поэтому тень отдана обложке (`.tile-art`), у которой
+   есть и фон, и радиус — там вырез закрыт картинкой и никакой линии не видно.
+
+   Условие «нет утилиты скругления» вместо прежнего перечисления обложек
+   (`:has(> .tile-art, > .art-glow)`) — и оно же лечит жёсткие прямоугольные углы у плиток.
+   У обоих псевдоэлементов `border-radius: inherit`, а наследуется радиус ПОРОЖДАЮЩЕГО
+   элемента, то есть обёртки, а не лежащей внутри обложки. У обёртки плитки радиуса нет —
+   значит нет и у слоёв: тень и specular рисовались резким прямоугольником поверх
+   скруглённой картинки, вылезая за её кромку по всем четырём углам. Ровно это и видно при
+   наведении на квадратные плитки треков и на плейлисты.
+
+   Проверка по классу покрывает заодно и то, что перечисление пропускало: иконочные кнопки
+   плеера (тоже без радиуса — там слои рисовали квадраты вокруг круглых иконок) и,
+   наоборот, ВОЗВРАЩАЕТ тень раскрытой панели плейлиста в архиве: у неё есть и
+   `rounded-3xl`, и собственный фон, поэтому срез контейнера на ней и не был виден —
+   исключать её было незачем.
+
+   Скруглённые обёртки правило не касается: строки списков (`rounded-xl`), панели профиля и
+   настроек (`rounded-2xl/3xl`) получают оба слоя точно по своей кромке, как и задумано.
+   Плитки при этом ничего не теряют — их свечение под курсором рисует `.tile-art::before` и
+   `.art-glow::before`, то есть сама обложка, наследующая собственный радиус. */
+.interactive-item:not([class*="rounded"])::before,
+.interactive-item:not([class*="rounded"])::after {
+  display: none;
+}
+
+.interactive-item:hover::before {
+  opacity: 1;
+}
+
+/* Specular Highlight (Liquid Glass effect)
+   Две доли вместо одной, и это не украшательство, а то, как выглядит настоящий блик на
+   глянце: широкое мягкое пятно рассеянного отражения плюс узкий яркий центр. Одна доля
+   давала ровное облако, которое одинаково выглядело в любой точке карточки, — движение
+   курсора по ней почти не читалось.
+
+   `--glare` — огибающая яркости, её ведёт `$lib/utils/tilt` пружиной: на входе блик
+   разгорается, на уходе гаснет на месте. Значение по умолчанию 1, поэтому без скрипта
+   правило работает точно как раньше — мягкое пятно по центру, проявляемое `:hover`.
+
+   Конечная точка записана как `rgb(255 255 255 / 0)`, а не `transparent`: это тот же белый
+   с нулевой альфой, то есть по обеим границам стопа один и тот же цвет и виден только его
+   спад. Так пара читается однозначно, без опоры на то, как движок трактует ключевое слово. */
 .interactive-item::after {
   content: "";
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: radial-gradient(
-    300px circle at var(--mouse-x, 50%) var(--mouse-y, 50%), 
-    rgba(255, 255, 255, 0.04),
-    transparent 40%
-  );
+  background:
+    radial-gradient(
+      120px circle at var(--mouse-x, 50%) var(--mouse-y, 50%),
+      rgb(255 255 255 / calc(0.07 * var(--glare, 1))),
+      rgb(255 255 255 / 0) 70%
+    ),
+    radial-gradient(
+      300px circle at var(--mouse-x, 50%) var(--mouse-y, 50%),
+      rgb(255 255 255 / calc(0.04 * var(--glare, 1))),
+      rgb(255 255 255 / 0) 40%
+    );
   opacity: 0;
-  transition: opacity 0.6s ease;
+  transition: opacity var(--duration-hover) var(--ease-standard);
   pointer-events: none;
   z-index: 10;
 }
@@ -217,14 +1088,165 @@ button, a, input, [role="button"] {
   opacity: 1;
 }
 
-.interactive-item:hover {
-  transform: scale(1.01) translateY(-2px);
-  box-shadow: 0 10px 30px rgba(0,0,0,0.3), 0 0 15px rgba(255,255,255,0.05);
+/* Ховер геометрию карточки НЕ трогает — это и есть исправление дребезга строк в «Любимых».
+   Здесь стояло `perspective(900px) translateZ(-10px)`. Пара «перспектива + сдвиг по Z» — не
+   отдельная ось, а ровно масштаб с коэффициентом P/(P+|Z|) = 900/910 ≈ 0.989 (об этом
+   написано и в блоке токенов). Строка под курсором становилась на 1.1% меньше: при ширине
+   ~900px это по 5px с каждой стороны. Курсор, стоявший у кромки, после первого же кадра
+   оказывался ВНЕ уменьшенной строки — ховер снимался, строка возвращалась в полный размер,
+   курсор снова попадал внутрь, ховер возвращался. Непрерывная пульсация вместо одного
+   плавного отклика, и «пульсировать» она будет ровно до того, как курсор сдвинут.
+
+   Подбор длительности или кривой тут не помогает принципиально: цикл создаёт сам факт
+   изменения размера зоны наведения, поэтому лечится только отказом от изменения размера.
+   Это, кстати, тот же дефект, о котором предупреждает комментарий к `.interactive-item`
+   выше: `scale(1.01)` оттуда убрали за перерастеризацию текста, а `perspective` +
+   `translateZ` — тот же самый scale, просто записанный иначе.
+
+   Глубину наведения несут слои, которые геометрии не касаются: тень на `::before`,
+   specular на `::after` и подсветка фона утилитами Tailwind (`hover:bg-white/5`). Обложки
+   плиток продолжают увеличиваться сами — `group-hover:scale-105` стоит на `<img>` внутри
+   `overflow-hidden`, там растёт картинка, а рамка обёртки стоит на месте.
+
+   У мелких кнопок (`.glass-button`) ход по Z оставлен: там коэффициент 0.6, то есть 0.66%,
+   и на элементе шириной 40–200px полоса срыва получается меньше пикселя. */
+
+/* Нажатие — единственное состояние, которому масштаб разрешён, и от цикла, как у ховера, оно
+   защищено устройством события: `:active` держится захватом указателя, поэтому не снимается
+   от того, что элемент ушёл из-под курсора.
+
+   Но у этого же захвата есть обратная сторона, и она стоила приложению исправного клика.
+   `:active` держится, а `click` браузер отправляет в БЛИЖАЙШЕГО ОБЩЕГО ПРЕДКА целей
+   `mousedown` и `mouseup`. Сжавшийся под курсором элемент отдаёт `mouseup` контейнеру, и
+   клик достаётся контейнеру, на котором обработчика нет. Нажатие видно, действия нет — та
+   самая жалоба «визуально нажимается, а не срабатывает».
+
+   Цифры с кнопок «Светлее»/«Темнее» в настройках: 346×51, и на них выигрывает это правило, а
+   не `.glass-button:active`, — специфичность у обоих (0,2,0), а записано это ниже, поэтому
+   действует полный `--depth-press`, без коэффициента 0.6. При P=900 и z=26px (значение
+   Aurora) масштаб 900/926 = 0.9719: по 4.9px с каждой вертикальной грани и по 0.7px сверху и
+   снизу. Отсюда и «не всегда» — попал курсор в эту кромку, клик пропал; не попал, сработало.
+
+   Лечится не уменьшением хода, а переносом точки отсчёта: `transform-origin` уезжает в место
+   нажатия (`--press-ox`/`--press-oy` пишет `$lib/utils/press` по `pointerdown`), а центр
+   масштабирования — его неподвижная точка. Пиксель под курсором остаётся под курсором при
+   любой величине усадки и в любом месте элемента, так что мёртвой кромки не остаётся вовсе, а
+   не становится меньше. Сам ход по Z не тронут — нажатие ощущается ровно как раньше. */
+.interactive-item:active {
+  transform: perspective(var(--depth-perspective)) translateZ(var(--depth-press));
+  transition-duration: var(--duration-micro);
 }
 
-.interactive-item:active {
-  transform: scale(0.99);
-  transition-duration: 200ms;
+/* Во время нажатия карточка уходит из-под курсора (см. выше), и `:hover` на ней слетает.
+   Без этой пары тень и specular гасли ровно в момент клика, и нажатие читалось как потеря
+   фокуса, а не как отклик. */
+.interactive-item:active::before,
+.interactive-item:active::after {
+  opacity: 1;
+}
+
+/* ── Статус трека в списке ───────────────────────────────────────────────────
+   Ячейка слева от обложки: номер, наушники у играющего, крестик у забаненного, «плей»
+   под курсором. Разметку выдаёт `TrackStatus.svelte`, здесь только геометрия и подмена.
+
+   Подмена висит на `.interactive-item:hover`, а не на Tailwind-группе, и это сознательно:
+   строки в разных списках носят разные группы (`group` и `group/track`), одним селектором
+   их не покрыть, а `interactive-item` есть на каждой кликабельной строке. Забаненные
+   строки его не носят — у них подмена сама не срабатывает, что и требуется.
+
+   Дочерний комбинатор обязателен: без него ячейка вложенной строки реагировала бы и на
+   наведение внешней карточки. */
+.track-status {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.track-status[data-size="sm"] {
+  width: 1.5rem;
+  justify-content: flex-end;
+  font-size: 11px;
+}
+
+.track-status[data-size="md"] {
+  width: 2rem;
+  justify-content: center;
+  font-size: 12px;
+}
+
+.track-status-play {
+  display: none;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.interactive-item:hover > .track-status-idle {
+  display: none;
+}
+
+.interactive-item:hover > .track-status-play {
+  display: flex;
+}
+
+/* Respect the OS "reduce motion" preference. Scoped to the decorative
+   transforms — the lyric fill and the pause bar are how you read where you are
+   in a line, so they keep animating. */
+@media (prefers-reduced-motion: reduce) {
+  .interactive-item,
+  .interactive-item:hover,
+  .interactive-item:active,
+  .glass-button,
+  .glass-button:hover,
+  .glass-button:active {
+    transform: none;
+    transition-duration: var(--duration-micro);
+  }
+  /* Ячейка переключателя и колечко тумблера — то же снятие объёма, что у карточек выше.
+     Колечку при этом возвращается его сдвиг, а не `none`: глухое `none` на включённом
+     тумблере отправило бы колечко к левому краю прямо во время нажатия. Сам отклик не
+     исчезает — остаются цвет подписи и приезд плашки. */
+  .seg-item,
+  .seg-item:active:not(:disabled) {
+    transform: none;
+  }
+  .switch:active:not(:disabled) .switch-knob {
+    transform: translateX(var(--knob-x));
+  }
+  .interactive-item::after,
+  .interactive-item::before {
+    display: none;
+  }
+  .panel-spring,
+  .panel-spring:hover,
+  .panel-spring:active {
+    transform: none;
+    animation: none;
+  }
+  .nav-item,
+  .nav-item:hover,
+  .nav-item:active,
+  .sidebar-profile,
+  .sidebar-profile:hover,
+  .sidebar-profile:active,
+  .sidebar-profile-arrow {
+    transform: none;
+    transition-duration: var(--duration-micro);
+  }
+  /* Полоску активного пункта не прячем — она носитель смысла, а не декорация. Снимаем
+     только рост: остаётся быстрое проявление. */
+  .nav-marker,
+  .nav-item.is-active .nav-marker {
+    transform: translateY(-50%);
+    transition-duration: var(--duration-micro);
+  }
+  .t-badge[data-open="true"] {
+    animation: none;
+  }
+  .note-gradient-text,
+  .lyric-line[data-state="active"] .note-gradient-text {
+    animation: none;
+  }
 }
 
 /* Notification badge */
@@ -264,13 +1286,20 @@ button, a, input, [role="button"] {
 /* Lyrics CSS Ported from SC Desktop */
 .lyric-line {
   cursor: pointer;
-  padding: 10px 0;
-  line-height: 1.32;
-  font-size: 28px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  /* Was `padding: 10px 0; line-height: 1.32; font-weight: 700` — at 28px the block read
+     as a wall of bold text with the lines almost touching. Slightly larger, one weight
+     lighter and with real leading it reads like lyrics instead of a headline stack.
+     `padding-bottom` also guarantees the glow and the descenders of the last line are
+     never clipped by the container's scroll mask. */
+  padding: 9px 0 12px;
+  line-height: 1.34;
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.028em;
   color: rgba(255, 255, 255, 0.26);
   opacity: 0.4;
+  max-width: 30ch;
+  text-wrap: pretty;
   transform-origin: left center;
   transform: scale(0.972) translate3d(0, 0, 0);
   will-change: transform, opacity, color;
@@ -281,8 +1310,8 @@ button, a, input, [role="button"] {
     filter 0.45s ease;
   -webkit-font-smoothing: antialiased;
   filter: drop-shadow(0 0 0 transparent);
-  user-select: none;
-  -webkit-user-select: none;
+  /* Selectable on purpose — the lyrics container carries `.selectable`. This is
+     the text people most want to copy out of a music player. */
 }
 .lyric-line[data-state="active"] {
   color: #fff;
@@ -403,6 +1432,35 @@ button, a, input, [role="button"] {
   color: rgba(255, 255, 255, 0.32);
 }
 
+.lyric-line-text {
+  display: inline-block;
+  max-width: 100%;
+  white-space: pre-wrap;
+}
+
+/* Построчный режим меняет только активную строку. Это частое состояние, поэтому переход
+   короче посимвольного караоке и затрагивает лишь композитные свойства и цвет. */
+.lyrics-line-sync .lyric-line {
+  transition:
+    color 180ms var(--ease-out),
+    opacity 180ms var(--ease-out),
+    transform 220ms var(--ease-out);
+}
+
+.lyrics-line-sync .lyric-line[data-state] {
+  filter: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lyrics-line-sync .lyric-line,
+  .lyrics-line-sync .lyric-line[data-state] {
+    transform: none;
+    transition:
+      color 180ms var(--ease-out),
+      opacity 180ms var(--ease-out);
+  }
+}
+
 .lyric-word {
   display: inline-block;
   white-space: nowrap;
@@ -445,4 +1503,2936 @@ button, a, input, [role="button"] {
   transition-duration: 0ms;
 }
 
+/* ── Unsynced lyrics ─────────────────────────────────────────────────────────
+   A track without an .lrc used to dump the whole blob into one `leading-loose`
+   `whitespace-pre-wrap` div: full-width lines running the entire panel, and every blank
+   line in the source turning into a huge hole. Now it reads like a text: a measured
+   column, real paragraph rhythm, and a label that says why nothing is highlighting. */
+.lyrics-plain {
+  max-width: 46ch;
+}
 
+.lyrics-plain-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 18px;
+  padding: 5px 11px 5px 9px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.42);
+}
+
+.lyrics-plain-line {
+  font-size: 24px;
+  line-height: 1.56;
+  font-weight: 500;
+  letter-spacing: -0.022em;
+  color: rgba(255, 255, 255, 0.8);
+  text-wrap: pretty;
+}
+
+/* A blank line in the source is a stanza break, not an empty row of text. */
+.lyrics-plain-break {
+  height: 20px;
+}
+
+/* ── Author mentions ─────────────────────────────────────────────────────────
+   Every artist name in the app is a link to that artist's page (see ArtistTag). It has
+   to look like one on hover and behave like one from the keyboard, while inheriting the
+   size/colour of whatever row it sits in — the lists set those themselves. */
+.artist-link {
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-decoration-color: transparent;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  transition: color var(--duration-micro) var(--ease-out),
+              text-decoration-color var(--duration-micro) var(--ease-out);
+}
+
+.artist-link:hover {
+  color: #fff;
+  text-decoration-color: currentColor;
+}
+
+/* Несколько авторов в одной подписи. Раньше корень тега был `flex … gap-1.5`, потому что
+   внутри лежало ровно одно имя и, может быть, плашка. Теперь имён столько, сколько их на
+   треке, и общий `gap` тут не годится: перед запятой пробела быть не должно, а после — должен.
+   Поэтому отступы носят сами разделители и плашки, а не контейнер.
+
+   `min-width: 0` на каждом имени (уже есть в `.artist-link`) — то, что позволяет обрезать
+   многоточием любое из них по отдельности: в узкой строке «Очень Длинное Имя, Второй» сжимается
+   первое, а второе остаётся читаемым, вместо того чтобы уехать за край целиком. */
+.artist-tag {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  width: 100%;
+}
+
+.artist-sep {
+  flex: none;
+  margin-right: 0.3em;
+  opacity: 0.55;
+}
+
+.artist-badge {
+  margin-left: 0.375rem;
+}
+
+/* Имя без ссылки (linkable={false}): выглядит как обычный текст строки, обрезается так же. */
+.artist-link.is-plain {
+  cursor: inherit;
+  text-decoration-line: none;
+}
+
+.artist-link.is-plain:hover {
+  color: inherit;
+}
+
+/* ── Меню «в плейлист» ───────────────────────────────────────────────────────
+   Оформление взято у попапа настроек в полноэкранном режиме: тёмное стекло с размытием,
+   волосяная рамка и крупный радиус. Прежние три копии меню были плоскими плашками
+   `bg-neutral-800/900` — единственное место в приложении, где всплывающий слой не стеклянный,
+   и на фоне обложек это сразу читалось как чужой элемент. */
+.pl-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+/* Открытая менюшка обязана оставлять кнопку видимой. В списках у кнопки стоит `opacity-0
+   group-hover:opacity-100` — стоит увести курсор со строки, и открытое меню повисало в
+   воздухе без своей кнопки. `!important` здесь по делу: побеждаем утилиту Tailwind, которую
+   каждое место задаёт само. */
+.pl-menu-trigger.is-open {
+  opacity: 1 !important;
+  color: #fff;
+}
+
+.pl-menu-pop {
+  position: absolute;
+  z-index: 60;
+  width: 15rem;
+  display: flex;
+  flex-direction: column;
+  padding: 0.5rem;
+  background: rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 1rem;
+  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.75);
+}
+
+/* Точка роста — угол, из которого меню выехало. Иначе оно масштабируется из центра и
+   выглядит как всплывшее не оттуда, где нажали. */
+.pl-menu-pop.is-top { bottom: calc(100% + 0.5rem); }
+.pl-menu-pop.is-bottom { top: calc(100% + 0.5rem); }
+.pl-menu-pop.is-right { right: 0; }
+.pl-menu-pop.is-left { left: 0; }
+.pl-menu-pop.is-top.is-right { transform-origin: bottom right; }
+.pl-menu-pop.is-top.is-left { transform-origin: bottom left; }
+.pl-menu-pop.is-bottom.is-right { transform-origin: top right; }
+.pl-menu-pop.is-bottom.is-left { transform-origin: top left; }
+
+.pl-menu-head {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.5rem 0.5rem;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+/* Плейлистов может быть сколько угодно, а меню не должно выходить за экран. */
+.pl-menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 15rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.pl-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  border: 0;
+  border-radius: 0.625rem;
+  background: none;
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.72);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--duration-micro) var(--ease-out),
+              color var(--duration-micro) var(--ease-out);
+}
+
+.pl-menu-item:hover {
+  background: rgba(255, 255, 255, 0.09);
+  color: #fff;
+}
+
+.pl-menu-item.is-in {
+  color: #fff;
+}
+
+.pl-menu-item-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Плюс у ещё не выбранного плейлиста — подсказка «сюда можно добавить», а не кнопка:
+   виден только под курсором, иначе он спорит с галочками рядом. */
+.pl-menu-item-add {
+  flex: none;
+  opacity: 0;
+  transition: opacity var(--duration-micro) var(--ease-out);
+}
+
+.pl-menu-item:hover .pl-menu-item-add {
+  opacity: 0.55;
+}
+
+.pl-menu-empty {
+  padding: 0.375rem 0.625rem 0.5rem;
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+/* Название трека в плеере: та же механика, что у `.artist-link` (кнопка, притворяющаяся
+   текстом строки), только ведёт в полноэкранный режим, а не на страницу автора. */
+.player-track-title {
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.008em;
+  color: #fff;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-decoration-color: transparent;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  transition: text-decoration-color var(--duration-micro) var(--ease-out);
+}
+
+.player-track-title:hover {
+  text-decoration-color: currentColor;
+}
+
+/* ── Fullscreen hero ─────────────────────────────────────────────────────────
+   The title was `truncate` + Tailwind's `text-5xl`, whose line-height is 1 — a line box
+   exactly as tall as the em square, so every descender (у, р, д, g, y) was sliced by the
+   `overflow: hidden` that truncation brings with it. Real leading plus a hair of
+   padding below the baseline, and the glyphs render whole. `nowrap` keeps the ellipsis
+   on one line, so the extra padding can't reveal a sliver of the next one. */
+.fs-title {
+  font-size: 48px;
+  font-weight: 500;
+  line-height: 1.28;
+  letter-spacing: -0.03em;
+  padding-bottom: 0.14em;
+  margin-bottom: 2px;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: rgba(255, 255, 255, 0.97);
+  transition: font-size 800ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Text panel open — the title gives up size so the two columns stay balanced. */
+.fs-title.is-compact {
+  font-size: 36px;
+}
+
+.fs-artist {
+  font-size: 24px;
+  line-height: 1.4;
+  padding-bottom: 0.12em;
+  max-width: 100%;
+  color: rgba(255, 255, 255, 0.6);
+  transition: font-size 800ms cubic-bezier(0.34, 1.56, 0.64, 1),
+              color var(--duration-micro) var(--ease-out);
+}
+
+.fs-artist.is-compact {
+  font-size: 19px;
+}
+
+/* ── Fullscreen: сцена ────────────────────────────────────────────────────────
+   Раскладка приехала сюда из инлайновых `style=` и утилит Tailwind в разметке
+   Fullscreen.svelte. Причина не в опрятности: анимируемые свойства, записанные в атрибут
+   `style`, переписываются на каждое переключение — а здесь их четыре узла и две раскладки.
+   Теперь состояние объявляется двумя классами на сцене (`is-lyrics`, `is-immersive`), а
+   что именно они делают, решает CSS.
+
+   Едут только `transform` и `opacity`: ни ширины, ни отступы, ни радиусы в переходах не
+   участвуют (разбор этой ошибки — в комментариях `.fs-title` выше и в истории обложки). */
+.fs-stage {
+  /* Одна пара «длительность + кривая» на всю сцену: обложка, подпись и текст обязаны
+     двигаться как одно целое, а не тремя разными скоростями. Кривая с перелётом — та же,
+     что была у обложки. Наследуется вниз, поэтому в дочерних правилах только `var()`. */
+  --fs-dur: 800ms;
+  --fs-ease: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  position: relative;
+  z-index: 10;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 3rem;
+  width: 100%;
+  max-width: 72rem;
+  height: 70vh;
+}
+
+.fs-cover-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  width: 50%;
+  /* Без этого обложка съезжала с центра экрана на длинных названиях. Две половины по 50% с
+     промежутком в 3rem в сумме шире сцены, поэтому flex обе поджимает — и сдвиг ниже
+     сходится ровно тогда, когда поджались обе одинаково. Но `.fs-title` стоит в `nowrap`,
+     и его собственная ширина становилась минимальной шириной всей колонки: длинное название
+     не давало ей сжаться, весь дефицит уходил в панель текста, а обложка оказывалась правее
+     середины ровно на половину промежутка. `min-width: 0` снимает этот пол, название
+     обрезается многоточием (как и задумано его `text-overflow`), а обложка стоит по центру
+     при любой длине подписи. */
+  min-width: 0;
+  /* Текста нет — обложка стоит в середине сцены: полширины себя плюс половина промежутка. */
+  transform: translateX(calc(50% + 1.5rem));
+  transition: transform var(--fs-dur) var(--fs-ease);
+}
+
+.fs-stage.is-lyrics .fs-cover-side {
+  transform: translateX(0);
+}
+
+/* Обложка меняет размер через `scale`, а не через ширину и высоту: бокс постоянный, и
+   радиус масштабируется вместе с ним сам собой (1.5rem × 0.818 ≈ 1.23rem). */
+.fs-cover {
+  position: relative;
+  width: 55vh;
+  height: 55vh;
+  margin-bottom: 2.5rem;
+  border-radius: 1.5rem;
+  overflow: hidden;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+  transform: scale(1);
+  transition: transform var(--fs-dur) var(--fs-ease);
+}
+
+.fs-stage.is-lyrics .fs-cover {
+  transform: scale(0.818);
+}
+
+.fs-cover-hover {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  /* Размытие постоянное, анимируется только прозрачность: `filter` в переходе заставил бы
+     браузер растрировать обложку заново на каждом кадре. */
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity var(--duration-hover) var(--ease-standard);
+}
+
+.fs-cover:hover .fs-cover-hover {
+  opacity: 1;
+}
+
+/* Текста у трека нет — обложка перестаёт быть кнопкой. Подпись под курсором остаётся:
+   она и объясняет, почему нажимать некуда. */
+.fs-cover-hover.is-idle {
+  cursor: default;
+}
+
+.fs-cover-hover-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  color: #fff;
+  transform: scale(0.9);
+  transition: transform var(--duration-hover) var(--ease-standard);
+}
+
+.fs-cover:hover .fs-cover-hover-inner {
+  transform: scale(1);
+}
+
+.fs-cover-hover-inner span {
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: 0.005em;
+  color: rgba(255, 255, 255, 0.85);
+  /* Подписи здесь не только «Показать текст»: на треке без текста стоит фраза подлиннее, и
+     без переноса она вылезла бы за обложку. */
+  max-width: 80%;
+  text-align: center;
+  line-height: 1.35;
+  text-wrap: balance;
+}
+
+.fs-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  width: 100%;
+  min-width: 0;
+  transform: translateY(0);
+  transition: transform var(--fs-dur) var(--fs-ease);
+}
+
+.fs-stage.is-lyrics .fs-meta {
+  transform: translateY(-5vh);
+}
+
+/* Панель текста. Список анимируемых свойств явный: раньше здесь стоял `transition-all`,
+   и браузер сторожил каждое свойство панели, включая её `backdrop-filter`. */
+.fs-lyrics-side {
+  position: relative;
+  width: 50%;
+  height: 100%;
+  padding: 2rem;
+  border-radius: 1.5rem;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(40px);
+  transition: transform var(--fs-dur) cubic-bezier(0.25, 1, 0.5, 1),
+              opacity var(--fs-dur) cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+.fs-stage.is-lyrics .fs-lyrics-side {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(0);
+}
+
+/* ── Fullscreen: раскладка «Погружение» ───────────────────────────────────────
+   Обложка вместе с названием уезжает вверх за край экрана, а слова выезжают снизу — без
+   панели, крупным кеглем, во всю высоту. Ни одного дополнительного узла: те же четыре
+   блока, только другие правила.
+
+   Специфичность здесь несущая, а не случайная: `.fs-stage.is-immersive .fs-lyrics-side`
+   и `.fs-stage.is-lyrics .fs-lyrics-side` — оба по три класса, и первое побеждает лишь
+   потому, что стоит ниже. Поэтому «текст на экране» в этой раскладке описано четырьмя
+   классами (`.is-immersive.is-lyrics`): иначе базовое правило раскладки перебило бы
+   состояние, и текст остался бы внизу за краем. */
+.fs-stage.is-immersive {
+  max-width: none;
+  /* Обложке нужен весь экран, чтобы было куда уходить, а тексту — вся высота под колонку. */
+  height: 100%;
+
+  /* Кегль строки и ширина колонки — одно и то же число, поэтому оно живёт здесь, а не двумя
+     независимыми значениями в двух правилах. Так было раньше, и это читалось как ошибка:
+     контейнер брал 1180px, строка — 22ch (≈738px при максимальном кегле), выравнивание в
+     строке левое, и колонка вставала левее середины экрана почти на 180px — справа зияло
+     пустое поле. Теперь контейнер обнимает колонку: его ширина = колонка + отступы самого
+     компонента текста, поэтому строка во всю меру и контейнер — один и тот же бокс, а он
+     центрирован. Точность центровки от множителя не зависит: он входит в оба места сразу.
+     12.2 — потому что для этой гарнитуры 1ch ≈ 0.555em, то есть 12.2em ≈ 22 знака: мера
+     колонки прежняя, менялось только то, где она задана. */
+  --fs-lyric-size: clamp(34px, 4.2vw, 62px);
+  --fs-lyric-col: calc(12.2 * var(--fs-lyric-size));
+}
+
+.fs-stage.is-immersive .fs-cover-side {
+  width: auto;
+  max-width: 88vw;
+  transform: none;
+  /* Уход за край — движение «прочь», ему идёт разгон без перелёта: пружинная кривая на
+     таком расстоянии дала бы отскок уже за пределами экрана, то есть паузу на пустом
+     месте. Прозрачность гаснет быстрее сдвига, иначе обложка видна на полпути вверх. */
+  transition: transform var(--fs-dur) cubic-bezier(0.32, 0, 0.67, 0),
+              opacity 520ms var(--ease-out);
+}
+
+.fs-stage.is-immersive.is-lyrics .fs-cover-side {
+  /* 104vh — гарантия, а не догадка: за краем должна оказаться не только обложка (55vh), но
+     и подпись под ней, а сцена по вертикали центрирована. */
+  transform: translate3d(0, -104vh, 0) scale(0.9);
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Обложка улетает целиком, поэтому по дороге не сжимается, а подпись не подтягивается:
+   оба этих движения существуют только ради панельной раскладки. */
+.fs-stage.is-immersive.is-lyrics .fs-cover,
+.fs-stage.is-immersive.is-lyrics .fs-meta {
+  transform: none;
+}
+
+.fs-stage.is-immersive .fs-lyrics-side {
+  /* Вне потока: колонка текста стоит по центру экрана сама, а не делит строку с обложкой. */
+  position: absolute;
+  left: 50%;
+  /* Отступы сверху и снизу — не воздух, а разводка с тем, что лежит НАД оверлеем
+     полноэкранного режима: сверху кластер кнопок (32px + 48px кнопка), снизу панель плеера
+     (90px + 16px её внешнего отступа, слой z-[105] в +page.svelte). Без этого крупные строки
+     заезжали под кнопки и под элементы управления — а плеер в этом режиме прозрачный, так что
+     текст читался бы прямо сквозь него. `height: auto` обязателен: базовое правило панели
+     задаёт `height: 100%`, и без сброса `bottom` был бы проигнорирован. */
+  top: 5.5rem;
+  bottom: 6.75rem;
+  height: auto;
+  /* Ширина = колонка текста + горизонтальные отступы самого компонента (`px-12` в
+     Lyrics.svelte, 3rem с каждой стороны). Контейнер центрирован через `left: 50%` и
+     `translateX(-50%)`, значит центрирована и колонка внутри него — при том, что текст в
+     строке по-прежнему выровнен влево, как у Spotify, а не «по центру» словами. */
+  width: min(calc(var(--fs-lyric-col) + 6rem), 90vw);
+  padding: 0;
+  border-radius: 0;
+  transform: translate3d(-50%, 46vh, 0);
+  /* Медленнее и мягче обложки: она уходит, а текст приходит — приход должен читаться как
+     прибытие, с длинным затуханием в конце. */
+  transition: transform var(--duration-very-slow) cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 620ms var(--ease-out);
+}
+
+.fs-stage.is-immersive.is-lyrics .fs-lyrics-side {
+  transform: translate3d(-50%, 0, 0);
+}
+
+/* Крупный кегль — только в этой раскладке. Колонка остаётся мерной: строка во всю ширину
+   экрана читается рывками, глаз теряет начало следующей. Меру задаёт контейнер (см. выше),
+   поэтому здесь `max-width` уже не нужен — строка и так не шире контента, а лишний предел
+   меньше контейнера снова сдвинул бы колонку влево. */
+.fs-stage.is-immersive .lyric-line {
+  font-size: var(--fs-lyric-size);
+  line-height: 1.22;
+  letter-spacing: -0.032em;
+  max-width: none;
+  padding: 14px 0 18px;
+}
+
+.fs-stage.is-immersive .note-gradient-text {
+  font-size: clamp(30px, 3.6vw, 54px);
+}
+
+/* Текст без синхронизации — не строки, а абзацы: им крупный кегль нужен умереннее, а
+   колонка шире. Своя мера уже́ меньше контейнера, поэтому этот блок центрируется сам —
+   иначе он повторил бы ту же ошибку и прижался бы влево. */
+.fs-stage.is-immersive .lyrics-plain {
+  max-width: 38ch;
+  margin-inline: auto;
+}
+
+.fs-stage.is-immersive .lyrics-plain-line {
+  font-size: clamp(25px, 2.35vw, 34px);
+}
+
+/* Смена раскладки — большое движение через весь экран, и это первое, что стоит убрать по
+   просьбе о покое. Перекрёстное затухание остаётся: без него обложка и текст менялись бы
+   местами мгновенно, и было бы непонятно, что вообще произошло. */
+@media (prefers-reduced-motion: reduce) {
+  .fs-cover-side,
+  .fs-cover,
+  .fs-meta,
+  .fs-lyrics-side,
+  .fs-stage.is-immersive .fs-cover-side,
+  .fs-stage.is-immersive .fs-lyrics-side {
+    transition: opacity 200ms var(--ease-out);
+  }
+}
+
+/* ── Track tiles ─────────────────────────────────────────────────────────────
+   The grid tiles were `text-sm font-semibold` over `text-xs text-white/50` — two greys of
+   nearly the same weight, so the name and the author competed instead of stacking. The
+   card now carries the hierarchy: title bright and tight, author quiet until you reach
+   for it, and the artwork gets the depth (shadow + hairline) instead of the text. */
+.tile-art {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  margin-bottom: 0.7rem;
+  border-radius: 0.9rem;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: 0 12px 28px -16px rgba(0, 0, 0, 0.9);
+  transition: border-color var(--duration-hover) var(--ease-standard);
+}
+
+/* `.group` — маркер, который разметка плитки уже носит для своих hover-состояний;
+   читая его здесь, держим ховер плитки в одном месте вместо шести строк утилит.
+   Сам подъём живёт на `.interactive-item`, чтобы карточка двигалась как один объект.
+   Тень при наведении не анимируется: она нарисована сразу и проявляется по
+   прозрачности — иначе это был бы paint на каждом кадре.
+
+   Раньше здесь появлялась чёткая линия в один пиксель по всему периметру обложки
+   (`inset 0 0 0 1px`) и вместе с ней перекрашивалась рамка самой `.tile-art`. Две
+   геометрически точные линии, возникающие на ховере, — это и есть та «жёсткая граница,
+   которая вылезает при наведении». Заменено на размытое свечение внутрь от кромки: тот же
+   акцент, та же читаемость отклика, но без линии. Разброс отрицательный, чтобы свет не
+   доходил до центра обложки и не мутил картинку. */
+.tile-art::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 20px -4px color-mix(in srgb, var(--color-primary) 34%, transparent);
+  opacity: 0;
+  transition: opacity var(--duration-hover) var(--ease-standard);
+  pointer-events: none;
+  z-index: 6;
+}
+
+.group:hover > .tile-art::before {
+  opacity: 1;
+}
+
+/* То же самое для обложек, которые не `.tile-art`: плейлисты на полках и в поиске, альбомы
+   артиста, сетки библиотеки. Каждая носила утилиту `group-hover:border-primary/30` — то
+   есть перекрашивала рамку в акцент, и при наведении по периметру проступала чёткая линия.
+   Класс вместо утилиты нужен именно потому, что размытое свечение утилитой не задать:
+   Tailwind умеет менять цвет рамки, но не рисовать внутреннюю тень с отрицательным
+   разбросом. Селектор — по вхождению, а не по прямому потомку: ровно так же работал
+   `group-hover:`, поведение при наведении не меняется, меняется только чем оно нарисовано. */
+.art-glow::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 20px -4px color-mix(in srgb, var(--color-primary) 34%, transparent);
+  opacity: 0;
+  transition: opacity var(--duration-hover) var(--ease-standard);
+  pointer-events: none;
+  z-index: 6;
+}
+
+.group:hover .art-glow::before {
+  opacity: 1;
+}
+
+/* ── 3D-Tilt обложки ─────────────────────────────────────────────────────────
+   Обложка наклоняется вслед за курсором. Углы приходят готовыми из
+   `$lib/utils/tilt` — там же и физика: пружина с затуханием ζ≈0.84, то есть догон с еле
+   заметным перелётом и такой же живой возврат домой из любой точки хода.
+
+   Наклоняется слой обложки, а НЕ карточка, и это принципиально. `rotateY` с перспективой
+   уводит дальнюю кромку в глубину, а в проекции она едет внутрь, причём тем сильнее, чем
+   элемент шире: у строки «Любимого» шириной ~900px при 7° это 29px. Курсор у кромки
+   оказался бы вне строки — `:hover` слетел, наклон ушёл, строка вернулась в полный размер,
+   курсор снова внутри. Незатухающая пульсация: тот же дефект, из-за которого с ховера
+   карточки сняли и `scale(1.01)`, и `perspective + translateZ` (разбор выше). Уменьшить
+   угол до безопасного нельзя — условие «сдвиг меньше пикселя» даёт 0.25°.
+
+   С обложкой этого не возникает по устройству попадания: хозяин ховера — обёртка, её бокс
+   не меняется вообще, и ушедшая в глубину картинка просто открывает под курсором её же
+   фон. У самой обложки (квадрат ~180px) кромка при 10° смещается на 3.55px, и на попадание
+   курсора в карточку это не влияет никак — как и все `group-hover:` утилиты в разметке.
+
+   Перспектива внутри `transform`, а не свойством у родителя: у свойства точка схода одна
+   на всю полку, и плитки по краям заваливались бы каждая в свою сторону.
+
+   `translateZ` — подъём обложки над поверхностью карточки, чтобы наклон читался как объём, а
+   не как перекос картинки. Карточке этот приём запрещён (см. разбор выше), а слою внутри
+   разрешён по той же причине, что и поворот: с перспективой `translateZ` — это масштаб
+   P/(P−z), то есть при P=620 и z=18px обложка становится на 3% больше, но бокс хозяина
+   ховера от этого не меняется, а попадание курсора считается по нему. Заодно эти 3%
+   (2.69px на кромке) почти гасят уход дальней кромки внутрь от поворота (3.55px), поэтому
+   обложка не выглядит съезжающей в одну сторону.
+
+   Порядок множителей не косметика: `translateZ` стоит ДО поворотов, значит к точкам он
+   применяется ПОСЛЕ них (в CSS список читается справа налево). Обложка сначала
+   поворачивается вокруг своего центра, и только потом целиком едет к зрителю по экранной
+   оси Z — «поднялась над поверхностью». Если поставить его после поворотов, смещение уедет
+   вдоль нормали уже наклонённой плоскости, и подъём начнёт сдвигать обложку в сторону
+   наклона.
+
+   Селектор по `[data-tilt]`, а не по `:hover`, — тоже не стилистика. Атрибут ставит скрипт
+   на время движения и снимает, когда пружина успокоилась. Без него `transform` висел бы на
+   всех обложках сразу, и браузер держал бы шесть десятков композитных слоёв в памяти GPU
+   ради анимации одной карточки под курсором — ровно то, из-за чего отсюда убирали
+   `will-change: transform`. Здесь `will-change` уместен по той же причине наоборот: он
+   действует только на той обложке, которая реально движется. К моменту снятия атрибута
+   углы уже нулевые с точностью до сотой градуса, поэтому исчезновение правила не видно. */
+[data-tilt] .tile-art,
+[data-tilt] .art-glow {
+  transform: perspective(var(--tilt-perspective))
+             translateZ(var(--tilt-lift, 0px))
+             rotateX(var(--tilt-rx, 0deg))
+             rotateY(var(--tilt-ry, 0deg));
+  will-change: transform;
+}
+
+/* Порядок покраски. Приподнятая и повёрнутая обложка выходит за бокс своей карточки, а
+   карточки в сетке — соседние элементы с `z-index: auto`, то есть красятся в порядке
+   документа: следующий поверх предыдущего. Отсюда асимметрия, которую видно на глаз: левая
+   кромка обложки ложится НА предыдущую карточку (та нарисована раньше), а правая уезжает ПОД
+   следующую (та нарисована позже) — «обложка на слой ниже», причём только с одной стороны.
+   Никаким подбором углов и подъёма это не лечится: дело не в геометрии, а в приоритете
+   покраски, поэтому карточка, которая сейчас движется, поднимается над соседями с обеих
+   сторон. `position: relative` у `.interactive-item` уже есть (см. выше) — без него `z-index`
+   не действует вовсе.
+
+   12, а не 1: у `.interactive-item::after` (блик стекла) свой `z-index: 10`, и у соседа, с
+   которого курсор только что ушёл, этот блик ещё гаснет — с меньшим значением он рисовался бы
+   поверх нашей нависающей обложки, то есть дефект вернулся бы, только на полкадра. Выше
+   начинаются всплывающие слои (меню, модальные окна — `z-50`), их перекрывать нельзя.
+
+   Атрибут ставит и снимает скрипт, поэтому приоритет живёт ровно столько, сколько движение:
+   вне наклона порядок покраски в сетке прежний, и ни один соседний слой не переставляется
+   без причины. */
+[data-tilt] {
+  z-index: 12;
+}
+
+/* Отражение на обложке рисует `.spec-art::after` — правило ниже по файлу, рядом с полосой
+   `.sheen-art`, чтобы два носителя света лежали вместе и не расходились по смыслу. Здесь его
+   нет по простой причине: `::before` этой обложки занят внутренним свечением кромки, и оно
+   гасится другим тумблером, чем блик.
+
+   Разделение поверхностей: обложки (`spec-art`) носят отражение, потому что наклоняются, —
+   бегущая полоса о наклоне не знает и на глянце читалась бы мимо света. Плоские поверхности
+   (`sheen-art`) носят проход, потому что отражать наклон им нечем. Один блик на поверхность:
+   именно совмещение двух и выглядело рябью. */
+
+/* Наклон обложки при системной настройке «меньше движения». Скрипт при ней `data-tilt` не
+   ставит вовсе — это правило страхует случай, когда настройку переключили на уже помеченной
+   карточке. Внутреннее свечение кромки (`box-shadow` того же псевдоэлемента) остаётся: оно
+   не двигается, а только меняет цвет.
+
+   Отдельный блок здесь, а не строчки в общем `prefers-reduced-motion` выше по файлу, —
+   вынужденно, и это не стилистика. Медиазапрос специфичности не добавляет, а правило наклона
+   имеет ровно ту же специфичность: при равном весе побеждает то, что записано ПОЗЖЕ. Стоя в
+   общем блоке (он идёт раньше), сброс молча проигрывал бы наклону — то есть при включённой
+   настройке обложки продолжали бы поворачиваться. Соседство с правилом, которое он гасит,
+   заодно и страхует от повторения этой ошибки: перенести одно и забыть другое уже не выйдет. */
+@media (prefers-reduced-motion: reduce) {
+  [data-tilt] .tile-art,
+  [data-tilt] .art-glow {
+    transform: none;
+    will-change: auto;
+  }
+
+  [data-tilt] {
+    z-index: auto;
+  }
+}
+
+.tile-art.is-active {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px var(--color-primary),
+              0 16px 36px -16px color-mix(in srgb, var(--color-primary) 55%, transparent);
+}
+
+.tile-meta {
+  position: relative;
+  padding: 0 0.25rem;
+}
+
+.tile-title {
+  font-size: 13.5px;
+  font-weight: 500;
+  line-height: 1.35;
+  letter-spacing: -0.012em;
+  color: rgba(255, 255, 255, 0.88);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color var(--duration-micro) var(--ease-out);
+}
+
+.group:hover .tile-title {
+  color: #fff;
+}
+
+.tile-title.is-active {
+  color: var(--color-primary);
+}
+
+.tile-sub {
+  margin-top: 1px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  letter-spacing: -0.006em;
+  color: rgba(255, 255, 255, 0.44);
+}
+
+/* The little ⓘ affordance — invisible until the card is hovered, never a layout shift. */
+.tile-info-btn {
+  margin-top: 1px;
+  color: rgba(255, 255, 255, 0.3);
+  opacity: 0;
+  transition: opacity var(--duration-micro) var(--ease-out),
+              color var(--duration-micro) var(--ease-out);
+}
+
+.group:hover .tile-info-btn {
+  opacity: 1;
+}
+
+.tile-info-btn:hover {
+  color: #fff;
+}
+
+.tile-tip {
+  background: rgba(14, 14, 18, 0.96);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.9rem;
+  box-shadow: 0 24px 50px -20px rgba(0, 0, 0, 0.9);
+  padding: 12px 13px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.tile-tip dt {
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.tile-tip dd {
+  color: rgba(255, 255, 255, 0.85);
+  margin: 1px 0 8px;
+}
+
+.tile-tip dd:last-child {
+  margin-bottom: 0;
+}
+
+/* ── Плитка плейлиста на главной ──────────────────────────────────────────────
+   Один и тот же узел живёт в двух состояниях: сложенная плитка на две колонки сетки и
+   раскрытая панель во всю строку. Раньше оба набора свойств стояли утилитами прямо в
+   разметке, и вместе с ними там же оказался `transition-all duration-500` — на трёх
+   узлах подряд. `all` под собой прятал ровно то, что при раскрытии и менялось: кегль
+   заголовка, обрезку текста, отступы, размер иконки. То есть полсекунды после клика
+   браузер пересчитывал раскладку на каждом кадре — ровно тогда, когда рядом
+   достраивался список треков. Никакой анимации при этом видно не было: переход
+   читался только как задержка.
+
+   Поэтому здесь строго два сорта свойств. Раскладка (`grid-column`, направление,
+   отступы, пропорции обложки) переключается МГНОВЕННО: анимировать её — значит
+   заставить сетку перекладывать все соседние плитки шестьдесят раз в секунду.
+   Плавным остаётся только оформление плашки — цвет, кромка, тень: это отрисовка,
+   она не трогает геометрию. А появление содержимого ведёт `in:fly` в разметке
+   (`opacity` + `transform`, единственная пара, которую браузер отдаёт композитору). */
+.pl-tile {
+  position: relative;
+  grid-column: span 2 / span 2;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  cursor: pointer;
+}
+
+.pl-tile.is-open {
+  grid-column: 1 / -1;
+  gap: 1.5rem;
+  padding: 1.5rem;
+  border-radius: 1.5rem;
+  align-items: flex-start;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(12px);
+  border: 1px solid color-mix(in oklab, var(--color-primary) 20%, transparent);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.6);
+  /* Список короткий и намеренно не содержит `transform`: подъём под курсором раскрытой
+     панели не нужен, а `transition` из `.interactive-item` тут и не действует — этого
+     класса у раскрытой панели нет вовсе (он же корень 3D-наклона обложки).
+     Переход объявлен у РАСКРЫТОГО состояния, а не у обоих: браузер берёт список из
+     нового состояния, поэтому плашка проявляется, а складывается сразу — уезжающее
+     оформление в двухколоночной плитке выглядело бы как мусор. */
+  transition:
+    background-color 240ms var(--ease-standard),
+    border-color 240ms var(--ease-standard),
+    box-shadow 240ms var(--ease-standard);
+}
+
+@media (min-width: 48rem) {
+  .pl-tile.is-open {
+    flex-direction: row;
+  }
+}
+
+/* Обложка раскрытого плейлиста: квадрат в колонке слева. `spec-art`/`art-glow` ей в
+   разметке уже не достаются — вместе с наклоном ушло и отражение, которое тот же скрипт
+   ведёт из угла наклона. */
+.pl-tile-art-open {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  flex: none;
+}
+
+@media (min-width: 48rem) {
+  .pl-tile-art-open {
+    width: 16rem;
+  }
+}
+
+/* Строка трека в раскрытом плейлисте. В плейлисте бывает пятьдесят треков, а в окно
+   списка (`max-h-[350px]`) влезает шесть — остальные сорок четыре браузер верстал,
+   красил и декодировал их обложки впустую, и это чувствовалось как рывок при открытии.
+   `content-visibility: auto` отдаёт отрисовку невидимых строк на откуп прокрутке, а
+   `contain-intrinsic-size` держит их размер известным (40px обложка + 2×8px padding),
+   чтобы полоса прокрутки не прыгала по мере доезда. */
+.pl-open-track {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 56px;
+}
+
+/* ── Sheen surface ───────────────────────────────────────────────────────────
+   Маркер ПЛОСКОЙ поверхности, по которой при наведении пробегает полоса света (как на
+   карточках игр в Steam): строки, кнопки, плитки без обложки. Наклоняющиеся обложки носят
+   `spec-art` и отражение — разбор чуть ниже, рядом с ним. Сам маркер полосу не рисует,
+   только даёт ей к чему прижаться и по чему обрезаться; полоса ниже, на `::after`. */
+.sheen-art {
+  position: relative;
+  overflow: hidden;
+  /* Собственный контекст наложения. Без него порядок отрисовки блика зависел бы от
+     содержимого плитки: обложка внутри получает `group-hover:scale-105`, а элемент с
+     трансформацией сам становится контекстом наложения и красится как `z-index: 0` —
+     то есть блик держался только на том, что его `z-index` больше нуля. С `isolate`
+     полоса гарантированно поверх всего внутри плитки, чем бы её ни наполнили дальше. */
+  isolation: isolate;
+}
+
+/* Тот же маркер, но накладкой во всю карточку — для случаев, когда саму карточку обрезать
+   нельзя. `.sheen-art` включает `overflow: hidden`, а у `.glass-button` свечение наведения
+   в дизайне Aurora — это `box-shadow` на `::before`, который рисуется СНАРУЖИ рамки:
+   обрезав карточку по себе, мы обрезали бы и свечение. Поэтому блик получает собственный
+   слой поверх содержимого: он обрезает полосу по своим кромкам и ничего не знает о том,
+   что нарисовано за пределами карточки.
+
+   Класс носят вместе с `.sheen-art` (`class="sheen-art sheen-overlay"`) — правило стоит
+   в файле ниже и с той же специфичностью, поэтому `position: absolute` перекрывает
+   `relative` из `.sheen-art`. Порядок здесь важен, менять блоки местами нельзя. */
+.sheen-overlay {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  /* Порядок отрисовки не должен зависеть от того, что и в каком порядке лежит в карточке:
+     любой позиционированный сосед ниже по разметке иначе перекрыл бы полосу. */
+  z-index: 1;
+}
+
+/* ── Проблеск: сама полоса ───────────────────────────────────────────────────
+   Полоса света, один раз проезжающая по плитке на входе курсора.
+
+   Правило переехало сюда из `design-aurora.css`, где стояло под `body[data-design="aurora"]`
+   и потому работало в одном дизайне из двух. Это была не стилистика дизайна, а единственный
+   бегающий блик приложения: в классике по обложке ходил specular от наклона, и он снят —
+   без переезда классика осталась бы вообще без движения света. Дизайну оставлена ровно его
+   часть, сила полосы: `--sheen-alpha` в Aurora выше, потому что там стекло темнее.
+
+   ── Почему переход, а не анимация ─────────────────────────────────────────────
+   У прохода два направления. На вход полоса едет вправо, на уход — возвращается той же
+   дорогой на исходную позицию, вместе с самой плиткой, которая ровно так же откатывает свой
+   подъём. `@keyframes` этого не умеет в принципе: анимация проигрывается только вперёд от
+   нуля, а в момент ухода курсора правило с ней просто перестаёт применяться — полоса
+   мгновенно щёлкает в исходное состояние из любого положения. Переход же всегда стартует от
+   ТЕКУЩЕГО вычисленного значения: уход на 20% пути даёт короткий откат, уход на 90% —
+   длинный, и оба читаются как одно движение.
+
+   Асимметрия нужна только гашению, и она сделана двумя наборами таймингов вместо одного:
+   переход берётся из правила того состояния, в которое элемент идёт. В `.is-sheening` лежит
+   вход (альфа поднимается за `--sheen-fade` и дальше полоса едет на полной), в базовом
+   правиле — уход (альфа держится и гаснет последние `--sheen-fade`, когда полоса уже у левой
+   кромки). Так вход не читается как щелчок, а уход — как обрыв.
+
+   Кривая — `linear`, и это тоже из разбора. С замедляющей `--ease-standard` полоса проходила
+   ~80% пути за первую половину времени и остаток срока ползла уже за правой кромкой: на глаз
+   проход получался вдвое короче заявленного. У равномерного движения света такой проблемы
+   нет, да и физически блик не тормозит на середине.
+
+   Дёшево это потому, что полоса нарисована один раз и не перерисовывается: двигается
+   `transform`, гаснет `opacity` — оба свойства композитор считает сам, layout и paint не
+   трогаются вообще. */
+.sheen-art::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--sheen-width);
+  background: linear-gradient(
+    var(--sheen-angle),
+    transparent 20%,
+    rgb(255 255 255 / var(--sheen-alpha)) 50%,
+    transparent 80%
+  );
+  /* Наклон даёт `skewX` на самой полосе, а не угол внутри градиента: так блик остаётся
+     ровной лентой с чёткими кромками и не размазывается по диагонали. Вертикальных
+     запасов при этом не нужно — `skewX` сдвигает точки только по горизонтали. */
+  transform: translateX(-150%) skewX(var(--sheen-skew));
+  opacity: 0;
+  /* Тайминги ухода. Альфа гаснет не сразу, а последние `--sheen-fade` пути: пока полоса
+     возвращается, она должна быть видна — иначе «возврат» превратится в то самое мгновенное
+     исчезновение, от которого мы уходим. */
+  transition:
+    transform var(--sheen-speed) linear,
+    opacity var(--sheen-fade) linear
+      calc(var(--sheen-speed) - var(--sheen-fade));
+  pointer-events: none;
+  z-index: 7;
+}
+
+/* Класс, а не `:hover`, по двум причинам. Первая — три разных хозяина ховера: карточка
+   бывает `.group`, `.interactive-item` или именованной группой Tailwind (`group/track`),
+   которая отдельным классом под `.group` не попадает; раньше это был список селекторов, и
+   любой четвёртый вариант обёртки пришлось бы дописывать сюда же. Теперь `$lib/utils/sheen`
+   поднимается от курсора до границ карточки сам. Вторая — `prefers-reduced-motion`: скрипт
+   при этой настройке класс просто не ставит.
+
+   Класс ставится на входе курсора и снимается на выходе — то есть держится ровно столько,
+   сколько курсор на карточке. Именно это и даёт блику обратный ход. */
+.sheen-art.is-sheening::after {
+  transform: translateX(200%) skewX(var(--sheen-skew));
+  opacity: 1;
+  /* Тайминги входа: полоса проявляется за первые `--sheen-fade` и дальше едет на полной. */
+  transition:
+    transform var(--sheen-speed) linear,
+    opacity var(--sheen-fade) linear;
+}
+
+/* Блик отключён с двух сторон: скрипт при `prefers-reduced-motion` класс не ставит вовсе, а
+   это правило страхует случай, когда настройку системы переключили при уже помеченной
+   карточке. Гасим и переход, и саму полосу.
+
+   Блок стоит здесь, а не в общем `prefers-reduced-motion` выше по файлу, по той же причине,
+   что и сброс наклона: медиазапрос специфичности не добавляет, а `.sheen-art.is-sheening::after`
+   имеет ровно тот же вес — при равенстве побеждает записанное ПОЗЖЕ. Из общего блока (он
+   идёт раньше) сброс молча проиграл бы правилу, которое должен гасить. */
+@media (prefers-reduced-motion: reduce) {
+  .sheen-art::after,
+  .sheen-art.is-sheening::after {
+    transition: none;
+    opacity: 0;
+  }
+}
+
+/* ── Отражение на обложке ────────────────────────────────────────────────────
+   Второй носитель света, и единственный на обложках: там, где поверхность НАКЛОНЯЕТСЯ,
+   бегущая полоса не годится — она идёт по своему расписанию и о наклоне не знает, а на
+   глянце свет обязан ехать по отражению. Поэтому обложки носят `spec-art`, а плоские
+   поверхности (строки, кнопки, накладки) — `sheen-art`: один блик на поверхность, и тот,
+   который для неё физически верен. Класса на одном элементе не бывает двух — ровно из-за
+   этого жалоба «их два» и появилась.
+
+   Положение (`--spec-pos`) и яркость (`--spec-a`) пишет `$lib/utils/tilt`: там отражение
+   взгляда от наклонённой плоскости и вбегание блика по тому же конверту, которым карточка
+   поднимается. Здесь остаётся только чем это нарисовано.
+
+   Переход не назначен сознательно: значения приходят покадрово из пружины, и `transition`
+   поверх них дал бы вторую, вязкую интерполяцию — ровно то, из-за чего физика вообще уехала
+   в скрипт.
+
+   Перекраска ленты — это paint на слое обложки, а не композитный сдвиг: градиент пересобирается
+   при каждом новом `--spec-pos`. Слой один, размером с обложку, и живёт он только пока карточка
+   под курсором, — та же цена, что у прежней версии этого блика. */
+.spec-art {
+  position: relative;
+  overflow: hidden;
+  /* Тот же изолированный контекст, что и у `.sheen-art`: обложка внутри получает
+     `group-hover:scale-105`, а трансформированный элемент сам становится контекстом
+     наложения и красится как `z-index: 0`. Без `isolate` порядок отрисовки блика зависел бы
+     от содержимого плитки. */
+  isolation: isolate;
+}
+
+.spec-art::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    var(--sheen-angle),
+    transparent calc(var(--spec-pos, 50%) - var(--spec-w)),
+    rgb(255 255 255 / var(--spec-alpha)) var(--spec-pos, 50%),
+    transparent calc(var(--spec-pos, 50%) + var(--spec-w))
+  );
+  /* Конверт скрипта. Значения по умолчанию держат блик невидимым: на карточке, к которой
+     курсор не подходил, переменных нет вовсе. */
+  opacity: var(--spec-a, 0);
+  pointer-events: none;
+  z-index: 7;
+}
+
+/* Блок здесь, а не в общем `prefers-reduced-motion` выше по файлу, по той же причине, что и
+   у наклона с полосой: медиазапрос специфичности не добавляет, а при равном весе побеждает
+   записанное позже. Скрипт при этой настройке переменных не пишет, так что правило страхует
+   только случай переключения настройки на уже подсвеченной карточке. */
+@media (prefers-reduced-motion: reduce) {
+  .spec-art::after {
+    opacity: 0;
+  }
+}
+
+/* ── Пружина панелей ─────────────────────────────────────────────────────────
+   Боковая панель отзывается на курсор упругим подъёмом, а на нажатие — уходом в глубину.
+   Физика описана здесь целиком, и описана переходом, а не покадровой анимацией — это
+   принципиально.
+
+   Покадровая версия (она была в дизайне и снята) не умеет разворачиваться с середины:
+   `animation` привязана к своей временной шкале, и в момент, когда курсор уходит, правило
+   с ней просто перестаёт применяться — панель мгновенно щёлкает в исходное состояние из
+   любого положения. `transition` же всегда едет от ТЕКУЩЕГО вычисленного значения:
+   курсор ушёл на середине хода — панель поедет назад с середины, той же кривой, без
+   обрыва. Именно этого не хватало.
+
+   Пружина живёт в кривой возврата `--ease-panel-recoil`: она уходит за конечную точку,
+   поэтому панель сначала проскакивает чуть дальше нужного и оседает — то самое
+   «спружинила». Работает это на всех возвратах: и на уходе курсора, и на всплытии из
+   нажатия. Ход ВНИЗ под нажатием едет по другой кривой, без перелёта, — разбор в
+   `:active` ниже.
+
+   Едет строго `transform`: панель матовая (`backdrop-filter`), и любое изменение
+   геометрии или тени заставляло бы движок пересобирать размытие фона под ней на каждом
+   кадре. Сдвиг же композитор выполняет сам. */
+.panel-spring {
+  transition: transform var(--panel-press-out) var(--ease-panel-recoil);
+}
+
+/* Ховер: подъём на целое число пикселей, без масштабирования — и это исправление
+   «замыливания».
+
+   Здесь стоял `perspective(900px) translateZ(var(--depth-panel))`, то есть масштаб
+   900/914 ≈ 0.985 (в Aurora 900/918 ≈ 0.980). Для карточки 1.5% незаметны, а для панели
+   шириной 256px и высотой во весь экран это два эффекта разом, оба из жалобы: она
+   ВИЗУАЛЬНО СЖИМАЕТСЯ на несколько пикселей по каждой кромке и МЫЛИТ КОНТЕНТ — весь текст
+   пунктов и логотип пересобираются в нецелом масштабе, а вместе с ними пересчитывается и
+   `backdrop-filter`, наложенный на уменьшенную панель.
+
+   Смещение таких последствий не имеет: слой растеризуется один раз и переезжает целиком,
+   буквы остаются попиксельно теми же. Пружина при этом никуда не делась — она живёт в
+   кривой возврата (перелёт за конечную точку), и на подъёме читается ровно как задумано:
+   панель проскакивает чуть выше и упруго возвращается. */
+.panel-spring:hover {
+  transform: translate3d(0, var(--panel-lift), 0);
+}
+
+/* Нажатие: панель мягко проседает под пальцем и упруго всплывает обратно.
+
+   Так это выглядит сейчас и так задумано ощущаться: 420ms вниз по кривой без перелёта —
+   давление, погружение, остановка; отпустили — 760ms обратно с мягким перелётом, панель
+   всплывает, чуть проскакивает исходную точку и оседает. Разные тайминги в две стороны —
+   не украшательство, а то, чем нажатие вообще отличается от наведения: физическая клавиша
+   уходит вниз ровно с той скоростью, с какой её давят, а возвращается сама, своей
+   пружиной, и заметно медленнее.
+
+   Что было раньше: `perspective(900px) translateZ(-14px)` за 120ms. Две причины, по
+   которым от этого ушли, — в комментарии к `--panel-press` (app.css, блок `:root`).
+   Коротко: 120ms — это не «мягко», а щелчок, а дробный масштаб на матовой панели во всю
+   высоту экрана мылит текст пунктов, и чем дольше держится нажатие, тем это виднее.
+
+   `:active` на панели срабатывает и от нажатия на любую кнопку внутри: состояние
+   всплывает по дереву предков. Так и нужно — жмут по пунктам, отзывается панель. Стопки
+   трансформаций при этом не возникает: у `.nav-item` своего `:active`-сдвига нет,
+   двигается только панель.
+
+   Кривая указана здесь явно, а не унаследована: без неё ход вниз поехал бы по
+   `--ease-panel-recoil` из базового правила, то есть с перелётом, и панель на нажатии
+   проваливалась бы глубже нужного и подпрыгивала обратно — отскок вместо погружения. */
+.panel-spring:active {
+  transform: translate3d(0, var(--panel-press), 0);
+  transition-duration: var(--panel-press-in);
+  transition-timing-function: var(--ease-panel-press);
+}
+
+/* ── Выключатели эффектов ────────────────────────────────────────────────────
+   Четыре эффекта движения выключаются в настройках по отдельности. Атрибуты `data-fx-*`
+   ставит `+layout.svelte` на `<body>`, значения всегда `on`/`off` — селектор
+   `body[data-fx-glare="off"]` читается однозначно, в отличие от проверки на отсутствие
+   атрибута (до первой отрисовки настроек его нет ни при каком значении).
+
+   Почему это нужно в CSS, а не только в скрипте. Наклон и блик умеет не считать сам
+   `$lib/utils/tilt`, но «не писать переменную» и «выключить эффект» — разные вещи: у
+   `--glare` в `.interactive-item::after` значение по умолчанию 1, потому что до появления
+   скрипта блик был статическим пятном по центру. Убери запись — и при выключенном блике на
+   ховере зажигалось бы ровно это пятно, в полную силу. То же с наклоном: `data-tilt`
+   скрипт ставит, пока жива хотя бы одна из двух переменных, и правило `[data-tilt]`
+   подняло бы композитный слой с `will-change: transform` под тождественное преобразование.
+   А блик кромки, световая полоса и пружина нажатия — вообще чистый CSS, скрипт про них
+   ничего не знает.
+
+   Специфичности хватает, чтобы перебить и базовые правила, и правила Aurora: у последних
+   ровно тот же вес (`body[data-design="aurora"] .interactive-item::after`), а этот блок стоит
+   в app.css, то есть ПОСЛЕ `@import "./design-aurora.css"` из шапки файла. При равном весе
+   побеждает правило, записанное позже. */
+body[data-fx-tilt="off"] .tile-art,
+body[data-fx-tilt="off"] .art-glow {
+  transform: none;
+  will-change: auto;
+}
+
+/* Приоритет покраски снимается вместе с наклоном. Скрипт ставит `data-tilt`, пока жива хотя
+   бы одна из двух переменных, то есть и при выключенном наклоне с включённым бликом — а без
+   наклона обложка за свой бокс не выходит, и переставлять карточку в порядке покраски незачем.
+   Прописано отдельным правилом, потому что `z-index` живёт на самой карточке, а не на слое
+   обложки, и селектор выше до него не достаёт. */
+body[data-fx-tilt="off"] [data-tilt] {
+  z-index: auto;
+}
+
+/* Свет под курсором — обе его части сразу: рассеянное свечение по стеклу карточки и
+   отражение на обложке. Это один источник (см. `$lib/utils/tilt`), поэтому и тумблер один:
+   гасить диффузную часть, оставив зеркальную, значило бы показывать блик от света, которого
+   нет.
+
+   У карточки гасится только `background`: `box-shadow` того же псевдоэлемента рисует
+   внутреннее свечение кромки обложки, а оно не движется и к блику отношения не имеет. */
+body[data-fx-glare="off"] .interactive-item::after,
+body[data-fx-glare="off"] .spec-art::after {
+  background: none;
+}
+
+/* `display: none`, а не нулевая прозрачность: полоса — отдельный слой во всю обложку, и
+   выключенной ей незачем оставаться в дереве отрисовки. */
+body[data-fx-sheen="off"] .sheen-art::after {
+  display: none;
+}
+
+body[data-fx-press="off"] .nav-item,
+body[data-fx-press="off"] .nav-item:hover,
+body[data-fx-press="off"] .nav-item:active,
+body[data-fx-press="off"] .sidebar-profile,
+body[data-fx-press="off"] .sidebar-profile:hover,
+body[data-fx-press="off"] .sidebar-profile:active,
+body[data-fx-press="off"] .sidebar-profile-arrow {
+  transform: none;
+}
+
+/* ── Кнопка воспроизведения ───────────────────────────────────────────────────
+   Главная кнопка плеера раньше жила строкой утилит прямо в разметке
+   (`bg-white text-black hover:scale-105 active:scale-95`), поэтому второй дизайн не мог
+   изменить в ней ничего, кроме случайных цветов, а `scale` на круге с иконкой давал
+   тот самый подскок-щелчок. Теперь это класс: форма и физика — здесь, акцентная
+   раскраска — в дизайне.
+
+   Свечение под кнопкой — отдельный слой: `filter: blur()` нельзя анимировать без
+   пересчёта пикселей на каждом кадре, поэтому размытое пятно нарисовано один раз и
+   включается прозрачностью. */
+.play-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 999px;
+  background: #fff;
+  color: #000;
+  box-shadow: 0 4px 12px -4px rgba(0, 0, 0, 0.6);
+  /* Здесь усадка и так меньше пикселя (36px круг, коэффициент 0.6), но точка отсчёта общая
+     со всеми нажимаемыми элементами — см. `.interactive-item:active`. */
+  transform-origin: var(--press-ox, 50%) var(--press-oy, 50%);
+  transition: transform var(--duration-hover) var(--ease-standard),
+              background-color var(--duration-hover) var(--ease-standard);
+}
+
+/* Круглая кнопка воспроизведения уходит в глубину, как и остальные интерактивные
+   элементы. На круге без текста масштаб от перспективы не вредит вообще — растеризовать
+   тут нечего, кроме иконки. */
+.play-btn:hover {
+  transform: perspective(var(--depth-perspective)) translateZ(calc(var(--depth-hover) * 0.6));
+}
+
+.play-btn:active {
+  transform: perspective(var(--depth-perspective)) translateZ(calc(var(--depth-press) * 0.6));
+  transition-duration: var(--duration-micro);
+}
+
+.play-btn:disabled {
+  opacity: 0.5;
+  transform: none;
+}
+
+.play-btn-glow {
+  position: absolute;
+  inset: -20%;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-primary) 45%, transparent);
+  filter: blur(10px);
+  opacity: 0;
+  transition: opacity var(--duration-hover) var(--ease-standard);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.play-btn:hover .play-btn-glow {
+  opacity: 1;
+}
+
+.play-btn:disabled .play-btn-glow {
+  opacity: 0;
+}
+
+.play-btn > :not(.play-btn-glow) {
+  position: relative;
+  z-index: 1;
+}
+
+/* ── Бесшовное растворение слоёв (edge mask) ──────────────────────────────────
+   Почему цветом это не решается в принципе. Раньше баннер «сшивался» с фоном третьим
+   слоем, который заливал низ блока `var(--color-dark)`. Но фон страницы — не плоский
+   цвет: в разметке это три слоя подряд (`--color-dark`, обложка играющего трека под
+   `blur(100px)` с прозрачностью 0.15 и вертикальный градиент к `--color-dark-gradient`,
+   см. routes/+page.svelte). Никакая заливка одним цветом с этим совпасть не может —
+   отсюда и видимая горизонтальная линия на стыке, которая вдобавок меняла оттенок при
+   смене трека. По бокам не было даже попытки: картинка просто обрывалась по кромке
+   блока.
+
+   Правильный ход — не подбирать цвет, а убирать альфу. Слой сам уходит в ноль по краям,
+   и сквозь него видно ровно тот фон, который есть, каким бы он ни был: совпадение по
+   определению, а не по совпадению значений.
+
+   Маска собрана здесь один раз и настраивается переменными на месте применения —
+   переменные наследуются, поэтому достаточно объявить их на блоке-родителе, а не на
+   каждом слое. Каждый слой умеет самонейтрализоваться, поэтому один и тот же набор
+   годится и для hero во всю ширину, и для закрытой карточки:
+
+     --mask-fade-start: 100%   выключает затухание вниз
+     --mask-top: 0%            выключает затухание вверх
+     --mask-side: 0%           выключает боковые
+     --mask-core: 100%         выключает радиальную вуаль
+
+   Верхняя кромка долго была единственной, у которой затухания не было вовсе: стоял
+   `#000 var(--mask-top, 0%)` — то есть при значении по умолчанию слой начинался сразу на
+   полной альфе. Для подложки страницы это незаметно (её верх совпадает с кромкой окна,
+   выше просто нечего показывать), а вот шапке профиля это давало ровную горизонтальную
+   линию под кнопками навигации: и картинка, и вуали, и матовое стекло обрывались там все
+   сразу. Теперь у верха та же s-образная кривая, что у левого края, и по умолчанию она
+   схлопывается в ноль — блоки, которым верхнее затухание не нужно, работают как раньше.
+
+   `--mask-side` задаёт обе боковые кромки сразу, но они неравноправны: левая приходится
+   на стык с боковой панелью (там нужно много места, чтобы стык не читался), а правая — на
+   край окна, где картинка и так обрывается вместе с ним и гасить её незачем. Поэтому у
+   правой есть отдельная ручка `--mask-side-r`, по умолчанию равная левой: блоки, которым
+   симметрия подходит, не замечают её существования.
+
+   Стоимость: маска считается при отрисовке слоя, не покадрово — по краям ничего не
+   анимируется, так что на FPS это не влияет.
+
+   Почему стопов много, а не два. Градиент `#000 X%, transparent 100%` даёт линейную
+   альфу, но глаз к альфе не линеен: в точке старта производная меняется скачком, и
+   именно там видна «граница затухания» — тонкая, но заметная линия, ровно та, от которой
+   мы уходим. Стопы ниже описывают s-образную кривую: у старта альфа падает медленно
+   (перехода не видно), в середине быстро, а хвост длинный и уходит в ноль незаметно.
+   Позиции считаются от длины затухания, поэтому кривая одна и та же при любых
+   настройках блока. */
+:root {
+  /* Длина затухания по каждой оси. Подстановка custom property считается на том
+     элементе, который её читает, поэтому здесь достаточно объявить формулу один раз —
+     значения `--mask-fade-start` и `--mask-core` подставятся уже на месте применения. */
+  --mask-v-span: calc(100% - var(--mask-fade-start, 42%));
+  --mask-core-span: calc(100% - var(--mask-core, 100%));
+
+  --edge-mask:
+    linear-gradient(
+      to bottom,
+      transparent 0,
+      rgba(0, 0, 0, 0.16) calc(var(--mask-top, 0%) * 0.2),
+      rgba(0, 0, 0, 0.44) calc(var(--mask-top, 0%) * 0.4),
+      rgba(0, 0, 0, 0.74) calc(var(--mask-top, 0%) * 0.6),
+      rgba(0, 0, 0, 0.93) calc(var(--mask-top, 0%) * 0.8),
+      #000 var(--mask-top, 0%),
+      #000 var(--mask-fade-start, 42%),
+      rgba(0, 0, 0, 0.93) calc(var(--mask-fade-start, 42%) + var(--mask-v-span) * 0.2),
+      rgba(0, 0, 0, 0.74) calc(var(--mask-fade-start, 42%) + var(--mask-v-span) * 0.4),
+      rgba(0, 0, 0, 0.44) calc(var(--mask-fade-start, 42%) + var(--mask-v-span) * 0.6),
+      rgba(0, 0, 0, 0.16) calc(var(--mask-fade-start, 42%) + var(--mask-v-span) * 0.8),
+      transparent 100%
+    ),
+    linear-gradient(
+      to right,
+      transparent 0,
+      rgba(0, 0, 0, 0.16) calc(var(--mask-side, 0%) * 0.2),
+      rgba(0, 0, 0, 0.44) calc(var(--mask-side, 0%) * 0.4),
+      rgba(0, 0, 0, 0.74) calc(var(--mask-side, 0%) * 0.6),
+      rgba(0, 0, 0, 0.93) calc(var(--mask-side, 0%) * 0.8),
+      #000 var(--mask-side, 0%),
+      #000 calc(100% - var(--mask-side-r, var(--mask-side, 0%))),
+      rgba(0, 0, 0, 0.93) calc(100% - var(--mask-side-r, var(--mask-side, 0%)) * 0.8),
+      rgba(0, 0, 0, 0.74) calc(100% - var(--mask-side-r, var(--mask-side, 0%)) * 0.6),
+      rgba(0, 0, 0, 0.44) calc(100% - var(--mask-side-r, var(--mask-side, 0%)) * 0.4),
+      rgba(0, 0, 0, 0.16) calc(100% - var(--mask-side-r, var(--mask-side, 0%)) * 0.2),
+      transparent 100%
+    ),
+    radial-gradient(
+      140% 120% at 50% var(--mask-core-y, 18%),
+      #000 var(--mask-core, 100%),
+      rgba(0, 0, 0, 0.93) calc(var(--mask-core, 100%) + var(--mask-core-span) * 0.2),
+      rgba(0, 0, 0, 0.74) calc(var(--mask-core, 100%) + var(--mask-core-span) * 0.4),
+      rgba(0, 0, 0, 0.44) calc(var(--mask-core, 100%) + var(--mask-core-span) * 0.6),
+      rgba(0, 0, 0, 0.16) calc(var(--mask-core, 100%) + var(--mask-core-span) * 0.8),
+      transparent 100%
+    );
+}
+
+.edge-mask,
+.page-atmos,
+.artist-hero-media,
+.artist-hero-veil,
+.artist-hero-fade,
+.artist-hero-tint,
+.profile-hero-glass,
+.profile-hero-media,
+.profile-hero-veil,
+.profile-hero-fade,
+.profile-hero-tint {
+  -webkit-mask-image: var(--edge-mask);
+  mask-image: var(--edge-mask);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+  /* Слои обязаны пересекаться, а не складываться. По умолчанию `mask-composite: add`
+     даёт объединение — непрозрачно там, где непрозрачен хоть один слой, то есть маска
+     из трёх слоёв превращается ровно в ничто. Legacy-ключевое слово идёт первым,
+     стандартное последним: так в актуальном Chromium (WebView2) побеждает `intersect`,
+     а на старом движке остаётся рабочий `source-in` — оба дают пересечение. */
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+}
+
+/* ── Шапка артиста ───────────────────────────────────────────────────────────
+   Классы `.artist-hero*` разметка страницы артиста использовала с самого начала, но в
+   CSS их не было ни одного: шапка держалась только на `.plate` и складывалась в
+   вертикальный столбик, а баннер, вуали и градиент-растворение вообще не имели
+   размеров. Здесь — базовая геометрия для классического дизайна: закрытая плитка,
+   выровненная по той же колонке, что и контент страницы. Полный hero во всю ширину с
+   растворением в фон живёт в Aurora — там шапка перестаёт быть плиткой.
+
+   `max-width` держит шапку в одной колонке с треками: сама она лежит в разметке выше
+   контейнера контента (иначе Aurora не смог бы вывести её за границы колонки), поэтому
+   ширину ей приходится задавать здесь. */
+.artist-hero {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  min-height: 200px;
+  max-width: 1000px;
+  margin: 0 auto 2.5rem;
+  padding: 1.75rem 2rem;
+  overflow: hidden;
+  isolation: isolate;
+  /* Оформление плитки перенесено из `plate` в сам класс. Раньше в разметке стояло
+     `class="plate artist-hero"`, и второй дизайн не мог убрать рамку с фоном: его правила
+     переопределяли бы `.artist-hero`, а `.plate` продолжал бы рисовать поверх. Теперь
+     карточка — часть шапки, и дизайну достаточно её обнулить. */
+  background: rgba(255, 255, 255, 0.028);
+  border: 1px solid rgba(255, 255, 255, 0.035);
+  border-radius: 1.5rem;
+
+  /* Настройка растворения для всех слоёв шапки сразу — переменные наследуются. Бока
+     здесь не размываем (`--mask-side` остаётся нулём): классическая шапка — закрытая
+     карточка, её кромку держит рамка, и срез по бокам там не читается как обрыв. Низ
+     наоборот обязан уходить мягко — именно там раньше была видна линия. */
+  --mask-fade-start: 46%;
+}
+
+/* Баннер из SoundCloud. Ширина шапки и пропорции загруженной картинки не совпадают
+   никогда, поэтому `object-fit: cover` обязателен — иначе чужая шапка 2480×520
+   растягивает блок или обрезается по случайному месту. */
+.artist-hero-media {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 30%;
+  z-index: -3;
+  pointer-events: none;
+  /* Раньше проявление задавали классы `animate-in fade-in duration-700` в разметке, но
+     плагина tailwindcss-animate в проекте нет — классы ничего не делали, и баннер
+     возникал рывком, тогда как размытая подложка под ним проявлялась плавно. */
+  animation: media-fade-in 700ms var(--ease-out) both;
+}
+
+/* Затемнение поверх баннера: загрузить можно что угодно, включая почти белую
+   картинку, а имя и цифры обязаны остаться читаемыми при любой. */
+.artist-hero-veil {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    rgba(5, 5, 10, 0.94) 0%,
+    rgba(5, 5, 10, 0.78) 45%,
+    rgba(5, 5, 10, 0.42) 100%
+  );
+  z-index: -2;
+  pointer-events: none;
+}
+
+/* Притенение низа под текстом. Раньше этот слой заливал низ `var(--color-dark)`, пытаясь
+   «стать фоном страницы» — именно он и давал видимую линию на стыке (см. edge mask выше).
+   Теперь он ничего не подделывает: чистая альфа, независимая от темы и от обложки
+   играющего трека, и к нижней кромке она возвращается в ноль сама. Растворение баннера
+   делает маска, а не заливка. */
+.artist-hero-fade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to bottom,
+    transparent 18%,
+    rgba(0, 0, 0, 0.5) 74%,
+    transparent 100%
+  );
+  /* Свой градиент уже сходит к нулю — второй раз гасить низ маской не нужно, иначе
+     притенение исчезнет как раз там, где под ним стоит имя. Бока слой гасит вместе со
+     всеми (`--mask-side` наследуется от блока). */
+  --mask-fade-start: 100%;
+  z-index: -1;
+  pointer-events: none;
+}
+
+/* Акцентная подсветка на случай, когда баннера нет вовсе: пустая шапка не должна
+   выглядеть как незагрузившийся блок. */
+.artist-hero-tint {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    120% 140% at 0% 0%,
+    color-mix(in srgb, var(--color-primary) 16%, transparent),
+    transparent 60%
+  );
+  z-index: -1;
+  pointer-events: none;
+}
+
+/* Волна на главной, когда открыт другой раздел.
+
+   Компонент остаётся живым (иначе полосы спектра при возвращении начинались бы с нуля), но
+   не должен ни занимать место, ни быть виден, ни попадать под курсор и Tab.
+
+   Почему не `display: none`. Он выкидывает элемент из дерева отрисовки, а это по стандарту
+   ОТМЕНЯЕТ все CSS-анимации внутри: при возвращении фоновые пятна начали бы свой дрейф
+   заново — то есть ровно тот прыжок, из-за которого блок и перестали пересоздавать.
+   `visibility: hidden` элемент в дереве оставляет: анимации продолжаются (а сама волна ставит
+   их на паузу через `.is-idle`, сохраняя фазу), но не рисуется ни один пиксель, и ничто
+   внутри не получает ни фокуса, ни событий мыши.
+
+   Размер в один пиксель, а не нулевой: у элемента нулевой площади IntersectionObserver
+   ведёт себя по-разному в разных движках, а волна на него опирается. */
+.wave-hero-parked {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.artist-hero-avatar {
+  position: relative;
+  width: 120px;
+  height: 120px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* Аватар, который можно открыть: тот же кружок, но кнопкой. Браузерные отступы и рамку
+   кнопки снимаем, рамку и свечение оставляет `.artist-avatar` — иначе кольцо вокруг
+   аватара пропадало бы ровно там, где по нему стало можно нажать.
+
+   Увеличение — на самой кнопке, а не на картинке внутри: `overflow: hidden` на кружке
+   обрезал бы выросшую картинку, и вместо приближения получалось бы кадрирование. */
+.artist-avatar-open {
+  padding: 0;
+  appearance: none;
+  cursor: zoom-in;
+  transition: transform 260ms cubic-bezier(0.4, 0, 0.2, 1),
+              box-shadow 260ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.artist-avatar-open:hover {
+  transform: scale(1.04);
+  box-shadow: 0 0 42px color-mix(in srgb, var(--color-primary) 34%, transparent);
+}
+
+.artist-avatar-open:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 4px;
+}
+
+.artist-hero-body {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.artist-hero-name {
+  max-width: 100%;
+}
+
+.artist-hero-meta {
+  margin-top: 0.35rem;
+  font-size: 13px;
+  letter-spacing: -0.004em;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* ── Переключатель разделов (segmented control) ───────────────────────────────
+   Один компонент на два места: вкладки «Треки / Альбомы и EP» на странице артиста и
+   выбор стиля полноэкранного режима в его настройках. Активный раздел показывает не
+   перекрашенная кнопка, а ЕДИНСТВЕННАЯ плашка, которая переезжает между ячейками:
+   переезд читается как связь между «было» и «стало», а две независимые перекраски — нет.
+
+   Ячейки равной ширины (`grid-auto-columns: 1fr`), поэтому положение плашки считается
+   арифметикой, а не измерением DOM: `translateX(индекс × 100%)`. Никаких
+   `getBoundingClientRect` и никакой рассинхронизации при смене шрифта или языка.
+
+   Анимируется только `transform` — плашка едет на композиторе, ничего не пересчитывая. */
+.seg-control {
+  position: relative;
+  display: grid;
+  grid-auto-flow: column;
+  /* `minmax(0, 1fr)`, а не `1fr`: у `1fr` минимум равен min-content, и ячейки с подписями
+     разной длины получаются разной ширины («Плавная» 72px против «Ритмичной» 86px). Плашка
+     же всегда ровно `(100% - 8px) / --seg-count` и переезжает на 100% своей ширины, то есть
+     считает ячейки равными. Расходятся они молча: подсветка встаёт мимо выбранной ячейки —
+     на 8px при этой паре подписей, — и переключатель выглядит так, будто нажатие не
+     сработало. Нулевой минимум убирает пол по min-content, и колонки всегда равны. */
+  grid-auto-columns: minmax(0, 1fr);
+  padding: 4px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+/* В строке настроек переключатель не сжимается: подписи внутри `nowrap`, и при нехватке
+   места флексбокс отобрал бы ширину у него, а не у текста слева (у того есть `min-w-0`).
+   Ячейки при этом уехали бы под обрезку `overflow-x: hidden` у `main` — вместе с правой,
+   то есть до неё стало бы не дотянуться курсором. */
+.setting-row .seg-control {
+  flex: 0 0 auto;
+}
+
+.seg-pill {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  width: calc((100% - 8px) / var(--seg-count, 2));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--color-primary) 20%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 32%, transparent);
+  box-shadow: 0 8px 20px -12px color-mix(in srgb, var(--color-primary) 60%, transparent);
+  transform: translateX(calc(var(--seg-index, 0) * 100%));
+  /* 240 мс, а не 420. Плашка — главный ответ на вопрос «что выбрано», и пока она едет,
+     ответа нет. Четыре десятых секунды на переезд длиной в одну ячейку — это не «плавно», а
+     запаздывание: успеваешь усомниться, что нажатие вообще приняли. Кривая с торможением на
+     подъезде вместо симметричной: важен момент прибытия, а не выезд. */
+  transition: transform 240ms var(--ease-smooth-out, cubic-bezier(0.22, 1, 0.36, 1));
+  pointer-events: none;
+}
+
+.seg-item {
+  position: relative;
+  /* Поверх плашки: она абсолютная и лежит в том же контексте наложения. */
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: 0.45rem 0.7rem;
+  border-radius: 9px;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: -0.006em;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.52);
+  /* Вдавливание считается вокруг точки нажатия, а не центра — разбор у `:active` ниже. */
+  transform-origin: var(--press-ox, 50%) var(--press-oy, 50%);
+  transition: color 200ms var(--ease-out, ease),
+              transform var(--duration-micro) var(--ease-standard);
+}
+
+.seg-item:hover {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.seg-item.is-active {
+  color: #fff;
+}
+
+/* Отклик на нажатие. До этого его не было вообще: у ячейки не нашлось ни одного правила
+   `:active` — ни здесь, ни в Aurora для классического дизайна, — и единственным ответом на
+   нажатие был переезд плашки, который занимал 420 мс. Почти полсекунды между нажатием и
+   первым признаком, что оно принято, читаются буквально как «кнопка не прожимается»: жмёшь —
+   и ничего.
+
+   Половина глубины, как у ячеек в Aurora: ячейки стоят в ряд, полное значение на соседних
+   читается как рябь. Точка отсчёта усадки — место нажатия (её пишет `$lib/utils/press`),
+   поэтому пиксель под курсором остаётся под курсором и мёртвой кромки по краю ячейки не
+   появляется. Действие при этом на отпускание уже не смотрит — оно выполняется на нажатии
+   (там же). */
+.seg-item:active:not(:disabled) {
+  transform: perspective(var(--depth-perspective)) translateZ(calc(var(--depth-press) * 0.5));
+}
+
+body[data-fx-press="off"] .seg-item:active:not(:disabled) {
+  transform: none;
+}
+
+.seg-item:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Счётчик внутри ячейки: сколько там всего. Приглушён на неактивной вкладке вместе с
+   подписью — он часть подписи, а не отдельное сообщение. */
+.seg-count {
+  padding: 0.05rem 0.4rem;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 11px;
+  font-weight: 600;
+  color: inherit;
+  opacity: 0.75;
+}
+
+/* Крупный вариант — для вкладок раздела, где переключатель является заголовком. */
+.seg-control.is-lg {
+  padding: 5px;
+  border-radius: 16px;
+}
+
+.seg-control.is-lg .seg-pill {
+  top: 5px;
+  bottom: 5px;
+  left: 5px;
+  width: calc((100% - 10px) / var(--seg-count, 2));
+  border-radius: 12px;
+}
+
+.seg-control.is-lg .seg-item {
+  padding: 0.6rem 1.3rem;
+  border-radius: 12px;
+  font-size: 14px;
+}
+
+/* Переключатель не растягивается на всю колонку: две ячейки шириной в 1000px читались бы
+   как две кнопки, а не как один орган управления. */
+.artist-tabs {
+  display: flex;
+  margin-bottom: 1.5rem;
+}
+
+.artist-tabs .seg-control {
+  min-width: 22rem;
+}
+
+/* Раздел страницы артиста. Собственного оформления нет намеренно: это только контейнер,
+   которому Svelte-переход (`in:fly`) даёт вход. `will-change` не ставим — переход живёт
+   340 мс, а постоянная подсказка композитору держала бы слой всё время. */
+.artist-pane {
+  position: relative;
+  min-width: 0;
+}
+
+/* Вкладки медиатеки — тот же переключатель, что у артиста, только ячеек четыре. Ширину
+   задают сами подписи со счётчиками (у ячеек `white-space: nowrap`), а `min-width` не даёт
+   переключателю сжаться в столбик из четырёх слов на узком окне. */
+.library-tabs {
+  display: flex;
+  margin-bottom: 1.75rem;
+}
+
+.library-tabs .seg-control {
+  min-width: 34rem;
+}
+
+/* То же, что `.artist-pane`, но для медиатеки: контейнер под вход раздела. Отдельное имя —
+   чтобы правило страницы артиста нельзя было поменять, не заметив второго места. */
+.library-pane {
+  position: relative;
+  min-width: 0;
+}
+
+/* ── Раскрытый релиз ──────────────────────────────────────────────────────────
+   Занимает место сетки, а не дописывается под неё (разбор — в разметке ArtistPage). */
+.album-detail {
+  display: flex;
+  flex-direction: column;
+}
+
+.album-back {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-bottom: 1.25rem;
+  padding: 0.4rem 0.85rem 0.4rem 0.55rem;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.62);
+  transition: color 200ms var(--ease-out, ease),
+              background-color 200ms var(--ease-out, ease),
+              transform 200ms var(--ease-out, ease);
+}
+
+.album-back:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+  /* Сдвиг влево — в ту же сторону, куда ведёт кнопка. */
+  transform: translateX(-2px);
+}
+
+.album-back:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.album-detail-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 1.5rem;
+  margin-bottom: 1.75rem;
+}
+
+.album-detail-art {
+  position: relative;
+  width: 11.5rem;
+  height: 11.5rem;
+  flex: 0 0 auto;
+  border-radius: 1.1rem;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: 0 26px 54px -26px rgba(0, 0, 0, 0.95);
+}
+
+.album-detail-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.album-detail-art-empty {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.22);
+}
+
+.album-detail-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  padding-bottom: 0.35rem;
+}
+
+.album-detail-kind {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-primary) 78%, white 22%);
+}
+
+.album-detail-title {
+  margin-top: 0.3rem;
+  font-size: clamp(26px, 3.4vw, 40px);
+  font-weight: 600;
+  line-height: 1.16;
+  letter-spacing: -0.03em;
+  /* Запас под выносные элементы: у `line-height` меньше 1.2 хвосты «у», «р», «д»
+     подрезаются любым `overflow`, а он приходит вместе с многоточием. */
+  padding-bottom: 0.08em;
+  color: rgba(255, 255, 255, 0.97);
+  max-width: 100%;
+  text-wrap: balance;
+}
+
+.album-detail-sub {
+  margin-top: 0.4rem;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.album-detail-play {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 1.1rem;
+  padding: 0.55rem 1.15rem;
+  border-radius: 9999px;
+  background: var(--color-primary);
+  color: #000;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.005em;
+  transition: filter 200ms var(--ease-out, ease), transform 200ms var(--ease-out, ease);
+}
+
+.album-detail-play:hover {
+  filter: brightness(1.12);
+  transform: translateY(-1px);
+}
+
+.album-detail-play:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+}
+
+@media (max-width: 640px) {
+  .album-detail-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .album-detail-art {
+    width: 9rem;
+    height: 9rem;
+  }
+}
+
+/* Переезд плашки — украшение, а не сообщение: активный раздел виден и по цвету подписи,
+   и по `aria-selected`. Поэтому при запросе на покой плашка просто оказывается на месте. */
+@media (prefers-reduced-motion: reduce) {
+  .seg-pill {
+    transition: none;
+  }
+}
+
+/* ── Атмосферная подложка страницы ────────────────────────────────────────────
+   Баннер работает в двух ролях одновременно, и это сознательно:
+
+   • подложкой всей верхней части страницы — большой, затемнённый, растворяющийся в
+     цвете фона к контенту. Это атмосфера: страница окрашивается тем, что человек
+     слушает, ещё до того как он что-то прочитал;
+   • обложкой на первом плане — внутри самой карточки профиля (или шапки артиста),
+     резче и ярче.
+
+   Одна и та же картинка в двух масштабах даёт глубину, которую не даст ни один из
+   слоёв по отдельности. Подложка абсолютная и `pointer-events: none` — она не участвует
+   ни в раскладке, ни в событиях, поэтому её появление не сдвигает контент.
+
+   ГЛАВНОЕ ОТЛИЧИЕ от прежней `.profile-backdrop`: слой живёт не в самой странице, а в
+   фоновом слое приложения (routes/+page.svelte), и страница только подаёт ему картинку
+   через стор `pageAtmosphere`. Раньше подложка лежала внутри `<main>`, а `<main>`
+   обрезает содержимое по `overflow-x: hidden` — то есть ровно по стыку с боковой
+   панелью. Панель матовая и показывает сквозь себя фон БЕЗ подложки, поэтому на стыке
+   стояла вертикальная граница между двумя разными фонами, и убрать её шириной
+   затухания было нельзя в принципе: справа от кромки подложка есть, слева её нет вообще,
+   а спад лишь решал, насколько резко это видно. Прежние 34–36% ширины (это ~450px
+   градиента!) съедали половину картинки и всё равно оставляли шов — и именно из-за них
+   баннер «кончался слишком быстро».
+
+   Здесь у слоя левой кромки просто нет: он тянется под панель до края окна, панель
+   размывает его сквозь себя своим `backdrop-filter`, и переход получается не спрятанным,
+   а отсутствующим. Поэтому боковое затухание выключено целиком (см. ниже). */
+.page-atmos {
+  position: absolute;
+  /* Слой совпадает с рабочей областью окна: титлбар `fixed`, так что верх области — это
+     верх окна, а место под кнопки навигации даёт `pt-20` у `<main>`. Отрицательные
+     смещения, которыми прежняя подложка гасила отступы колонки контента, здесь не нужны
+     вовсе — снаружи `<main>` этих отступов нет. */
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 620px;
+  overflow: hidden;
+  pointer-events: none;
+  /* Слой ездит по прокрутке (`translate3d` из разметки): подложка продолжает шапку
+     страницы, а шапка лежит внутри `<main>` и прокручивается. Подсказка держит его на
+     своём слое композитора, чтобы размытая картинка не пересобиралась покадрово. */
+  will-change: transform;
+
+  /* Маска висит на контейнере, а не на самой картинке, и это принципиально: картинка
+     внутри увеличена, поэтому её собственные края лежат за пределами контейнера —
+     затухание, нарисованное на ней, обрезалось бы вместе с ними и в кадре остался бы
+     ровный срез. Контейнер же совпадает с видимой областью точно, поэтому гасить нужно
+     именно его — заодно одной маской, а не тремя (картинка + две вуали).
+
+     Бока не гасим (`--mask-side: 0%`). Обе кромки теперь приходятся на край окна, где
+     обрыв картинки и так ожидаем, а не на стык с другой поверхностью — гасить там нечего,
+     и любое затухание только отнимало бы у картинки ширину. Углы добирает радиальный
+     слой: он даёт лёгкую виньетку, а не вертикальную границу.
+
+     Верх тоже не гасим: кромка слоя совпадает с кромкой окна, выше неё показывать нечего.
+     Именно ради этого совпадения слой и стоит `top: 0` — у прежней подложки верх
+     приходился на пустое поле под титлбаром, и там приходилось держать отдельный спад.
+
+     Вниз спад стартует рано (15%): высота 620px, и растворение получает ~520px вместо
+     350px — переход в фон страницы становится длиннее самой видимой части подложки. */
+  --mask-top: 0%;
+  --mask-fade-start: 15%;
+  --mask-side: 0%;
+  --mask-core: 62%;
+  --mask-core-y: 2%;
+}
+
+.page-atmos-media {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 25%;
+  /* Сильное размытие здесь не украшение: подложка растянута на всю ширину окна и 620px в
+     высоту, а исходником может быть шапка 2480×520 — без размытия видно и её сюжет, и то,
+     что он не совпадает с резкой копией в шапке страницы. Увеличение прячет полупрозрачные
+     кромки, которые оставляет само размытие. */
+  filter: blur(48px) saturate(1.2);
+  transform: scale(1.15);
+  opacity: 0.44;
+  /* Появление честными кейфреймами: классов `animate-in fade-in` из tailwindcss-animate в
+     проекте нет (плагин не подключён), и раньше подложка просто возникала рывком. */
+  animation: media-fade-in 900ms var(--ease-out) both;
+}
+
+/* Источник — не шапка, а обложка трека: квадрат вроде 500×500, растянутый на 620px в
+   высоту. Такому нужно и больше размытия, и меньше света, иначе в подложке видно и
+   пиксели, и границы кадра. */
+.page-atmos.is-derived .page-atmos-media {
+  filter: blur(72px) saturate(1.25);
+  transform: scale(1.25);
+  opacity: 0.36;
+}
+
+.page-atmos-veil {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(10, 10, 13, 0.44) 0%, rgba(10, 10, 13, 0.16) 45%, transparent 100%);
+}
+
+/* Лёгкая глубина внутри подложки. Заливки цветом страницы здесь нет: низ подложки уводит
+   в ноль маска контейнера, поэтому слою достаточно чистой альфы — она не зависит ни от
+   темы, ни от обложки играющего трека. */
+.page-atmos-fade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to bottom,
+    transparent 30%,
+    rgba(0, 0, 0, 0.3) 100%
+  );
+}
+
+/* Общее появление картинок-подложек (подложка страницы и резкие баннеры в шапках).
+   Конечного кадра нет намеренно: без `to` браузер берёт собственную прозрачность
+   элемента, а она у каждого слоя своя (0.44 у подложки, 0.55 у шапки профиля, 0.4 у
+   варианта «обложка вместо баннера»). Один кейфрейм на всех и ни одного дубля. */
+@keyframes media-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* ── Шапка профиля ───────────────────────────────────────────────────────────
+   Тот же приём, что у артиста, но с обратным приоритетом: у артиста фон — это его
+   собственная шапка, а в профиле баннер выбирает сам человек, поэтому он получает
+   больше света, а текст защищён вуалью слева. Атмосферу берёт на себя подложка выше.
+
+   Шапка больше не карточка, и это ответ на видимый «горизонт» под кнопками навигации.
+   Раньше на самом `.profile-hero` висели одновременно три источника ровной линии:
+   `border` рисовал её явно, `background` менял цвет скачком, а `backdrop-filter`
+   обрывал размытие точно по border-box — там, где кончалось стекло, фон резко
+   становился резким. Замаскировать это на самом контейнере нельзя: маска гасила бы
+   вместе с фоном и содержимое — имя, аватар, кнопки. Поэтому стекло и заливка вынесены
+   в отдельный слой `.profile-hero-glass`, который маска гасит целиком, а контейнеру
+   осталась только геометрия. */
+.profile-hero {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  min-height: 220px;
+  padding: 2rem;
+  overflow: hidden;
+  isolation: isolate;
+  /* Радиус нужен не рамке (её больше нет), а `overflow`: если какой-то слой не успеет
+     догаснуть до кромки, обрежется он по скруглению, а не прямым углом. */
+  border-radius: 2rem;
+
+  /* САМ БАННЕР внутри раньше доходил до кромок и обрывался на них: справа и снизу шёл
+     резкий переход от цвета фотографии к цвету карточки, и именно этот перепад читался
+     как «под баннером один цвет, а рядом другой». Теперь фотография растворяется, не
+     доезжая до края, — по всем четырём сторонам, включая верх (`--mask-top`), где
+     обрыв был заметнее всего: верх шапки приходится на пустое место под кнопками
+     навигации, и линия там ничем не прикрыта.
+     Боковое затухание умеренное (16%) — вуаль слева и так гасит картинку под текстом,
+     и переусердствовать значит потерять баннер целиком. */
+  --mask-top: 15%;
+  --mask-fade-start: 38%;
+  --mask-side: 16%;
+  --mask-core: 56%;
+  --mask-core-y: 44%;
+}
+
+/* Матовое стекло и заливка шапки. Отдельный слой существует ровно потому, что
+   `backdrop-filter` невозможно растворить, оставаясь на контейнере с контентом: маска
+   на `.profile-hero` съела бы текст. Здесь же гасить можно всё — слой пустой.
+
+   `backdrop-filter` маску уважает: Chromium сначала считает размытие подложки, потом
+   композитит результат через маску элемента. То есть размытие и заливка уходят в ноль
+   одним и тем же градиентом, синхронно, и «линии обрыва размытого фона» не остаётся.
+   Спад у стекла чуть шире, чем у баннера: резкость подложки глаз ловит охотнее, чем
+   яркость картинки, поэтому запас до кромки ему нужен больше. */
+.profile-hero-glass {
+  position: absolute;
+  inset: 0;
+  z-index: -4;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.058) 0%,
+    rgba(255, 255, 255, 0.014) 100%
+  );
+  backdrop-filter: blur(14px) saturate(1.04);
+  -webkit-backdrop-filter: blur(14px) saturate(1.04);
+  --mask-top: 18%;
+  --mask-fade-start: 32%;
+  --mask-side: 19%;
+  --mask-core: 54%;
+  --mask-core-y: 44%;
+}
+
+.profile-hero-media {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  opacity: 0.55;
+  z-index: -3;
+  pointer-events: none;
+  /* См. `.artist-hero-media`: классы `animate-in fade-in` из разметки были пустышкой. */
+  animation: media-fade-in 700ms var(--ease-out) both;
+}
+
+/* Обложка трека вместо настоящей шапки — квадрат 500×500 низкого разрешения. Без
+   сильного размытия сразу видно, что это подставленная картинка.
+
+   `transform: scale(1.25)` убран по той же причине, что и у баннера артиста: увеличение
+   выносит края картинки за пределы карточки, а вместе с ними и нарисованное на них
+   затухание — его срезал бы `overflow: hidden`, и вернулась бы ровная линия. Кромки
+   теперь прячет маска, причём полностью, так что растягивать картинку не нужно. */
+.profile-hero-media.is-derived {
+  opacity: 0.4;
+  filter: blur(28px);
+}
+
+.profile-hero-veil {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    rgba(10, 10, 13, 0.96) 0%,
+    rgba(10, 10, 13, 0.8) 48%,
+    rgba(10, 10, 13, 0.25) 100%
+  );
+  z-index: -2;
+  pointer-events: none;
+}
+
+/* Цвет заливки — чистая альфа: привязка к `rgba(10,10,13,…)` совпадала с фоном только при
+   выключенной «глубине темы» и слетала у любой цветной темы.
+
+   Этот слой уже сам гасит низ градиентом, поэтому вертикальное затухание маски ему
+   выключено (`--mask-fade-start: 100%`) — иначе низ гасился бы дважды и вместо
+   затемнения к краю получалась бы «дыра». Боковые кромки маска гасить продолжает: без
+   этого затемнение упиралось бы в рамку слева и справа ровной линией. */
+.profile-hero-fade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to bottom, transparent 40%, rgba(0, 0, 0, 0.55) 100%);
+  z-index: -1;
+  pointer-events: none;
+  --mask-fade-start: 100%;
+  --mask-core: 100%;
+}
+
+/* Заглушка, когда баннера нет ни одного.
+   Вылет за контейнер уменьшен с 6rem до 2rem не из экономии: маска считается от бокса
+   самого слоя, поэтому при большом вылете весь её спад приходился на область ЗА
+   кромкой шапки — внутри видимой части слой оставался на полной альфе и обрывался о
+   `overflow: hidden`. Раньше этот обрыв прикрывала рамка карточки, теперь прикрывать
+   нечем, поэтому спад должен укладываться внутрь видимой области. Собственные значения,
+   а не наследуемые: у слоя другой бокс, и проценты у него означают другие пиксели. */
+.profile-hero-tint {
+  position: absolute;
+  inset: -2rem;
+  background: linear-gradient(
+    45deg,
+    color-mix(in srgb, var(--color-primary) 20%, transparent),
+    rgba(59, 130, 246, 0.2)
+  );
+  filter: blur(60px);
+  opacity: 0.5;
+  z-index: -2;
+  pointer-events: none;
+  --mask-top: 26%;
+  --mask-fade-start: 30%;
+  --mask-side: 24%;
+  --mask-core: 46%;
+  --mask-core-y: 44%;
+}
+
+.profile-hero-avatar {
+  position: relative;
+  width: 8rem;
+  height: 8rem;
+  flex-shrink: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 3rem;
+  font-weight: 900;
+  color: #fff;
+  background: linear-gradient(135deg, var(--color-primary), #2563eb);
+  /* Кольцо — второй слой той же тени: отдельный `ring-4` из утилит требовал бы своей
+     переменной Tailwind и не переопределялся бы дизайном. */
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 4px rgba(0, 0, 0, 0.25);
+}
+
+.profile-hero-body {
+  position: relative;
+  min-width: 0;
+}
+
+.profile-hero-kicker {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-primary) 80%, transparent);
+  margin-bottom: 0.6rem;
+}
+
+/* ── Sidebar ─────────────────────────────────────────────────────────────────
+   Пять кнопок навигации носили одну и ту же строку из десятка утилит, скопированную
+   пять раз, а геометрия панели жила в инлайн-тернарнике по `uiStyle`. Теперь это классы:
+   правку видно в одном месте, а альтернативный дизайн может поменять саму форму панели,
+   а не только её цвет. */
+.sidebar-shell {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  width: 16rem;
+  margin: 2rem 1.5rem 8rem;
+  padding: 1.15rem;
+  border-radius: 1.65rem;
+  background: rgba(255, 255, 255, 0.075);
+  /* Кромка. Здесь стояло `1px solid rgba(255, 255, 255, 0.2)` — ровная светлая линия по
+     всему периметру, в шесть раз ярче хайрлайна остальных поверхностей приложения
+     (`.plate` — 0.035). На тёмном фоне такая линия читается не как кромка стекла, а как
+     НАРИСОВАННЫЙ КОНТУР: панель выглядит вырезанной и наклеенной поверх фона, и виден не
+     сам переход от фона к панели, а обводка вокруг него. Ровно эти «грани» и заметны на
+     скриншоте, причём сильнее всего снизу и по бокам, где за панелью нет ничего, что
+     оправдывало бы блик.
+
+     Настоящая кромка стекла не бывает одинаково яркой по кругу: свет падает сверху, поэтому
+     верхняя грань его ловит, а нижняя уходит в фон. `inset 0 1px 0` даёт именно это —
+     подсвеченную верхнюю кромку, которая сама гаснет к скруглениям (тень смещена вниз, так
+     что на боковых стенках от неё не остаётся ничего). Остальной периметр держит хайрлайн
+     той же плотности, что у плашек: кромку по-прежнему видно, но найти её надо, а не
+     отвести от неё взгляд.
+
+     Прозрачность именно тут, а не в `::before` со градиентом по border-box: у панели есть
+     `backdrop-filter`, и подмена фона на `padding-box`-градиент заставила бы движок
+     пересобирать размытие под ней; к тому же `background` у панели уже переопределяется
+     стилем интерфейса ниже, и градиент кромки такое переопределение стирало бы. */
+  border: 1px solid rgba(255, 255, 255, 0.055);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 28px 54px -24px rgba(0, 0, 0, 0.72),
+              inset 0 1px 0 rgba(255, 255, 255, 0.09);
+  overflow: hidden;
+  transition: background-color 400ms var(--ease-out),
+              border-color 400ms var(--ease-out);
+}
+
+body[data-ui-style="style2"] .sidebar-shell {
+  background: rgba(0, 0, 0, 0.4);
+  /* Тот же хайрлайн, что и в светлом варианте: на почти чёрной панели прежние 0.1 давали
+     ещё более заметный контур, чем 0.2 на светлой. */
+  border-color: rgba(255, 255, 255, 0.05);
+}
+
+.sidebar-brand {
+  position: relative;
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 64px;
+  margin-bottom: 1.3rem;
+  padding: 0.45rem 0.55rem 0.9rem;
+}
+
+.sidebar-brand-mark {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 15px;
+  background: color-mix(in srgb, var(--color-primary) 12%, rgba(255, 255, 255, 0.035));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.sidebar-brand-mark img {
+  width: 43px;
+  height: 43px;
+  object-fit: contain;
+  filter: drop-shadow(0 8px 14px rgba(0, 0, 0, 0.38));
+}
+
+.sidebar-brand-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.14rem;
+}
+
+.sidebar-brand-copy strong {
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.96);
+}
+
+.sidebar-brand-copy strong span {
+  margin-left: 0.18em;
+  color: rgba(255, 255, 255, 0.38);
+  font-weight: 600;
+}
+
+.sidebar-brand-copy small {
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.38);
+  font-size: 10.5px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-nav,
+.sidebar-secondary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.sidebar-nav {
+  flex: 1;
+}
+
+.sidebar-secondary {
+  margin-top: auto;
+}
+
+.sidebar-section-label {
+  margin: 0 0.65rem 0.25rem;
+  color: rgba(255, 255, 255, 0.28);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.78rem;
+  width: 100%;
+  min-height: 43px;
+  padding: 0.64rem 0.78rem;
+  border: 1px solid transparent;
+  border-radius: 0.9rem;
+  font-weight: 500;
+  font-size: 13.5px;
+  text-align: left;
+  color: rgba(255, 255, 255, 0.55);
+  transform: translateX(0);
+  cursor: pointer;
+  transition: transform 200ms var(--ease-smooth-out),
+              color 180ms var(--ease-out),
+              background-color 180ms var(--ease-out),
+              border-color 180ms var(--ease-out),
+              box-shadow 180ms var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .nav-item:hover,
+  .sidebar-profile:hover {
+    transform: translateX(2px);
+  }
+
+  .nav-item:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.055);
+  }
+}
+
+.nav-item.is-active {
+  color: #fff;
+  background: color-mix(in srgb, var(--color-primary) 12%, rgba(255, 255, 255, 0.04));
+  border-color: color-mix(in srgb, var(--color-primary) 18%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.055);
+  font-weight: 600;
+}
+
+.nav-item:active,
+.sidebar-profile:active {
+  transform: translateX(1px);
+  transition-duration: 120ms;
+}
+
+/* Активный пункт помечен полоской у левого края, а не только фоном: фон в списке из
+   пяти похожих строк читается слабо, вертикальный акцент — сразу.
+
+   Появление полоски — та же анимация, что у светящегося кольца вокруг аватарки в подвале
+   панели (`.sidebar-avatar.is-active`): свечение растёт из `box-shadow` за
+   `--duration-quick` по `--ease-out`. Разница только в геометрии — кольцу вокруг круга
+   4px, полоске шириной 6px хватает 3px, иначе halo шире самой полоски.
+
+   Полоска висит в разметке всегда, а не только у активного пункта, и это обязательное
+   условие: переход анимирует смену значений на существующем элементе. Элемент, которого
+   в DOM ещё нет, появляется сразу в конечном виде — ни `transition`, ни `animation` тут
+   не срабатывают, полоска просто щёлкала бы на месте. */
+.nav-marker {
+  position: absolute;
+  left: 0.5rem;
+  top: 50%;
+  width: 0.375rem;
+  height: 50%;
+  border-radius: 9999px;
+  background: var(--color-primary);
+  /* Исходное состояние: полоска сжата к своей середине и погашена. */
+  transform: translateY(-50%) scaleY(0.2);
+  opacity: 0;
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-primary) 50%, transparent);
+  transition: transform var(--duration-quick) var(--ease-out),
+              box-shadow var(--duration-quick) var(--ease-out),
+              opacity var(--duration-quick) var(--ease-out);
+  pointer-events: none;
+}
+
+.nav-item.is-active .nav-marker,
+.sidebar-profile.is-active .nav-marker {
+  transform: translateY(-50%) scaleY(1);
+  opacity: 1;
+  box-shadow: 0 0 8px var(--color-primary),
+              0 0 0 3px color-mix(in srgb, var(--color-primary) 50%, transparent);
+}
+
+/* Подвал панели: аватар профиля отделён от навигации линией, а не просто отступом —
+   иначе он читается как шестой пункт меню. */
+.sidebar-foot {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.sidebar-profile {
+  position: relative;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.68rem;
+  width: 100%;
+  min-height: 58px;
+  padding: 0.5rem 0.62rem;
+  border: 1px solid transparent;
+  border-radius: 1rem;
+  color: rgba(255, 255, 255, 0.76);
+  text-align: left;
+  transform: translateX(0);
+  cursor: pointer;
+  transition: transform 200ms var(--ease-smooth-out),
+              color 180ms var(--ease-out),
+              background-color 180ms var(--ease-out),
+              border-color 180ms var(--ease-out);
+}
+
+.sidebar-profile.is-active {
+  color: #fff;
+  background: color-mix(in srgb, var(--color-primary) 10%, rgba(255, 255, 255, 0.035));
+  border-color: color-mix(in srgb, var(--color-primary) 18%, transparent);
+}
+
+.sidebar-avatar {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.82rem;
+  background: linear-gradient(135deg, var(--color-primary), #16a34a);
+  color: #000;
+  font-size: 1rem;
+  font-weight: 700;
+  overflow: hidden;
+  box-shadow: 0 9px 18px -10px rgba(0, 0, 0, 0.72),
+              inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+.sidebar-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.sidebar-profile-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.12rem;
+}
+
+.sidebar-profile-copy strong,
+.sidebar-profile-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-profile-copy strong {
+  color: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.sidebar-profile-copy small {
+  color: rgba(255, 255, 255, 0.38);
+  font-size: 10.5px;
+}
+
+.sidebar-profile-arrow {
+  color: rgba(255, 255, 255, 0.28);
+  transition: color 180ms var(--ease-out), transform 200ms var(--ease-smooth-out);
+}
+
+.sidebar-profile.is-active .sidebar-profile-arrow {
+  color: color-mix(in srgb, var(--color-primary) 72%, white);
+  transform: translateX(1px);
+}
+
+/* ── Version badge ───────────────────────────────────────────────────────────
+   The build identity was three loose runs of text floating at the bottom of Settings.
+   One capsule instead: name · version · channel, with the channel carrying the only bit
+   of colour so it reads as a state, not decoration. */
+.version-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 8px 7px 14px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 12.5px;
+  transition: background-color var(--duration-quick) var(--ease-out),
+              border-color var(--duration-quick) var(--ease-out);
+}
+
+.version-badge:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.11);
+}
+
+.version-badge-name {
+  font-weight: 500;
+  letter-spacing: -0.012em;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.version-badge-sep {
+  width: 1px;
+  height: 13px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.version-badge-num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.version-badge-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 9999px;
+  background: color-mix(in srgb, #eab308 16%, transparent);
+  border: 1px solid color-mix(in srgb, #eab308 26%, transparent);
+  color: #f0c33c;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.version-badge-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 9999px;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+}
+
+/* ── Design switcher ─────────────────────────────────────────────────────────
+   Два глобальных дизайна — это не пара радиокнопок с подписями: разницу проще
+   показать, чем назвать. Каждая карточка рисует свой дизайн в миниатюре — своя база,
+   свои кромки, свой акцент — так что выбор делается глазами, а не по названию. */
+.design-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 14px;
+  border-radius: 1.05rem;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--duration-quick) var(--ease-out),
+              border-color var(--duration-quick) var(--ease-out),
+              box-shadow var(--duration-quick) var(--ease-out);
+}
+
+.design-card:hover {
+  background: rgba(0, 0, 0, 0.24);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.design-card.is-active {
+  background: color-mix(in srgb, var(--color-primary) 10%, rgba(0, 0, 0, 0.18));
+  border-color: color-mix(in srgb, var(--color-primary) 65%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-primary) 26%, transparent);
+}
+
+.design-card-preview {
+  display: block;
+  position: relative;
+  height: 74px;
+  margin-bottom: 12px;
+  padding: 12px;
+  border-radius: 0.7rem;
+  overflow: hidden;
+}
+
+.design-preview-bar {
+  display: block;
+  width: 62%;
+  height: 7px;
+  margin-bottom: 6px;
+  border-radius: 9999px;
+}
+
+.design-preview-bar.is-short {
+  width: 38%;
+}
+
+.design-preview-tile {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  width: 34px;
+  height: 34px;
+  border-radius: 0.5rem;
+}
+
+/* Классика: молочное стекло, мягкие края, всё чуть приглушено. */
+.design-preview-classic {
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.04));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.design-preview-classic .design-preview-bar {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.design-preview-classic .design-preview-bar.is-short {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.design-preview-classic .design-preview-tile {
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Aurora: угольная база, акцент живёт в кромках и свечении. */
+.design-preview-aurora {
+  background: linear-gradient(160deg, #101018, #05050a);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 32%, rgba(255, 255, 255, 0.08));
+}
+
+.design-preview-aurora .design-preview-bar {
+  background: #fff;
+}
+
+.design-preview-aurora .design-preview-bar.is-short {
+  background: color-mix(in srgb, var(--color-primary) 75%, transparent);
+}
+
+.design-preview-aurora .design-preview-tile {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 55%, transparent);
+  box-shadow: 0 0 14px -2px color-mix(in srgb, var(--color-primary) 45%, transparent);
+}
+
+.design-card-name {
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -0.012em;
+  color: #fff;
+}
+
+.design-card-hint {
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+/* ── Режим производительности ─────────────────────────────────────────────────
+   `body[data-perf="light"]` ставит +layout.svelte по настройке «Режим производительности».
+
+   Блок стоит последним в файле, а сам файл импортирует design-aurora.css в шапке — значит
+   при равном весе правила отсюда побеждают, и режим работает в обоих дизайнах. До этого он
+   работал ТОЛЬКО в Aurora: все правила были записаны как
+   `body[data-design="aurora"][data-perf="light"] …`, поэтому в классическом дизайне тумблер
+   не снимал вообще ничего. Правила ниже дизайн не упоминают намеренно.
+
+   Что именно снимается и почему такими средствами:
+
+   • `backdrop-filter` — звёздочкой и через `!important`, а не списком селекторов. Живое
+     размытие объявлено в 76 местах трёх таблиц стилей плюс Tailwind-классами
+     (`backdrop-blur-*`) в одиннадцати компонентах; список бы разошёлся с разметкой на первой
+     же новой панели, причём молча. Стоимость обратная обычной: разбор селектора платится
+     один раз при пересчёте стилей, а каждое живое размытие пересобирает фрагмент под
+     панелью на каждом кадре прокрутки. Ради этого режим и включают.
+
+   • Глубина нажатия — через сами переменные. Все 3D-эффекты (уход плитки под курсором,
+     провал панели под нажатием, отклик ячеек переключателя) считаются как
+     `perspective(var(--depth-perspective)) translateZ(var(--depth-press))`, и обнуление
+     переменных снимает их все, не задевая ни одного постороннего `transform` — а глухое
+     `transform: none` сломало бы и центровку, и переезд плашки переключателя.
+     `translateZ(0)` как подсказку композитору это не трогает: там нет переменной.
+
+   • Крупные декоративные размытия — `display: none`. Это `filter: blur()` на 28–72px по
+     слоям во всю ширину окна (атмосферная подложка страницы, заливка шапки профиля,
+     свечение под кнопкой). Отменить им размытие нельзя: атмосферная подложка — растянутая
+     обложка 500×500, и без размытия видно и пиксели, и границы кадра, то есть вместо
+     «дешевле» получилось бы «сломано». Убираем слой целиком; фон страницы остаётся за
+     темой, а шапка профиля — за своей вуалью. */
+body[data-perf="light"] *,
+body[data-perf="light"] *::before,
+body[data-perf="light"] *::after,
+body[data-perf="light"] [class*="backdrop-blur"] {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+body[data-perf="light"] {
+  /* Обнуляются только смещения, а `--depth-perspective` остаётся: `perspective(none)` —
+     невалидное значение, от него всё объявление `transform` отбрасывается целиком, и что
+     достанется элементу вместо эффекта, зависит от остального каскада. При нулевом сдвиге
+     `perspective(900px) translateZ(0px)` — корректное тождественное преобразование.
+     Крупным эффектам (плитка, панель) `transform: none` и так приходит от `data-fx-*`,
+     которые режим ставит в `off`; переменные добирают остальное — отклик ячеек
+     переключателя, кнопок сайдбара и прочую мелочь, до которой те правила не достают. */
+  --depth-hover: 0px;
+  --depth-press: 0px;
+}
+
+body[data-perf="light"] .page-atmos-media,
+body[data-perf="light"] .profile-hero-tint,
+body[data-perf="light"] .profile-hero-media.is-derived,
+body[data-perf="light"] .play-btn-glow {
+  display: none;
+}
+
+/* ── Чем стекло заменяется ───────────────────────────────────────────────────
+   Снять размытие — половина дела. Матовая панель это ДВА слоя: полупрозрачная плёнка и
+   размытие под ней, и вся работа по сокрытию фона лежит на втором. Убрали его — осталась
+   плёнка: `bg-white/10` у полосы плеера, `rgba(0, 0, 0, 0.42)` у меню «в плейлист». Сквозь
+   панель резко и целиком виден список, который под ней прокручивается, и читается это не как
+   «стекло попроще», а как забытый слой.
+
+   Поэтому там, где размытие снято, плёнка заменяется плотной заливкой. Не одной на всех:
+   у панели, у всплывающего меню и у затемнения под диалогом разные роли, и «что вместо
+   стекла» у каждой своё — светлое стекло обязано остаться светлым, тёмное тёмным, а
+   затемнение затемнением. Ровно поэтому здесь список, а не звёздочка, как у самого
+   размытия: «размытия нет» — одно состояние на всех, а «что вместо него» зависит от того,
+   чем поверхность была.
+
+   Разметку при этом спрашиваем её же словами. `[class*="backdrop-blur"]` — это ровно те
+   элементы, которые размытие и просили (в разметке его ставят Tailwind-классом), а
+   `bg-white/` и `bg-black/` рядом говорят, светлой была плёнка или тёмной. Новая панель
+   попадёт под правило сама, как только объявит размытие; списку классов расходиться с
+   разметкой негде — та же причина, по которой само размытие снимается звёздочкой.
+
+   Заливка не плоская: сверху свет, снизу тень, на светлом стекле капля акцента — вертикаль
+   сама показывает, что это объём, а не прямоугольник (тот же приём, что у боковой панели
+   Aurora). Остаточные 1–3.5% прозрачности оставлены сознательно: поверхность чуть дышит
+   фоном и остаётся материалом, а резкой картинки сквозь неё при такой плотности уже не
+   видно.
+
+   `background-image`, а не `background`: собственный `background-color` у элемента остаётся,
+   и `hover:bg-*` из разметки продолжает работать — ему отвечают парные правила `:hover`.
+   По той же причине не тронута `.glass-button`: её наведение каждое место красит по-своему
+   (`hover:bg-primary` вместе с `hover:text-black`), и заливка поверх дала бы чёрный текст на
+   тёмной кнопке. Мелкой кнопке на ровном фоне страницы прятать нечего, она и так плашка. */
+body[data-perf="light"] {
+  --perf-glass:
+    linear-gradient(180deg, color-mix(in srgb, var(--color-primary) 5%, transparent), transparent 62%),
+    linear-gradient(180deg, rgba(44, 44, 52, 0.965) 0%, rgba(31, 31, 38, 0.975) 52%, rgba(23, 23, 29, 0.985) 100%);
+  --perf-glass-hover:
+    linear-gradient(180deg, color-mix(in srgb, var(--color-primary) 8%, transparent), transparent 62%),
+    linear-gradient(180deg, rgba(58, 58, 68, 0.965) 0%, rgba(42, 42, 50, 0.985) 100%);
+  --perf-deep:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), transparent 55%),
+    linear-gradient(180deg, rgba(20, 20, 26, 0.975) 0%, rgba(11, 11, 16, 0.99) 100%);
+  --perf-deep-hover:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent 55%),
+    linear-gradient(180deg, rgba(32, 32, 40, 0.975) 0%, rgba(20, 20, 27, 0.99) 100%);
+  /* Затемнение под диалогом — радиальное, а не ровное: к краям окна плотнее, в середине чуть
+     светлее, и внимание само собирается на том, что открыто. Ровная заливка во весь экран
+     этого не делает, зато честно показывает, где кончается окно. */
+  --perf-scrim: radial-gradient(125% 95% at 50% 42%, rgba(11, 11, 15, 0.93), rgba(4, 4, 7, 0.985) 72%);
+}
+
+/* У Aurora материал холоднее и глубже собственных значений (`rgba(23, 23, 34)` — `rgba(7, 7, 12)`
+   у панели), и общая серая заливка выдёргивала бы её поверхности из палитры. Правила одни, а
+   значения свои: подменяются только токены. */
+body[data-design="aurora"][data-perf="light"] {
+  --perf-glass:
+    linear-gradient(180deg, color-mix(in srgb, var(--color-primary) 6%, transparent), transparent 62%),
+    linear-gradient(180deg, rgba(26, 26, 38, 0.96) 0%, rgba(15, 15, 24, 0.975) 52%, rgba(8, 8, 14, 0.99) 100%);
+  --perf-glass-hover:
+    linear-gradient(180deg, color-mix(in srgb, var(--color-primary) 9%, transparent), transparent 62%),
+    linear-gradient(180deg, rgba(38, 38, 54, 0.96) 0%, rgba(20, 20, 32, 0.99) 100%);
+  --perf-deep:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent 55%),
+    linear-gradient(180deg, rgba(14, 14, 22, 0.98) 0%, rgba(6, 6, 11, 0.99) 100%);
+  --perf-deep-hover:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.09), transparent 55%),
+    linear-gradient(180deg, rgba(24, 24, 36, 0.98) 0%, rgba(12, 12, 20, 0.99) 100%);
+  --perf-scrim: radial-gradient(125% 95% at 50% 42%, rgba(7, 7, 13, 0.94), rgba(3, 3, 6, 0.99) 72%);
+}
+
+/* Светлое стекло: панели и кнопки, у которых плёнка была белой.
+   `.sidebar-shell` здесь только классический — у Aurora на неё стоит своя заливка выше в
+   design-aurora.css, и специфичности (0,3,1) против (0,2,1) хватает, чтобы та победила. */
+body[data-perf="light"] .glass-panel,
+body[data-perf="light"] .sidebar-shell,
+body[data-perf="light"] [class*="backdrop-blur"][class*="bg-white/"] {
+  background-image: var(--perf-glass);
+}
+
+body[data-perf="light"] [class*="backdrop-blur"][class*="hover:bg-white/"]:hover {
+  background-image: var(--perf-glass-hover);
+}
+
+/* Тёмное стекло: всё, что лежит ПОВЕРХ содержимого и было тёмной плёнкой, — всплывающие
+   меню, попапы, раскрытая плитка плейлиста, полоса плеера в тёмном стиле интерфейса. Здесь
+   утечка была заметнее всего: под меню идёт ровно тот список, из которого его открыли. */
+body[data-perf="light"] .pl-menu-pop,
+body[data-perf="light"] .wave-tune-pop,
+body[data-perf="light"] .pl-tile.is-open,
+body[data-perf="light"] [class*="backdrop-blur"][class*="bg-black/"] {
+  background-image: var(--perf-deep);
+}
+
+body[data-perf="light"] [class*="backdrop-blur"][class*="hover:bg-black/"]:hover {
+  background-image: var(--perf-deep-hover);
+}
+
+/* Затемнение на весь экран. Стоит последним намеренно: подложка диалога тоже объявлена как
+   `bg-black/80`, и правило тёмного стекла её бы перехватило, а роль у неё другая — не
+   поверхность, а темнота вокруг. Признак — `inset-0`: так в разметке записан слой во всё окно. */
+body[data-perf="light"] [class*="backdrop-blur"][class*="inset-0"] {
+  background-image: var(--perf-scrim);
+}
+
+/* Tailwind собирает `backdrop-blur-*` в составной declaration через custom properties.
+   Одного `backdrop-filter: none` недостаточно в некоторых сборках: utility оставляет
+   `--tw-backdrop-blur: blur(...)`, и это значение продолжает попадать в computed style.
+   Обнуляем именно переменную utility и оставляем явный сброс самого фильтра. */
+html body[data-perf="light"] [class*="backdrop-blur-sm"],
+html body[data-perf="light"] [class*="backdrop-blur-md"],
+html body[data-perf="light"] [class*="backdrop-blur-lg"],
+html body[data-perf="light"] [class*="backdrop-blur-xl"],
+html body[data-perf="light"] [class*="backdrop-blur-2xl"] {
+  --tw-backdrop-blur: ;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}

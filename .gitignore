@@ -1,10 +1,65 @@
+# Node & Frontend dependencies
+node_modules/
+.pnpm-store/
+
+# SvelteKit & Vite build outputs
+.svelte-kit/
+build/
+build_output/
+dist/
+.output/
+
+# Tauri & Rust build artifacts
+src-tauri/target/
+**/target/
+Cargo.lock
+
+# AI agents, temp files & local logs
+.agents/
+.claude/
+tauri-dev.log
+*.log
+
+# IDE & OS files
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
 .DS_Store
-node_modules
-/build
-/.svelte-kit
-/package
+Thumbs.db
+
+# Environment & secrets
+.env
+.env.*
+!.env.example# Node & Frontend dependencies
+node_modules/
+.pnpm-store/
+
+# SvelteKit & Vite build outputs
+.svelte-kit/
+build/
+build_output/
+dist/
+.output/
+
+# Tauri & Rust build artifacts
+src-tauri/target/
+**/target/
+Cargo.lock
+
+# AI agents, temp files & local logs
+.agents/
+.claude/
+tauri-dev.log
+*.log
+
+# IDE & OS files
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.DS_Store
+Thumbs.db
+
+# Environment & secrets
 .env
 .env.*
 !.env.example
-vite.config.js.timestamp-*
-vite.config.ts.timestamp-*

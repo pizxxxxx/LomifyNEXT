@@ -1,4 +1,5 @@
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::num::NonZero;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -40,6 +41,70 @@ pub struct PreviewState {
     pub gen: u64,
 }
 
+/// Уходящий трек на время микширования перехода: снят с `state.player`, но всё ещё
+/// подключён к микшеру и гаснет по тику — ровно как превью при наведении выше.
+///
+/// Почему один слот, а не список. Одновременно гаснуть должен ровно один трек: если
+/// микширование началось, а человек тут же переключил ещё раз, новый уходящий занимает это
+/// же место, а прежний снимается сразу. Со списком быстрая череда переключений наложила бы
+/// друг на друга сколько угодно потоков, и громкость сложилась бы в кашу.
+pub struct CrossfadeState {
+    pub player: Option<Player>,
+    /// Пройденная доля перехода, 0.0 → 1.0. Сама громкость считается из неё по кривой
+    /// (`gain()`), а не хранится: обе половины перехода идут по одному прогрессу, и держать
+    /// два независимых числа означало бы дать им разъехаться.
+    pub progress: f32,
+    /// Прирост прогресса за тик (>= 0). 0 — микширования нет.
+    pub step: f32,
+    /// Сколько миллисекунд уходящему трек ещё играть в одиночку, прежде чем начнётся сам
+    /// переход. Ноль — переход уже идёт.
+    ///
+    /// Это то, что делает перекрытие настоящим. Входящий трек готов не в тот миг, когда его
+    /// попросили, а через сеть и декодирование — и если начинать затухание по готовности,
+    /// уходящий трек к этому времени успевает кончиться, так что «микширование» гасит тишину.
+    /// Интерфейс поэтому просит переход заранее и говорит, сколько осталось играть; лишнее
+    /// время ждут здесь, с входящим на паузе.
+    pub delay_ms: u64,
+    /// Длина перехода, с которой его начинать по истечении `delay_ms`.
+    pub pending_ms: u64,
+}
+
+impl CrossfadeState {
+    /// Доля громкости уходящего трека. Косинус, а не `1 - progress`: см. [`FadeInState::gain`].
+    pub fn gain(&self) -> f32 {
+        (self.progress.clamp(0.0, 1.0) * std::f32::consts::FRAC_PI_2).cos()
+    }
+}
+
+/// Нарастание входящего трека — вторая половина микширования.
+///
+/// Живёт отдельно от `CrossfadeState`, потому что относится к плееру в `state.player`, то
+/// есть к тому, который продолжит играть и после конца перехода. Всё, что выставляет ему
+/// громкость (`set_volume`, пересборка при перемотке и переоткрытии устройства), обязано
+/// умножать на `gain()`: иначе движение ползунка посреди перехода выкинуло бы входящий трек
+/// на полную громкость одним скачком.
+pub struct FadeInState {
+    /// Пройденная доля перехода, 0.0 → 1.0. 1.0 — нарастания нет.
+    pub progress: f32,
+    /// Прирост прогресса за тик (>= 0). 0 — нарастание закончилось или его не было.
+    pub step: f32,
+}
+
+impl FadeInState {
+    /// Доля громкости входящего трека: `sin(progress · π/2)`.
+    ///
+    /// Не прямая. Два разных трека — это два несвязанных сигнала, и складываются они по
+    /// мощности, а не по амплитуде: на прямой в середине перехода каждый звучит вполовину,
+    /// а вместе — на 3 дБ тише, чем звучал любой из них до перехода. На слух это провал в
+    /// середине, из-за которого переход читается как «музыка на секунду отступила», а не как
+    /// микширование. У синуса с косинусом сумма квадратов равна единице на всём переходе,
+    /// поэтому громкость держится ровно, а уходящий трек слышно почти до конца — то есть
+    /// перекрытие как раз и становится заметным.
+    pub fn gain(&self) -> f32 {
+        (self.progress.clamp(0.0, 1.0) * std::f32::consts::FRAC_PI_2).sin()
+    }
+}
+
 pub struct AudioState {
     pub player: Mutex<Option<Player>>,
     pub mixer: Arc<Mutex<Mixer>>,
@@ -62,6 +127,10 @@ pub struct AudioState {
     pub device_error: Arc<AtomicBool>,
     pub device_reconnected: Arc<AtomicBool>,
     pub load_gen: AtomicU64,
+    /// Monotonic seek token. `audio_seek` now runs on the blocking pool (a backward
+    /// seek costs a full decode), so a scrub gesture can queue several; each task
+    /// re-checks this and skips itself if a newer seek already superseded it.
+    pub seek_gen: AtomicU64,
     pub media_tx: Mutex<Option<std::sync::mpsc::Sender<MediaCmd>>>,
     pub audio_tx: std::sync::mpsc::Sender<AudioThreadCmd>,
     pub source_bytes: Mutex<Option<Vec<u8>>>,
@@ -74,6 +143,18 @@ pub struct AudioState {
     pub ab_loop: Mutex<Option<(f64, f64)>>,
     pub analyser_buffer: Arc<AnalyserBuffer>,
     pub preview: Mutex<PreviewState>,
+    pub crossfade: Mutex<CrossfadeState>,
+    pub fade_in: Mutex<FadeInState>,
+}
+
+/// Stand-in mixer used when no output device can be opened. Players connect to it and
+/// their samples go nowhere (the pull side is dropped on purpose), which keeps the app
+/// alive and silent instead of aborting the process — the previous code called
+/// `.expect("no audio output device")` on the audio thread in three places, so a machine
+/// with no output (or a switch whose fallback also failed) took the whole app down.
+/// `device_error` is set alongside it, which is what drives the reconnect retries.
+fn detached_mixer() -> Mixer {
+    rodio::mixer::mixer(NonZero::new(2).unwrap(), NonZero::new(44_100).unwrap()).0
 }
 
 pub fn init() -> AudioState {
@@ -91,27 +172,53 @@ pub fn init() -> AudioState {
             let cmd_tx = cmd_tx_for_thread;
             let reconnected = reconnected_for_thread;
             let error_flag = error_flag_for_thread;
-            let mut device_sink =
-                open_device_sink(None, &cmd_tx, &error_flag).expect("no audio output device");
-            let shared_mixer = Arc::new(Mutex::new(device_sink.mixer().clone()));
+            // `None` = currently no live output. Kept as an Option so every failure path
+            // below can leave the thread running (and retryable) instead of panicking.
+            let mut device_sink = match open_device_sink(None, &cmd_tx, &error_flag) {
+                Ok(sink) => Some(sink),
+                Err(error) => {
+                    eprintln!("[audio] no output device at startup: {error}");
+                    error_flag.store(true, Ordering::Relaxed);
+                    None
+                }
+            };
+            let shared_mixer = Arc::new(Mutex::new(match device_sink.as_ref() {
+                Some(sink) => sink.mixer().clone(),
+                None => detached_mixer(),
+            }));
             mixer_tx.send(shared_mixer.clone()).ok();
 
             loop {
                 match cmd_rx.recv() {
                     Ok(AudioThreadCmd::SwitchDevice { name, reply }) => {
-                        drop(device_sink);
+                        // Release the old device before opening the new one — some
+                        // drivers refuse a second concurrent open. `take()` (not a bare
+                        // `= None`) so the binding counts as read: it exists purely for
+                        // its Drop timing.
+                        drop(device_sink.take());
 
                         match open_device_sink(name.as_deref(), &cmd_tx, &error_flag) {
                             Ok(new_sink) => {
                                 let mixer = new_sink.mixer().clone();
                                 *shared_mixer.lock().unwrap() = mixer.clone();
-                                device_sink = new_sink;
+                                device_sink = Some(new_sink);
                                 reply.send(Ok(mixer)).ok();
                             }
                             Err(error) => {
-                                device_sink = open_device_sink(None, &cmd_tx, &error_flag)
-                                    .expect("no audio output device");
-                                *shared_mixer.lock().unwrap() = device_sink.mixer().clone();
+                                match open_device_sink(None, &cmd_tx, &error_flag) {
+                                    Ok(fallback) => {
+                                        *shared_mixer.lock().unwrap() =
+                                            fallback.mixer().clone();
+                                        device_sink = Some(fallback);
+                                    }
+                                    Err(fallback_error) => {
+                                        eprintln!(
+                                            "[audio] fallback to default output failed: {fallback_error}"
+                                        );
+                                        error_flag.store(true, Ordering::Relaxed);
+                                        *shared_mixer.lock().unwrap() = detached_mixer();
+                                    }
+                                }
                                 reply.send(Err(error)).ok();
                             }
                         }
@@ -120,21 +227,32 @@ pub fn init() -> AudioState {
                         eprintln!("[audio] device invalidated, reconnecting...");
                         std::thread::sleep(Duration::from_millis(500));
 
-                        drop(device_sink);
+                        drop(device_sink.take());
                         match open_device_sink(None, &cmd_tx, &error_flag) {
                             Ok(new_sink) => {
                                 *shared_mixer.lock().unwrap() = new_sink.mixer().clone();
-                                device_sink = new_sink;
-                                reconnected.store(true, std::sync::atomic::Ordering::Release);
+                                device_sink = Some(new_sink);
+                                reconnected.store(true, Ordering::Release);
                                 eprintln!("[audio] reconnected successfully");
                             }
                             Err(error) => {
                                 eprintln!("[audio] reconnect failed: {error}, retrying...");
                                 std::thread::sleep(Duration::from_secs(1));
-                                device_sink = open_device_sink(None, &cmd_tx, &error_flag)
-                                    .expect("no audio output device");
-                                *shared_mixer.lock().unwrap() = device_sink.mixer().clone();
-                                reconnected.store(true, std::sync::atomic::Ordering::Release);
+                                match open_device_sink(None, &cmd_tx, &error_flag) {
+                                    Ok(new_sink) => {
+                                        *shared_mixer.lock().unwrap() =
+                                            new_sink.mixer().clone();
+                                        device_sink = Some(new_sink);
+                                        reconnected.store(true, Ordering::Release);
+                                    }
+                                    Err(retry_error) => {
+                                        // Stay alive on a detached mixer; stall
+                                        // detection in tick.rs keeps sending Reconnect.
+                                        eprintln!("[audio] reconnect retry failed: {retry_error}");
+                                        error_flag.store(true, Ordering::Relaxed);
+                                        *shared_mixer.lock().unwrap() = detached_mixer();
+                                    }
+                                }
                             }
                         }
                     }
@@ -162,6 +280,7 @@ pub fn init() -> AudioState {
         device_error: device_error_flag,
         device_reconnected: reconnected_flag,
         load_gen: AtomicU64::new(0),
+        seek_gen: AtomicU64::new(0),
         media_tx: Mutex::new(None),
         audio_tx: cmd_tx,
         source_bytes: Mutex::new(None),
@@ -178,6 +297,19 @@ pub fn init() -> AudioState {
             step: 0.0,
             stop_at_zero: false,
             gen: 0,
+        }),
+        crossfade: Mutex::new(CrossfadeState {
+            player: None,
+            progress: 0.0,
+            step: 0.0,
+            delay_ms: 0,
+            pending_ms: 0,
+        }),
+        // Нарастания нет: обычная загрузка ставит плеер на полную пользовательскую
+        // громкость, и прогресс 1.0 — это ровно «множитель ничего не меняет».
+        fade_in: Mutex::new(FadeInState {
+            progress: 1.0,
+            step: 0.0,
         }),
     }
 }

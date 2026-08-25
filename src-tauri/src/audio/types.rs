@@ -58,6 +58,29 @@ pub enum AudioThreadCmd {
 #[derive(serde::Serialize)]
 pub struct AudioLoadResult {
     pub duration_secs: Option<f64>,
+    /// Загрузку обогнала более свежая: плеер НЕ собран и ничего не играет.
+    ///
+    /// Раньше на этом месте возвращался `Ok(duration_secs: None)` — успех по форме и
+    /// ничего по сути. Плеер в интерфейсе на такой ответ включал `isPlaying = true` и
+    /// посылал `audio_play` в пустоту: получалась тишина без единой ошибки где-либо.
+    /// Флаг делает разницу видимой и вызывающей стороне, и в логе.
+    pub superseded: bool,
+}
+
+impl AudioLoadResult {
+    pub fn superseded() -> Self {
+        Self {
+            duration_secs: None,
+            superseded: true,
+        }
+    }
+
+    pub fn loaded(duration_secs: Option<f64>) -> Self {
+        Self {
+            duration_secs,
+            superseded: false,
+        }
+    }
 }
 
 #[derive(serde::Serialize, Clone)]

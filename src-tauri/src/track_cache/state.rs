@@ -14,6 +14,8 @@ use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::sync::{Mutex, Notify, OwnedSemaphorePermit, Semaphore};
 
 use crate::app::diagnostics::log_native;
+use crate::shared::hls;
+use crate::shared::net::looks_like_proxy_failure;
 use crate::track_cache::direct_download::try_download;
 use crate::track_cache::sc_anon::AnonClient;
 use crate::track_cache::transcode;
@@ -537,6 +539,14 @@ pub struct TrackCacheState {
     pub client: Client,
     pub storage_client: Client,
     pub direct_client: Client,
+    /// Same settings as `client`, but with the system proxy ignored. Windows keeps
+    /// serving a proxy address after the VPN that provided it is gone, and every
+    /// request then dies with "tunnel error … os error 10061" — retries through the
+    /// same client can't help, a client without the proxy can.
+    pub no_proxy_client: Client,
+    /// Set once a request failed in a way that looks like a dead system proxy, so
+    /// the rest of the session goes straight through `no_proxy_client`.
+    proxy_dead: Arc<std::sync::atomic::AtomicBool>,
     pub app_handle: Option<tauri::AppHandle>,
     /// Managed ffmpeg binary, populated asynchronously at startup (system PATH
     /// or download). Shared so the background acquire is visible to all clones.
@@ -608,6 +618,17 @@ pub fn init(audio_dir: PathBuf, liked_dir: PathBuf, incoming_dir: PathBuf) -> Tr
         .expect("failed to build anon client");
     let anon = Arc::new(AnonClient::new(anon_client));
 
+    let no_proxy_client = Client::builder()
+        .user_agent(user_agent)
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .tcp_nodelay(true)
+        .pool_max_idle_per_host(8)
+        .pool_idle_timeout(Some(std::time::Duration::from_secs(90)))
+        .timeout(std::time::Duration::from_secs(30))
+        .no_proxy()
+        .build()
+        .expect("failed to build no-proxy client");
+
     TrackCacheState {
         audio_dir,
         liked_dir,
@@ -615,6 +636,8 @@ pub fn init(audio_dir: PathBuf, liked_dir: PathBuf, incoming_dir: PathBuf) -> Tr
         client,
         storage_client,
         direct_client,
+        no_proxy_client,
+        proxy_dead: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         app_handle: None,
         ffmpeg: Arc::new(StdMutex::new(None)),
         ffmpeg_probe_done: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -745,6 +768,15 @@ async fn write_response_to_cache(
 
     if !is_valid_audio(&sniff, total_size) {
         cleanup_temp_file(&temp_path).await;
+        // Плейлист вместо аудио — не порча данных, а другой формат раздачи, и лечится он
+        // сборкой сегментов, а не повтором запроса. Отдельный текст нужен затем, чтобы это
+        // было видно в логе: «Invalid audio data» одинаково выглядело и для битого файла, и
+        // для HLS, и путь к причине занимал полчаса.
+        if hls::looks_like_playlist(&sniff) {
+            return Err(DownloadError::Fatal(
+                "источник отдал HLS-плейлист вместо аудио".into(),
+            ));
+        }
         return Err(DownloadError::Fatal("Invalid audio data".into()));
     }
 
@@ -873,6 +905,29 @@ async fn write_bytes_to_cache(
     }
 }
 
+/// Похоже ли, что по ссылке лежит HLS-плейлист, а не готовое аудио.
+///
+/// Смотрим и на content-type, и на путь: SoundCloud отдаёт `application/x-mpegURL`, а вот
+/// наша раздача и часть CDN подписывают ссылку так, что тип приезжает
+/// `application/octet-stream` — по одному признаку промахнуться легко. Путь берём из
+/// финального адреса ответа, потому что редирект может увести с `.mp3`-подобной ссылки на
+/// `playlist.m3u8`.
+fn response_is_playlist(response: &reqwest::Response, requested_url: &str) -> bool {
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if content_type.contains("mpegurl") || content_type.contains("vnd.apple.mpegurl") {
+        return true;
+    }
+
+    let final_path = response.url().path().to_ascii_lowercase();
+    let requested_path = requested_url.split('?').next().unwrap_or("").to_ascii_lowercase();
+    final_path.ends_with(".m3u8") || requested_path.ends_with(".m3u8")
+}
+
 /// Download a track from an API URL to cache.
 async fn download_api(
     client: &Client,
@@ -894,6 +949,32 @@ async fn download_api(
 
     if status.is_success() {
         let quality = quality_from_url(url);
+
+        // HLS-ссылка приходит сюда штатно: SoundCloud перечисляет transcoding'и так, что
+        // плейлист идёт раньше progressive, поэтому «первая же ссылка» — обычно манифест.
+        // Раньше его текст записывался как аудио и валидация отвечала «Invalid audio data»,
+        // из-за чего трек не кэшировался вовсе, хотя качать было что.
+        if response_is_playlist(&response, url) {
+            // Базовый адрес берём финальный, после редиректов: относительные пути сегментов
+            // считаются от него, а не от того, что мы запросили.
+            let manifest_url = response.url().to_string();
+            let manifest = response.text().await.map_err(|err| {
+                DownloadError::Retryable(format!("playlist read: {}", format_reqwest_error(err)))
+            })?;
+            let data = hls::assemble(client, &manifest, &manifest_url)
+                .await
+                .map_err(|err| {
+                    // Защищённый поток — окончательный отказ: повторы ключа не добудут.
+                    if err == hls::DRM_ERROR {
+                        DownloadError::Fatal(err)
+                    } else {
+                        DownloadError::Retryable(err)
+                    }
+                })?;
+            return write_bytes_to_cache(target_dir, urn, &data, quality, DownloadSource::Api)
+                .await;
+        }
+
         return write_response_to_cache(
             target_dir,
             urn,
@@ -1612,7 +1693,14 @@ impl TrackCacheState {
                 }
             }
             Ok(None) => {
-                let line = format!("[TrackCache] anon: no usable transcoding for {urn}");
+                // Для урна не из SoundCloud шаг не «не дал транскодинга», а вообще не
+                // применим: он ищет трек по номеру в API SoundCloud. Раньше он честно
+                // пробовал — и приносил чужую песню под яндексовым урном.
+                let line = if urn.starts_with("lomify:soundcloud:") {
+                    format!("[TrackCache] anon: no usable transcoding for {urn}")
+                } else {
+                    format!("[TrackCache] anon пропущен: {urn} не из SoundCloud")
+                };
                 println!("{line}");
                 self.diag("INFO", line);
             }
@@ -1883,7 +1971,7 @@ impl TrackCacheState {
             }
 
             match download_api(
-                &self.client,
+                self.api_client(),
                 target_dir,
                 urn,
                 url,
@@ -1895,12 +1983,52 @@ impl TrackCacheState {
                 Ok(result) => return Ok(result.path),
                 Err(DownloadError::Fatal(err)) => return Err(err),
                 Err(DownloadError::Retryable(err)) => {
+                    // Мёртвый системный прокси отвечает одинаково на любой попытке,
+                    // поэтому повторы через тот же клиент только тратят время. Один
+                    // раз за сессию переключаемся на клиент без прокси и сразу пробуем
+                    // ещё — уже напрямую.
+                    if !self.proxy_dead.load(std::sync::atomic::Ordering::Relaxed)
+                        && looks_like_proxy_failure(&err)
+                    {
+                        self.proxy_dead
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                        eprintln!(
+                            "[TrackCache] системный прокси не отвечает, дальше качаю напрямую: {err}"
+                        );
+                        match download_api(
+                            &self.no_proxy_client,
+                            target_dir,
+                            urn,
+                            url,
+                            session_id,
+                            self.app_handle.as_ref(),
+                        )
+                        .await
+                        {
+                            Ok(result) => return Ok(result.path),
+                            Err(DownloadError::Fatal(err)) => return Err(err),
+                            Err(DownloadError::Retryable(err)) => {
+                                last_err = err;
+                                continue;
+                            }
+                        }
+                    }
                     last_err = err;
                 }
             }
         }
 
         Err(last_err)
+    }
+
+    /// Клиент для api-загрузок: обычный, пока системный прокси жив, и клиент без
+    /// прокси после первой характерной ошибки туннеля.
+    fn api_client(&self) -> &Client {
+        if self.proxy_dead.load(std::sync::atomic::Ordering::Relaxed) {
+            &self.no_proxy_client
+        } else {
+            &self.client
+        }
     }
 
     pub fn cache_size(&self) -> u64 {

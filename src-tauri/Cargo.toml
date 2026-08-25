@@ -1,6 +1,6 @@
 [package]
 name = "lomifynext-tauri"
-version = "8.6.0"
+version = "9.1.0"
 description = "LomifyNEXT"
 authors = ["dopaminegdev"]
 edition = "2021"
@@ -18,7 +18,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset", "devtools", "tray-icon", "macos-private-api"] }
+# `devtools` used to be listed here unconditionally, which compiles the web inspector
+# into release builds too — any user could press F12 and get a console. Tauri already
+# enables the inspector automatically on debug builds, so `cargo tauri dev` is
+# unaffected; a shipped `cargo tauri build` now simply has no inspector to open.
+# Need it in a release build to chase a bug? `cargo tauri build --features devtools`.
+tauri = { version = "2", features = ["protocol-asset", "tray-icon", "macos-private-api"] }
 tauri-plugin-opener = "2"
 tauri-plugin-liquid-glass = "0.1"
 serde = { version = "1", features = ["derive"] }
@@ -57,6 +62,11 @@ discord-rich-presence = "1"
 call-client = { path = "../utils/call/client" }
 decrypt-client = { path = "../utils/decrypt-client" }
 tauri-plugin-window-state = "2.4.1"
+
+[features]
+# Opt-in escape hatch: `cargo tauri build --features devtools` puts the inspector back
+# into a release build for local debugging. Off by default so shipped builds stay locked.
+devtools = ["tauri/devtools"]
 
 [patch.crates-io]
 brotli = { git = "https://github.com/dropbox/rust-brotli.git" }

@@ -28,15 +28,15 @@
    class can't override. backdrop-filter:blur is the single most expensive CSS op,
    so these vars + the light-mode solid-tint swaps below are the biggest lever. */
 :root {
-    --glass-blur: 40px; /* .glass and frosted panels */
-    --glass-blur-strong: 60px; /* .glass-featured (SoundWave blocks) */
-    --glass-blur-soft: 28px; /* .npb-glass (now-playing pill) */
+    --glass-blur: 20px; /* .glass and frosted panels */
+    --glass-blur-strong: 30px; /* .glass-featured (SoundWave blocks) */
+    --glass-blur-soft: 14px; /* .npb-glass (now-playing pill) */
 }
 
 [data-perf="medium"] {
-    --glass-blur: 18px;
-    --glass-blur-strong: 26px;
-    --glass-blur-soft: 16px;
+    --glass-blur: 10px;
+    --glass-blur-strong: 15px;
+    --glass-blur-soft: 8px;
 }
 
 [data-perf="light"] {
@@ -103,15 +103,12 @@
   box-sizing: border-box;
 }
 
-/* Drop sticky :hover while content scrolls under a stationary cursor — WebKitGTK
-   doesn't re-hit-test on wheel scroll, so cards otherwise "stick" or light up the
-   wrong tile. The guard is set on scroll and cleared on pointer move/down (see
-   AppShell), so real hover/click intent re-enables instantly. */
-main[data-scrolling] *,
-main[data-scrolling] *::before,
-main[data-scrolling] *::after {
-    pointer-events: none !important;
-}
+/* Здесь было `main[data-scrolling] * { pointer-events: none !important }` — правило,
+   пришедшее вместе с этим файлом из другого приложения (там его выставлял AppShell,
+   которого у нас нет). Атрибут `data-scrolling` в Lomify не ставит никто, так что
+   правило не работало, но одного постороннего `setAttribute` хватило бы, чтобы
+   весь контент — включая плитки треков — разом перестал принимать клики.
+   Удалено вместе с механикой, которой у нас не существует. */
 
 html,
 body,

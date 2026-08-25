@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rodio::stream::{DeviceSinkBuilder, MixerDeviceSink};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::app::diagnostics;
 use crate::audio::engine;
@@ -123,10 +123,10 @@ fn swap_device_and_continue(
     opened.map(|_| ())
 }
 
-pub fn switch_device(
-    state: State<'_, AudioState>,
-    device_name: Option<String>,
-) -> Result<(), String> {
+/// Takes `&AudioState` (not `State`) so it can run inside a `spawn_blocking` task —
+/// opening a device waits on the output thread and then rebuilds the whole track,
+/// which must not happen on the main thread.
+pub fn switch_device(state: &AudioState, device_name: Option<String>) -> Result<(), String> {
     let preserved_default_name = if device_name.is_none() {
         current_default_output_name()
     } else {
@@ -134,7 +134,7 @@ pub fn switch_device(
     };
 
     let switch_name = resolve_switch_name(&device_name)?;
-    swap_device_and_continue(&state, switch_name)?;
+    swap_device_and_continue(state, switch_name)?;
 
     // Pin the resolved default as the known baseline so the follow monitor treats it
     // as already-applied instead of a fresh change to chase.
@@ -144,7 +144,7 @@ pub fn switch_device(
     Ok(())
 }
 
-pub fn set_follow_default_output(state: State<'_, AudioState>, follow: bool) {
+pub fn set_follow_default_output(state: &AudioState, follow: bool) {
     state.follow_default_output.store(follow, Ordering::Relaxed);
     if follow {
         *state.last_known_default_output.lock().unwrap() = current_default_output_name();

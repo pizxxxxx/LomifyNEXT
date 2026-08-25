@@ -10,13 +10,13 @@
 //!    frame instead of blocking — visualizer gracefully handles gaps.
 //!
 //! FFT thread:
-//!  - Runs at fixed ~30Hz. 1024-point real FFT on most recent samples.
+//!  - Runs at fixed ~30Hz. 2048-point real FFT on most recent samples.
 //!  - Hann window pre-computed once at startup.
 //!  - 64 log-spaced bins, normalized + smoothed with prev frame for visual
 //!    stability. Sleep-based pacing — no heavy timers.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -28,7 +28,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::audio::types::{ChannelCount, SampleRate};
 
-const FFT_SIZE: usize = 1024;
+const FFT_SIZE: usize = 2048;
 const RING_CAPACITY: usize = 4096;
 const FFT_INTERVAL_MS: u64 = 33;
 pub const NUM_BINS: usize = 64;
@@ -36,6 +36,12 @@ const MIN_FREQ_HZ: f32 = 50.0;
 
 pub struct AnalyserBuffer {
     samples: Mutex<VecDeque<f32>>,
+    /// Monotonic count of frames pushed by the audio thread. The FFT thread compares
+    /// it across iterations to tell "paused / no data" apart from "same window as last
+    /// tick": the reader never drains the ring, so `len() < FFT_SIZE` stops being true
+    /// after the first `RING_CAPACITY` frames and the fade-out path in `run_fft_loop`
+    /// was unreachable without this.
+    writes: AtomicU64,
     pub sample_rate: AtomicU32,
     pub running: AtomicBool,
 }
@@ -44,6 +50,7 @@ impl AnalyserBuffer {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             samples: Mutex::new(VecDeque::with_capacity(RING_CAPACITY)),
+            writes: AtomicU64::new(0),
             sample_rate: AtomicU32::new(44_100),
             running: AtomicBool::new(true),
         })
@@ -93,11 +100,14 @@ impl<S: Source<Item = f32>> Iterator for AnalyserSource<S> {
 
             // try_lock — if FFT thread is reading, just drop this frame.
             if let Ok(mut q) = self.buffer.samples.try_lock() {
-                if q.len() >= RING_CAPACITY {
-                    let drop_n = q.len() - RING_CAPACITY + 1;
-                    q.drain(0..drop_n);
+                // pop_front, not drain(0..n): VecDeque::drain constructs an iterator
+                // and fixes the ring up on drop, which is far more work than one O(1)
+                // pop — and this branch runs ~48k times per second.
+                while q.len() >= RING_CAPACITY {
+                    q.pop_front();
                 }
                 q.push_back(mono);
+                self.buffer.writes.fetch_add(1, Ordering::Relaxed);
             }
         }
         Some(sample)
@@ -145,6 +155,7 @@ fn run_fft_loop(app: AppHandle, buffer: Arc<AnalyserBuffer>) {
     let mut bins_smooth = vec![0.0f32; NUM_BINS];
     let mut silence_skips: u32 = 0;
     let mut prev_emit_was_silent = true;
+    let mut last_writes = 0u64;
 
     loop {
         std::thread::sleep(Duration::from_millis(FFT_INTERVAL_MS));
@@ -152,7 +163,17 @@ fn run_fft_loop(app: AppHandle, buffer: Arc<AnalyserBuffer>) {
             break;
         }
 
-        let snapshot: Option<Vec<f32>> = {
+        // Staleness gate: the reader never removes samples, so a paused audio thread
+        // leaves a full ring behind. Comparing the write counter is what makes the
+        // "no fresh samples" fade-out below actually reachable — previously the FFT
+        // re-ran over the same trailing window for the entire duration of a pause.
+        let writes = buffer.writes.load(Ordering::Relaxed);
+        let has_fresh_frames = writes != last_writes;
+        last_writes = writes;
+
+        let snapshot: Option<Vec<f32>> = if !has_fresh_frames {
+            None
+        } else {
             let q = buffer.samples.lock().unwrap();
             if q.len() < FFT_SIZE {
                 None
@@ -207,19 +228,33 @@ fn run_fft_loop(app: AppHandle, buffer: Arc<AnalyserBuffer>) {
         let log_range = (log_max - log_min).max(1e-3);
 
         // Bin-bucketing: distribute FFT magnitudes into log-spaced bins, take max.
+        //
+        // The 50 Hz bin and its neighbours all land in display bin 0, so bass used to read as
+        // a couple of bars no matter how much low end the track had. Splitting magnitude
+        // across the two bins around the exact log position smooths the staircase: an
+        // intermediate component now fills in the gap between neighbours instead of being
+        // dropped into only one of them.
+        let spread = (FFT_SIZE as f32 / 1024.0).max(1.0);
         let mut bins = vec![0.0f32; NUM_BINS];
-        let nbins = NUM_BINS as f32;
+        let nbins_minus_1 = (NUM_BINS - 1) as f32;
         for (i, c) in fft_buf.iter().take(mag_count).enumerate() {
             let freq = (i as f32) * nyquist / (mag_count as f32);
             if freq < MIN_FREQ_HZ {
                 continue;
             }
             let log_freq = freq.ln();
-            let pos = ((log_freq - log_min) / log_range).clamp(0.0, 0.999);
-            let idx = (pos * nbins) as usize;
-            let mag = (c.re * c.re + c.im * c.im).sqrt();
-            if mag > bins[idx] {
-                bins[idx] = mag;
+            let pos = ((log_freq - log_min) / log_range).clamp(0.0, 1.0) * nbins_minus_1;
+            let idx = pos as usize;
+            let frac = pos - idx as f32;
+            let mag = (c.re * c.re + c.im * c.im).sqrt() * spread;
+            let mag_up = mag / (1.0 + frac);
+            let mag_down = mag - mag_up;
+            let k = idx.min(NUM_BINS - 1);
+            if mag_up > bins[k] {
+                bins[k] = mag_up;
+            }
+            if frac > 0.001 && k + 1 < NUM_BINS && mag_down > bins[k + 1] {
+                bins[k + 1] = mag_down;
             }
         }
 

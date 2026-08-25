@@ -188,6 +188,7 @@ pub fn run() {
             audio::audio_play,
             audio::audio_pause,
             audio::audio_stop,
+            audio::audio_cancel_load,
             audio::audio_seek,
             audio::audio_set_volume,
             audio::audio_set_playback_rate,
@@ -239,6 +240,7 @@ pub fn run() {
             auth::auth_logout,
             auth::auth_set_premium,
             network::wallpapers::wallpaper_search,
+            network::direct_fetch::net_fetch_direct,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {

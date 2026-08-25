@@ -86,6 +86,77 @@ fn emit_progress(
     .ok();
 }
 
+/// Идентификатор клиента. То же значение, что в `src/lib/yandex.ts` (`CLIENT_ID`) — импорт и
+/// обычные запросы приложения обязаны ходить одинаково, иначе один путь работает, а другой
+/// отвечает 403 на том же самом токене.
+const YM_CLIENT_ID: &str = "YandexMusicAndroid/24023621";
+
+/// `User-Agent` официального Android-клиента — он совпадает со строкой клиента.
+const YM_ANDROID_UA: &str = YM_CLIENT_ID;
+
+/// Описание устройства официального клиента. Значения фиксированные, см. `DEVICE_INFO` в
+/// `src/lib/yandex.ts` — там они те же.
+const YM_DEVICE_INFO: &str = "os=Android; os_version=13; manufacturer=Xiaomi; \
+     model=Redmi Note 8 Pro; clid=; device_id=lomifynext0000001; uuid=lomifynext0000002";
+
+/// `User-Agent` обычного десктопного браузера.
+const YM_BROWSER_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
+     AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+/// `User-Agent` питоновской обвязки. Один из вариантов, см. `ym_send`.
+const YM_LIBRARY_UA: &str = "Yandex-Music-API";
+
+/// GET к `api.music.yandex.net` с заголовками клиента и тем же перебором наборов, что во
+/// фронтенде (`ymFetch` в `src/lib/yandex.ts`) — значения, порядок и условие повтора там те же.
+///
+/// Одного `Authorization: OAuth <token>` этому API не хватает: на запрос без опознавательных
+/// знаков клиента он отвечает 403 — с любым токеном, включая только что выданный. Здесь это
+/// выглядело как «YM auth failed: HTTP 403» на верном токене.
+///
+/// Наборов три, и они закрывают разные отказы: `android` — непротиворечивый набор
+/// официального клиента (UA совпадает со строкой клиента, рядом описание устройства);
+/// `browser` — тот же токен с UA обычного Chrome, на случай когда отказ приходит от периметра
+/// перед API (403 без JSON-конверта `{"error":{...}}`); `library` — массовая строка
+/// питоновской обвязки, последней именно поэтому. Раньше первый набор не ставил `User-Agent`
+/// вовсе (`reqwest` своего значения не подставляет), а запрос без него периметр не пропускает.
+///
+/// Отдельная функция, а не `default_headers` у клиента: тот же `reqwest::Client` ниже ходит
+/// на бэкенд за поиском в SoundCloud, и заголовки клиента Яндекса туда отправлять незачем.
+async fn ym_send(
+    client: &reqwest::Client,
+    url: &str,
+    token: &str,
+) -> reqwest::Result<reqwest::Response> {
+    let build = |profile: &str| {
+        let req = client
+            .get(url)
+            .header("Authorization", format!("OAuth {}", token))
+            .header("X-Yandex-Music-Client", YM_CLIENT_ID)
+            .header("Accept", "*/*")
+            .header("Accept-Language", "ru");
+        match profile {
+            "android" => req
+                .header("User-Agent", YM_ANDROID_UA)
+                .header("X-Yandex-Music-Device", YM_DEVICE_INFO),
+            "browser" => req.header("User-Agent", YM_BROWSER_UA),
+            _ => req.header("User-Agent", YM_LIBRARY_UA),
+        }
+    };
+
+    let mut last: Option<reqwest::Response> = None;
+    for profile in ["android", "browser", "library"] {
+        let res = build(profile).send().await?;
+        // Следующий набор пробуем только на 403: 401 — про токен, 429/5xx — про лимиты и
+        // метод, и другой `User-Agent` их не меняет, зато лишний запрос уходит в тот же лимит.
+        if res.status() != reqwest::StatusCode::FORBIDDEN {
+            return Ok(res);
+        }
+        last = Some(res);
+    }
+    // Цикл всегда делает хотя бы один заход, поэтому здесь `last` заполнен.
+    Ok(last.expect("ym_send: перебор наборов не сделал ни одного запроса"))
+}
+
 #[tauri::command]
 pub async fn ym_import_start(
     ym_token: String,
@@ -97,12 +168,13 @@ pub async fn ym_import_start(
 
     let client = reqwest::Client::new();
 
-    let uid_resp = client
-        .get("https://api.music.yandex.net/account/status")
-        .header("Authorization", format!("OAuth {}", ym_token))
-        .send()
-        .await
-        .map_err(|e| format!("YM auth failed: {}", e))?;
+    let uid_resp = ym_send(
+        &client,
+        "https://api.music.yandex.net/account/status",
+        &ym_token,
+    )
+    .await
+    .map_err(|e| format!("YM auth failed: {}", e))?;
 
     if !uid_resp.status().is_success() {
         return Err(format!("YM auth failed: HTTP {}", uid_resp.status()));
@@ -113,15 +185,16 @@ pub async fn ym_import_start(
         .as_i64()
         .ok_or("Failed to get YM user ID")?;
 
-    let likes_resp = client
-        .get(format!(
+    let likes_resp = ym_send(
+        &client,
+        &format!(
             "https://api.music.yandex.net/users/{}/likes/tracks",
             uid
-        ))
-        .header("Authorization", format!("OAuth {}", ym_token))
-        .send()
-        .await
-        .map_err(|e| format!("Failed to fetch YM likes: {}", e))?;
+        ),
+        &ym_token,
+    )
+    .await
+    .map_err(|e| format!("Failed to fetch YM likes: {}", e))?;
 
     let likes: YmLikesResponse = likes_resp.json().await.map_err(|e| e.to_string())?;
     let track_ids: Vec<String> = likes
@@ -147,14 +220,15 @@ pub async fn ym_import_start(
         }
 
         let ids_param = chunk.join(",");
-        let info_resp = client
-            .get(format!(
+        let info_resp = ym_send(
+            &client,
+            &format!(
                 "https://api.music.yandex.net/tracks?trackIds={}",
                 ids_param
-            ))
-            .header("Authorization", format!("OAuth {}", ym_token))
-            .send()
-            .await;
+            ),
+            &ym_token,
+        )
+        .await;
 
         let tracks: Vec<YmTrack> = match info_resp {
             Ok(r) => match r.json::<YmTrackInfo>().await {

@@ -16,7 +16,11 @@ export default defineConfig(async () => ({
   server: {
     port: 1420,
     strictPort: true,
-    host: host || false,
+    // `false` makes Vite listen on the hostname `localhost`, which Node 17+ on
+    // Windows resolves to `::1` — so the dev server ends up IPv6-only. Tauri
+    // probes `http://localhost:1420/` through the Rust resolver, hits 127.0.0.1
+    // first, gets connection-refused and dies after 180s. Bind IPv4 explicitly.
+    host: host || "127.0.0.1",
     hmr: host
       ? {
           protocol: "ws",

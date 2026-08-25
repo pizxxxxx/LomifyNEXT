@@ -141,6 +141,16 @@ impl AnonClient {
     /// preview-only, etc.) so the caller can fall through to the next source.
     /// `Err` is reserved for network failures and feeds the circuit breaker.
     pub async fn get_stream(&self, track_urn: &str) -> Result<Option<AnonStreamResult>, String> {
+        // Числовой хвост урна — это идентификатор трека В СВОЁМ источнике, и только
+        // SoundCloud понимает его как свой. Для `lomify:yandex:148274343` этот путь просил
+        // у SoundCloud его собственный трек с номером 148274343 — и либо получал 404, либо,
+        // что хуже, получал совершенно другую песню и складывал её в кеш под яндексовым
+        // урном. Отсюда и «включаю трек, а играет что-то чужое» вместе с жалобой
+        // «саундклауд не отдаёт больше 30 секунд» при выбранном источнике Яндекс: путь для
+        // SoundCloud отвечал за трек, которого никогда не касался.
+        if !track_urn.starts_with("lomify:soundcloud:") {
+            return Ok(None);
+        }
         if self.in_cooldown() {
             return Ok(None);
         }

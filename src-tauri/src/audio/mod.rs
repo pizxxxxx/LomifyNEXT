@@ -1,6 +1,6 @@
 pub mod analyser;
 pub mod commands;
-mod decode;
+pub(crate) mod decode;
 mod device;
 mod engine;
 mod eq;

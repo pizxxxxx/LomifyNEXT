@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use rodio::decoder::DecoderError;
 use rodio::mixer::Mixer;
 use rodio::source::SeekError;
 use rodio::{Decoder, Player, Source};
@@ -183,6 +184,33 @@ impl<R: std::io::Read + std::io::Seek> Source for OpusSource<R> {
     }
 }
 
+/// Декодер symphonia поверх байтов трека — с длиной данных и правом перематывать поток.
+///
+/// `Decoder::new` не сообщает ни того, ни другого: `byte_len` остаётся `None`, а
+/// `is_seekable` — `false`. Для mp3 это незаметно, а для mp4 решает всё. Таблица сэмплов
+/// (`moov`) лежит в файле либо перед данными, либо после них: первое — результат прогона
+/// через `+faststart`, второе — обычный порядок, в котором mp4 пишется по умолчанию. Именно
+/// такие файлы отдаёт раздача Яндекс Музыки. Не имея права вернуться назад, symphonia не
+/// может пропустить `mdat`, дочитать `moov` в конце и вернуться к данным — и отвечает «формат
+/// не распознан» на совершенно исправный файл.
+///
+/// Снаружи это выглядело как «трек не играет, только короткий звук в начале»: поток
+/// напрямую не заводился, зато тот же трек из кэша играл целиком — потому что в кэш он
+/// попадает после ремукса ffmpeg с `+faststart`, то есть с `moov` впереди. Предпросмотр в
+/// WebView играл по той же причине: Chromium читает mp4 сам и умеет ходить по файлу.
+///
+/// Заодно появляется честный `total_duration` (без длины файла symphonia не считает
+/// длительность) и работающая перемотка внутри декодера.
+pub(crate) fn build_symphonia_decoder(
+    bytes: &[u8],
+) -> Result<Decoder<Cursor<Vec<u8>>>, DecoderError> {
+    Decoder::builder()
+        .with_data(Cursor::new(bytes.to_vec()))
+        .with_byte_len(bytes.len() as u64)
+        .with_seekable(true)
+        .build()
+}
+
 fn normalization_cache_file(cache_dir: &Path, cache_key: &str) -> PathBuf {
     let mut hasher = Sha256::new();
     hasher.update(cache_key.as_bytes());
@@ -294,7 +322,7 @@ pub fn resolve_normalization_gain(
         normalization_gain_from_samples(
             OpusSource::new(bytes.to_vec()).map_err(|e| format!("Failed to decode: {}", e))?,
         )
-    } else if let Ok(source) = Decoder::new(Cursor::new(bytes.to_vec())) {
+    } else if let Ok(source) = build_symphonia_decoder(bytes) {
         normalization_gain_from_samples(source)
     } else {
         normalization_gain_from_samples(
@@ -306,6 +334,20 @@ pub fn resolve_normalization_gain(
     Ok(gain)
 }
 
+/// Собранный плеер и всё, что удалось узнать о потоке при сборке.
+///
+/// Поля кроме `player` нужны не логике, а логу: когда трек «не играет», разницу между
+/// «декодер взял файл, но отдал полсекунды» и «поток не дошёл до устройства» видно только
+/// по этим числам, а больше их взять негде — источник уезжает внутрь цепочки при `append`.
+pub struct PreparedPlayer {
+    pub player: Player,
+    pub duration_secs: Option<f64>,
+    /// Кто разобрал байты: `symphonia`, `opus(ogg)` или `opus(fallback)`.
+    pub decoder: &'static str,
+    pub sample_rate: u32,
+    pub channels: u16,
+}
+
 pub fn create_player_from_bytes(
     bytes: &[u8],
     mixer: &Mixer,
@@ -314,39 +356,234 @@ pub fn create_player_from_bytes(
     start_paused: bool,
     eq_params: Arc<RwLock<EqParams>>,
     analyser_buffer: Arc<AnalyserBuffer>,
-) -> Result<(Player, Option<f64>), String> {
+) -> Result<PreparedPlayer, String> {
     let player = Player::connect_new(mixer);
     player.set_volume(volume);
     if start_paused {
         player.pause();
     }
 
-    let duration;
-    if is_ogg_opus(bytes) {
+    // Build the decoder exactly once. The previous shape probed with
+    // `Decoder::new(..).is_ok()` and then built a second one, so every symphonia
+    // track paid two full container probes and two whole-file `to_vec()` copies
+    // (~2x the track size in transient allocations on every load/seek/reload).
+    let (duration_secs, decoder, sample_rate, channels) = if is_ogg_opus(bytes) {
         let source =
             OpusSource::new(bytes.to_vec()).map_err(|e| format!("Failed to decode: {}", e))?;
-        duration = source.total_duration().map(|d| d.as_secs_f64());
+        let about = (
+            source.total_duration().map(|d| d.as_secs_f64()),
+            "opus(ogg)",
+            source.sample_rate().get(),
+            source.channels().get(),
+        );
         player.append(AnalyserSource::new(
             EqSource::new(GainSource::new(source, normalization_gain), eq_params),
             analyser_buffer,
         ));
-    } else if Decoder::new(Cursor::new(bytes.to_vec())).is_ok() {
-        let source = Decoder::new(Cursor::new(bytes.to_vec()))
-            .map_err(|e| format!("Failed to decode: {}", e))?;
-        duration = source.total_duration().map(|d| d.as_secs_f64());
+        about
+    } else if let Ok(source) = build_symphonia_decoder(bytes) {
+        let about = (
+            source.total_duration().map(|d| d.as_secs_f64()),
+            "symphonia",
+            source.sample_rate().get(),
+            source.channels().get(),
+        );
         player.append(AnalyserSource::new(
             EqSource::new(GainSource::new(source, normalization_gain), eq_params),
             analyser_buffer,
         ));
+        about
     } else {
+        // Not OGG-Opus by header sniff and symphonia refused it — last resort is the
+        // custom Opus path (some streams carry Opus without a clean OpusHead page).
         let source =
             OpusSource::new(bytes.to_vec()).map_err(|e| format!("Failed to decode: {}", e))?;
-        duration = source.total_duration().map(|d| d.as_secs_f64());
+        let about = (
+            source.total_duration().map(|d| d.as_secs_f64()),
+            "opus(fallback)",
+            source.sample_rate().get(),
+            source.channels().get(),
+        );
         player.append(AnalyserSource::new(
             EqSource::new(GainSource::new(source, normalization_gain), eq_params),
             analyser_buffer,
         ));
+        about
+    };
+
+    Ok(PreparedPlayer {
+        player,
+        duration_secs,
+        decoder,
+        sample_rate,
+        channels,
+    })
+}
+
+/// Короткая приметная строчка о байтах трека для лога: сколько их и что стоит в начале.
+///
+/// Первые байты решают всё: `ftyp` — mp4/m4a, `ID3`/`0xFF 0xFB` — mp3, `OggS` — ogg,
+/// `#EXTM3U` — это вообще не аудио, а плейлист. Когда трек «не играет», ответ на вопрос
+/// «а что вообще приехало» стоит одну строчку в логе и снимает половину догадок.
+pub fn describe_bytes(bytes: &[u8]) -> String {
+    let head = &bytes[..bytes.len().min(12)];
+    let hex = head
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let kind = if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" {
+        "mp4/m4a"
+    } else if bytes.starts_with(b"ID3") || bytes.starts_with(&[0xFF, 0xFB]) {
+        "mp3"
+    } else if is_ogg_opus(bytes) {
+        "ogg/opus"
+    } else if bytes.starts_with(b"OggS") {
+        "ogg"
+    } else if bytes.starts_with(b"#EXTM3U") {
+        "HLS-плейлист"
+    } else if bytes.starts_with(b"fLaC") {
+        "flac"
+    } else if bytes.starts_with(b"RIFF") {
+        "wav"
+    } else {
+        "неизвестно"
+    };
+    format!("{} байт, {kind}, начало: {hex}", bytes.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::create_player_from_bytes;
+    use rodio::{Decoder, Source};
+    use std::io::Cursor;
+
+    /// Сколько секунд аудио реально достаёт декодер — со знанием длины файла и без него.
+    ///
+    /// Тест сравнивает два вызова на одном и том же файле: `Decoder::new`, как было до фикса,
+    /// и `build_symphonia_decoder`, как стало. На mp4 с `moov` в конце (то, что раздаёт Яндекс
+    /// Музыка) первый отвечает «формат не распознан», второй играет трек целиком. Держим его
+    /// живым, чтобы регресс этого места был виден цифрами, а не жалобой «трек не играет».
+    ///
+    /// Файл с `moov` в конце получается из любого m4a обычным ремуксом без `+faststart`:
+    /// `ffmpeg -i in.m4a -c:a copy out.m4a`.
+    ///
+    /// ```text
+    /// LOMIFY_TEST_AUDIO_FILE=.claude/tmp/ya_moov_end.m4a \
+    ///   cargo test --lib audio::decode::tests::decoded_length_with_and_without_byte_len -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "нужен путь к файлу в LOMIFY_TEST_AUDIO_FILE"]
+    fn decoded_length_with_and_without_byte_len() {
+        let path = std::env::var("LOMIFY_TEST_AUDIO_FILE")
+            .expect("нет LOMIFY_TEST_AUDIO_FILE — путь к файлу с аудио");
+        let bytes = std::fs::read(&path).expect("файл не читается");
+        println!("{}: {} байт", path, bytes.len());
+
+        let describe = |label: &str, source: Result<Decoder<Cursor<Vec<u8>>>, _>| match source {
+            Ok(source) => {
+                let rate = source.sample_rate().get() as f64;
+                let channels = source.channels().get() as f64;
+                let reported = source.total_duration();
+                let samples = source.count() as f64;
+                let decoded = samples / (rate * channels);
+                println!(
+                    "{label}: {rate} Гц, {channels} кан., total_duration={reported:?}, \
+                     реально декодировано {decoded:.1} с"
+                );
+                Some(decoded)
+            }
+            Err(e) => {
+                println!("{label}: декодер отказался — {e}");
+                None
+            }
+        };
+
+        describe("как было", Decoder::new(Cursor::new(bytes.clone())));
+        let decoded = describe("как сейчас", super::build_symphonia_decoder(&bytes))
+            .expect("декодер приложения не взял файл");
+
+        // 30 секунд — заведомо больше «короткого звука в начале» и заведомо меньше любого
+        // трека, которым имеет смысл проверять.
+        assert!(
+            decoded > 30.0,
+            "декодировано всего {decoded:.1} с — файл обрывается на первых кадрах"
+        );
     }
 
-    Ok((player, duration))
+    /// Проигрывает файл на настоящем устройстве вывода и следит, идёт ли время.
+    ///
+    /// Отделяет «декодер отдал не всё аудио» от «поток встал на выходе»: снаружи это одно и
+    /// то же — короткий звук в начале и тишина. Тест собирает ровно ту цепочку, что и плеер
+    /// (нормализация → эквалайзер → анализатор → `Player` на миксере устройства), и печатает
+    /// позицию каждые пол-секунды. Заодно видно, прилетела ли от cpal ошибка потока: именно
+    /// она в приложении рвёт звук после первых миллисекунд.
+    ///
+    /// Тест звучит в колонках — громкость намеренно низкая.
+    ///
+    /// ```text
+    /// LOMIFY_TEST_AUDIO_FILE=.claude/tmp/throwback_aac.m4a \
+    ///   cargo test --lib audio::decode::tests::device_keeps_pulling -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "live audio: открывает настоящее устройство вывода и играет несколько секунд"]
+    fn device_keeps_pulling() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let path = std::env::var("LOMIFY_TEST_AUDIO_FILE")
+            .expect("нет LOMIFY_TEST_AUDIO_FILE — путь к файлу с аудио");
+        let bytes = std::fs::read(&path).expect("файл не читается");
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let error_flag = Arc::new(AtomicBool::new(false));
+        let sink = crate::audio::device::open_device_sink(None, &tx, &error_flag)
+            .expect("устройство вывода не открылось");
+
+        let prepared = create_player_from_bytes(
+            &bytes,
+            sink.mixer(),
+            0.08,
+            1.0,
+            false,
+            Default::default(),
+            crate::audio::analyser::AnalyserBuffer::new(),
+        )
+        .expect("плеер не собрался");
+        println!(
+            "{} байт, декодер {}, {} Гц, {} кан., длительность от декодера: {:?}",
+            bytes.len(),
+            prepared.decoder,
+            prepared.sample_rate,
+            prepared.channels,
+            prepared.duration_secs
+        );
+        let player = prepared.player;
+
+        for step in 1..=10 {
+            std::thread::sleep(Duration::from_millis(500));
+            println!(
+                "{:>4} мс стены: pos={:?}, empty={}, device_error={}",
+                step * 500,
+                player.get_pos(),
+                player.empty(),
+                error_flag.load(Ordering::Relaxed)
+            );
+        }
+        while let Ok(cmd) = rx.try_recv() {
+            let kind = match cmd {
+                crate::audio::types::AudioThreadCmd::Reconnect => "переоткрыть устройство",
+                crate::audio::types::AudioThreadCmd::SwitchDevice { .. } => "сменить устройство",
+            };
+            println!("аудиопоток попросил: {kind}");
+        }
+
+        let pos = player.get_pos().as_secs_f64();
+        assert!(
+            !player.empty() && pos > 3.0,
+            "за 5 секунд стены проигралось {pos:.2} с (empty={}) — поток встал",
+            player.empty()
+        );
+    }
 }

@@ -5,6 +5,7 @@
   import { getAudioUrl } from '$lib/api';
   import { currentTrack, queue, isPlaying, currentView, playlists, globalVolume } from '$lib/stores';
   import { invoke } from '@tauri-apps/api/core';
+  import ArtistTag from './ArtistTag.svelte';
 
   export let playlist: any;
   export let onClose: () => void;
@@ -40,7 +41,7 @@
 
     const track = tracks[index];
     try {
-      const url = await getAudioUrl(track);
+      const url = await getAudioUrl(track, { silent: true });
       if (url) {
         previewAudio.src = url;
         previewAudio.volume = Math.pow($globalVolume, 3);
@@ -115,6 +116,13 @@
     // In Library.svelte we can listen to this or we just set global state
     // Setting active view to library
     currentView.set('library');
+    onClose();
+  }
+
+  // Переход на автора из трейлера: сам переход делает ArtistTag, здесь только гасим
+  // превью и закрываем модалку, чтобы страница профиля не открылась под ней.
+  function leaveForArtist() {
+    stopSnippet();
     onClose();
   }
 
@@ -211,9 +219,11 @@
           </div>
           <div class="flex flex-col flex-1 min-w-0">
             <span class="text-sm font-bold truncate {i === activeSnippetIndex ? 'text-primary' : 'text-white'}">{track.title}</span>
-            <span class="text-xs text-neutral-400 truncate">{track.artist}</span>
+            <span class="text-xs text-neutral-400 min-w-0">
+              <ArtistTag artist={track.artist} artists={track.artists} onNavigate={leaveForArtist} />
+            </span>
           </div>
-          <div class="text-xs font-mono text-neutral-500 w-12 text-right pr-2 flex items-center justify-end gap-2">
+          <div class="text-xs tnum text-neutral-500 w-12 text-right pr-2 flex items-center justify-end gap-2">
             <Heart size={14} class="opacity-50" />
             {formatDuration(track.duration)}
           </div>
@@ -221,9 +231,15 @@
       {/each}
     </div>
 
-    <!-- Progress bar for snippet -->
-    <div class="h-1 bg-white/5 w-full relative">
-      <div class="h-full bg-primary transition-all duration-100 ease-linear" style="width: {progress}%"></div>
+    <!-- Progress bar for snippet.
+         Полоса едет масштабом, а не шириной: ширина — это раскладка, и при `width` браузер
+         пересчитывал её на каждом тике прогресса (то есть непрерывно, всё превью).
+         `scaleX` от левого края даёт ту же картинку целиком на композиторе. -->
+    <div class="h-1 bg-white/5 w-full relative overflow-hidden">
+      <div
+        class="h-full w-full bg-primary origin-left transition-transform duration-100 ease-linear"
+        style="transform: scaleX({progress / 100})"
+      ></div>
     </div>
 
     <!-- Footer Actions -->

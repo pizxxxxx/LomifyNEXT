@@ -1,13 +1,34 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { Home, Search, Library, Settings, Sliders, User } from '@lucide/svelte';
+  import { ChevronRight, Home, Search, Library, Settings, Sliders } from '@lucide/svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { currentView, settings } from '$lib/stores';
 
   let osUsername = 'User';
   $: scUsername = $settings.scUser?.username || '';
-  
-  $: displayUsername = scUsername || $settings.customProfileName || osUsername;
+
+  // Личность профиля — та же, что на самой странице профиля: сначала SoundCloud, затем
+  // Яндекс, и только потом своё имя. Правило продублировано, а не вынесено: это две строки,
+  // и общая функция ради них связала бы панель со страницей крепче, чем они связаны сейчас.
+  // Аватар — обязательно того же аккаунта, чьё имя показано (разбор в Profile.svelte).
+  $: yandexUser = $settings.yandexUser;
+  $: displayUsername =
+    scUsername || yandexUser?.displayName || $settings.customProfileName || osUsername;
+  $: avatarUrl = scUsername ? $settings.scUser?.avatarUrl || '' : yandexUser?.avatarUrl || '';
+
+  // Порядок пунктов = порядок в разметке. Раньше каждая кнопка была отдельным блоком с
+  // одной и той же строкой утилит и одним и тем же маркером внутри — пять копий, которые
+  // приходилось править синхронно.
+  const primaryNav = [
+    { view: 'home', label: 'Главная', icon: Home },
+    { view: 'search', label: 'Поиск', icon: Search },
+    { view: 'library', label: 'Медиатека', icon: Library }
+  ] as const;
+
+  const secondaryNav = [
+    { view: 'equalizer', label: 'Эквалайзер', icon: Sliders },
+    { view: 'settings', label: 'Настройки', icon: Settings }
+  ] as const;
 
   onMount(async () => {
     try {
@@ -20,81 +41,84 @@
   });
 </script>
 
-<aside 
-  class="w-64 {$settings.uiStyle === 'style3' ? 'border-white/10' : ($settings.uiStyle === 'style1' ? 'bg-white/10 border-white/20' : 'bg-black/40 border-white/10')} backdrop-blur-xl flex flex-col py-8 px-5 z-10 transition-colors duration-[400ms] mx-6 mt-8 mb-32 rounded-[2rem] relative overflow-hidden interactive-item group shadow-2xl border">
-  <div class="text-[32px] font-extrabold tracking-tight mb-10 px-1 flex flex-col items-center justify-center whitespace-nowrap w-full relative">
-    <img src="/lomimi.png?v=2" alt="Logo" class="w-28 h-28 object-contain drop-shadow-xl z-0" />
-    <span class="flex items-center -mt-5 z-10 drop-shadow-[0_4px_8px_rgba(0,0,0,0.8)]">Lomify<span class="text-white/40">NEXT</span></span>
+<!-- Панель остаётся неподвижной: это постоянная опора интерфейса, а не карточка. Движутся
+     только пункты под курсором, поэтому переход между разделами не сбрасывает положение
+     всей колонки и не пересобирает размытие фона под ней. -->
+<aside class="sidebar-shell">
+  <div class="sidebar-brand">
+    <span class="sidebar-brand-mark">
+      <img src="/lomimi.png?v=2" alt="" aria-hidden="true" />
+    </span>
+    <span class="sidebar-brand-copy">
+      <strong>Lomify<span>NEXT</span></strong>
+      <small>Твоя музыка, без лишнего</small>
+    </span>
   </div>
 
-  <nav class="flex-1 space-y-3">
-    <button 
-      class="w-full flex items-center gap-4 px-4 py-3 rounded-2xl font-medium transition-all duration-300 relative group/btn {$currentView === 'home' ? 'bg-white/10 text-white shadow-inner' : 'text-neutral-400 hover:text-white hover:bg-white/5'}"
-      on:click={() => currentView.set('home')}
-    >
-      {#if $currentView === 'home'}
-        <div class="absolute left-2 top-1/2 -translate-y-1/2 w-1.5 h-1/2 bg-primary rounded-full shadow-[0_0_8px_var(--color-primary)]"></div>
-      {/if}
-      <Home size={20} class="group-hover/btn:scale-110 transition-transform" />
-      Главная
-    </button>
-    
-    <button 
-      class="w-full flex items-center gap-4 px-4 py-3 rounded-2xl font-medium transition-all duration-300 relative group/btn {$currentView === 'search' ? 'bg-white/10 text-white shadow-inner' : 'text-neutral-400 hover:text-white hover:bg-white/5'}"
-      on:click={() => currentView.set('search')}
-    >
-      {#if $currentView === 'search'}
-        <div class="absolute left-2 top-1/2 -translate-y-1/2 w-1.5 h-1/2 bg-primary rounded-full shadow-[0_0_8px_var(--color-primary)]"></div>
-      {/if}
-      <Search size={20} class="group-hover/btn:scale-110 transition-transform" />
-      Поиск
-    </button>
-    
-    <button 
-      class="w-full flex items-center gap-4 px-4 py-3 rounded-2xl font-medium transition-all duration-300 relative group/btn {$currentView === 'library' ? 'bg-white/10 text-white shadow-inner' : 'text-neutral-400 hover:text-white hover:bg-white/5'}"
-      on:click={() => currentView.set('library')}
-    >
-      {#if $currentView === 'library'}
-        <div class="absolute left-2 top-1/2 -translate-y-1/2 w-1.5 h-1/2 bg-primary rounded-full shadow-[0_0_8px_var(--color-primary)]"></div>
-      {/if}
-      <Library size={20} class="group-hover/btn:scale-110 transition-transform" />
-      Медиатека
-    </button>
+  <nav class="sidebar-nav" aria-label="Основная навигация">
+    <span class="sidebar-section-label">Музыка</span>
+    {#each primaryNav as item}
+      <button
+        type="button"
+        class="nav-item"
+        class:is-active={$currentView === item.view}
+        aria-current={$currentView === item.view ? 'page' : undefined}
+        on:mousedown|preventDefault
+        on:click={() => currentView.set(item.view)}
+      >
+        <!-- Полоска активного пункта живёт в разметке всегда, состояние ей задаёт CSS по
+             `.nav-item.is-active`. Условный рендер убивал бы её появление: элемент,
+             которого в DOM ещё нет, возникает сразу в конечном виде, анимировать нечего. -->
+        <span class="nav-marker"></span>
+        <svelte:component this={item.icon} size={19} aria-hidden="true" />
+        <span>{item.label}</span>
+      </button>
+    {/each}
   </nav>
 
-  <div class="mt-auto flex flex-col gap-2">
-    <button 
-      class="w-full flex items-center gap-4 px-4 py-3 rounded-2xl font-medium transition-all duration-300 relative group/btn {$currentView === 'equalizer' ? 'bg-white/10 text-white shadow-inner' : 'text-neutral-400 hover:text-white hover:bg-white/5'}"
-      on:click={() => currentView.set('equalizer')}
-    >
-      {#if $currentView === 'equalizer'}
-        <div class="absolute left-2 top-1/2 -translate-y-1/2 w-1.5 h-1/2 bg-primary rounded-full shadow-[0_0_8px_var(--color-primary)]"></div>
-      {/if}
-      <Sliders size={20} class="group-hover/btn:scale-110 transition-transform" />
-      Эквалайзер
-    </button>
-    <button 
-      class="w-full flex items-center gap-4 px-4 py-3 rounded-2xl font-medium transition-all duration-300 relative group/btn {$currentView === 'settings' ? 'bg-white/10 text-white shadow-inner' : 'text-neutral-400 hover:text-white hover:bg-white/5'}"
-      on:click={() => currentView.set('settings')}
-    >
-      {#if $currentView === 'settings'}
-        <div class="absolute left-2 top-1/2 -translate-y-1/2 w-1.5 h-1/2 bg-primary rounded-full shadow-[0_0_8px_var(--color-primary)]"></div>
-      {/if}
-      <Settings size={20} class="group-hover/btn:scale-110 transition-transform" />
-      Настройки
-    </button>
-    
-    <div class="mt-4 pt-4 border-t border-white/10 flex justify-center">
-      <button 
-        class="w-14 h-14 rounded-full bg-gradient-to-br from-primary to-green-600 text-black font-bold text-2xl flex items-center justify-center shadow-lg hover:scale-110 transition-transform overflow-hidden {$currentView === 'profile' ? 'ring-4 ring-primary/50' : ''}"
+  <div class="sidebar-secondary">
+    <span class="sidebar-section-label">Управление</span>
+    {#each secondaryNav as item}
+      <button
+        type="button"
+        class="nav-item"
+        class:is-active={$currentView === item.view}
+        aria-current={$currentView === item.view ? 'page' : undefined}
+        on:mousedown|preventDefault
+        on:click={() => currentView.set(item.view)}
+      >
+        <!-- Полоска активного пункта живёт в разметке всегда, состояние ей задаёт CSS по
+             `.nav-item.is-active`. Условный рендер убивал бы её появление: элемент,
+             которого в DOM ещё нет, возникает сразу в конечном виде, анимировать нечего. -->
+        <span class="nav-marker"></span>
+        <svelte:component this={item.icon} size={19} aria-hidden="true" />
+        <span>{item.label}</span>
+      </button>
+    {/each}
+
+    <div class="sidebar-foot">
+      <button
+        type="button"
+        class="sidebar-profile"
+        class:is-active={$currentView === 'profile'}
+        aria-current={$currentView === 'profile' ? 'page' : undefined}
+        on:mousedown|preventDefault
         on:click={() => currentView.set('profile')}
         title="Профиль ({displayUsername})"
       >
-        {#if $settings.scUser?.avatarUrl}
-          <img src={$settings.scUser.avatarUrl} alt="Avatar" class="w-full h-full object-cover" />
-        {:else}
-          {displayUsername.charAt(0).toUpperCase()}
-        {/if}
+        <span class="nav-marker"></span>
+        <span class="sidebar-avatar" aria-hidden="true">
+          {#if avatarUrl}
+            <img src={avatarUrl} alt="" />
+          {:else}
+            {displayUsername.charAt(0).toUpperCase()}
+          {/if}
+        </span>
+        <span class="sidebar-profile-copy">
+          <strong>{displayUsername}</strong>
+          <small>Открыть профиль</small>
+        </span>
+        <ChevronRight class="sidebar-profile-arrow" size={16} aria-hidden="true" />
       </button>
     </div>
   </div>

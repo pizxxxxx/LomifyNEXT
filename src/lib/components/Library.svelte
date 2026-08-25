@@ -1,33 +1,125 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { Play, FolderOpen, Heart, User, Music, Trash2, ListMusic, Plus, ExternalLink, Activity as EqIcon, Check, Download, Info, Radio, X, Loader2 } from 'lucide-svelte';
+  import { onMount, onDestroy } from 'svelte';
+  import { fly } from 'svelte/transition';
+  import { cubicOut } from 'svelte/easing';
+  import { Play, FolderOpen, Heart, User, Music, Trash2, ListMusic, Plus, ExternalLink, Check, Download, Info, Radio, X, Loader2 } from 'lucide-svelte';
   import ArtistTag from './ArtistTag.svelte';
+  import PlaylistMenu from './PlaylistMenu.svelte';
+  import TrackStatus from './TrackStatus.svelte';
   import PlaylistTrailer from './PlaylistTrailer.svelte';
-  import { currentTrack, isPlaying, likedTracks, queue, currentView, searchQuery, playlists, currentArtist, notify, settings } from '$lib/stores';
+  import { currentTrack, isPlaying, likedTracks, queue, currentView, searchQuery, playlists, notify, settings } from '$lib/stores';
+  import { goToArtist } from '$lib/utils/navigation';
+  import { splitArtists } from '$lib/utils/artists';
   import { saveTrack, getTracks, removeTrack } from '$lib/db';
   import { getAudioUrl } from '$lib/api';
+  import { setTrackLiked } from '$lib/likes';
   import { invoke } from '@tauri-apps/api/core';
+  import { withCount } from '$lib/utils/plural';
 
-  let activeTab = 'liked'; // 'liked', 'artists', 'local', 'playlists'
+  type LibraryTab = 'liked' | 'playlists' | 'artists' | 'local';
+
+  /** Порядок вкладок — он же порядок ячеек переключателя, из него берётся и направление
+      перехода: вправо, если ушли к следующей вкладке, влево — если к предыдущей. */
+  const TAB_ORDER: LibraryTab[] = ['liked', 'playlists', 'artists', 'local'];
+
+  let activeTab: LibraryTab = 'liked';
+  let navDir = 1;
+  $: tabIndex = TAB_ORDER.indexOf(activeTab);
+
   let localTracks: any[] = [];
   let cachedUrns = new Set<string>();
   let expandedPlaylist: string | null = null;
   let activePreviewPlaylist: any = null;
-  
+
+  /**
+   * Сколько строк рисуем сразу. Раньше медиатека строила ВСЕ строки в один кадр, и на
+   * нескольких сотнях лайков это был один синхронный проход на полсекунды: клик по
+   * «Медиатеке» ощущался как заминка, а анимация входа за это время успевала «пройти»
+   * вхолостую — её просто не было видно. Первый кадр теперь заведомо дешёвый, остальное
+   * дорисовывается по кадрам: к моменту, когда человек доскроллит, список уже целый.
+   */
+  const ROWS_FIRST_PAINT = 18;
+  const ROWS_STEP = 40;
+  let rowBudget = ROWS_FIRST_PAINT;
+  let growHandle = 0;
+
+  /**
+   * Строка под курсором. Нужна не для оформления (его делает `group-hover` в CSS), а чтобы
+   * не держать в DOM то, что видно только по наведению: у каждой строки лайков есть панель
+   * «Информация» и список плейлистов, и последний перебирает ВСЕ плейлисты. Триста лайков и
+   * десять плейлистов — это три тысячи скрытых кнопок в разметке, которые никто никогда не
+   * увидит одновременно. Кнопки-открывашки остаются на месте, содержимое появляется на
+   * наведении.
+   */
+  let hoveredRow = -1;
+
+  function onRowHover(e: Event) {
+    // Один слушатель на список вместо двух на каждую строку: `pointerover` всплывает, а
+    // `mouseenter` — нет. И это `pointerover`, а не `mouseover`, чтобы не тянуть за собой
+    // требование парного `on:focus` из a11y-проверки: клавиатуре эти панели не нужны,
+    // у них есть свои кнопки.
+    const row = (e.target as HTMLElement | null)?.closest?.('[data-row]') as HTMLElement | null;
+    const idx = row ? Number(row.dataset.row) : -1;
+    if (idx !== hoveredRow) hoveredRow = idx;
+  }
+
+  function setTab(tab: LibraryTab) {
+    if (tab === activeTab) return;
+    navDir = TAB_ORDER.indexOf(tab) > tabIndex ? 1 : -1;
+    expandedPlaylist = null;
+    hoveredRow = -1;
+    activeTab = tab;
+    // Бюджет строк сбрасывается вместе с вкладкой: иначе переход на «Локальные» с уже
+    // раскрученного «Любимого» снова строил бы сотни строк в том же кадре, в котором
+    // начинается выезд панели, и выезда опять было бы не видно.
+    rowBudget = ROWS_FIRST_PAINT;
+    growRows();
+  }
+
+  /** Сколько строк вообще нужно активной вкладке — предел, до которого растёт бюджет. */
+  $: rowsNeeded =
+    activeTab === 'liked' ? $likedTracks.length
+    : activeTab === 'local' ? localTracks.length
+    : activeTab === 'artists' ? groupedArtists.length
+    : $playlists.length;
+
+  $: visibleLiked = $likedTracks.slice(0, rowBudget);
+  $: visibleLocal = localTracks.slice(0, rowBudget);
+  $: visibleArtists = groupedArtists.slice(0, rowBudget);
+
+  function growRows() {
+    if (typeof requestAnimationFrame === 'undefined') return;
+    if (growHandle) cancelAnimationFrame(growHandle);
+    const step = () => {
+      growHandle = 0;
+      if (rowBudget >= rowsNeeded) return;
+      rowBudget += ROWS_STEP;
+      growHandle = requestAnimationFrame(step);
+    };
+    growHandle = requestAnimationFrame(step);
+  }
+
   function startPlaylistPreview(e: Event, pl: any) {
     e.stopPropagation();
     activePreviewPlaylist = pl;
   }
-  
+
   // Computed grouped artists
+  //
+  // Считаем по отдельным именам, а не по подписи трека. Пока ключом была строка целиком,
+  // фит «A, B» становился третьим «артистом» с собственной плиткой, а сами A и B недобирали
+  // по треку каждый: в разделе появлялись имена, которых нет ни в одном сервисе.
   $: groupedArtists = (() => {
     const map = $likedTracks.reduce((acc: any, t) => {
-      if (t.artist) {
-        if (!acc[t.artist]) {
-          acc[t.artist] = { count: 0, avatarUrl: t.artistAvatarUrl || t.coverUrl };
+      const names = splitArtists(t.artist, t.artists);
+      names.forEach((name, i) => {
+        if (!acc[name]) {
+          // `artistAvatarUrl` — портрет ПЕРВОГО исполнителя (см. `mapYandexTrack`), поэтому
+          // остальным он не достаётся: чужое лицо на плитке хуже обложки трека.
+          acc[name] = { count: 0, avatarUrl: (i === 0 ? t.artistAvatarUrl : '') || t.coverUrl };
         }
-        acc[t.artist].count += 1;
-      }
+        acc[name].count += 1;
+      });
       return acc;
     }, {});
     return Object.entries(map)
@@ -49,11 +141,13 @@
   onMount(() => {
     (async () => {
       localTracks = await getTracks();
+      growRows();
       try {
         const list = await invoke<string[]>('track_list_cached');
         cachedUrns = new Set(list);
       } catch (e) {}
     })();
+    growRows();
 
     const handleCacheCleared = () => {
       cachedUrns.clear();
@@ -63,10 +157,30 @@
     return () => window.removeEventListener('cacheCleared', handleCacheCleared);
   });
 
-  function isTrackCached(track: any, _cache?: Set<string>) {
+  onDestroy(() => {
+    if (growHandle) cancelAnimationFrame(growHandle);
+  });
+
+  /**
+   * URN считается регулярным выражением, а вызывали его по два-три раза на строку в каждом
+   * кадре перерисовки списка. Объект трека для одной строки не меняется, поэтому результат
+   * живёт рядом с ним: `WeakMap` не держит треки в памяти после удаления из списка.
+   */
+  const urnCache = new WeakMap<object, string>();
+
+  function trackUrn(track: any): string {
+    const hit = urnCache.get(track);
+    if (hit) return hit;
     const trackIdStr = track.id ? track.id : `${track.title}-${track.artist}`;
     const urn = `lomify:${track.source}:${trackIdStr}`.replace(/[^a-zA-Z0-9а-яА-ЯёЁ:-]/g, '');
-    return cachedUrns.has(urn);
+    urnCache.set(track, urn);
+    return urn;
+  }
+
+  // `_cache` не используется в теле намеренно: он нужен как зависимость в разметке, чтобы
+  // Svelte перерисовал строки, когда пополнился набор скачанного.
+  function isTrackCached(track: any, _cache?: Set<string>) {
+    return cachedUrns.has(trackUrn(track));
   }
 
   import { open } from '@tauri-apps/plugin-dialog';
@@ -111,11 +225,11 @@
         }
       }
       if (newTracks.length > 0) {
-        notify(`Добавлено ${newTracks.length} локальных треков`, 'success');
+        notify(`Забрал ${withCount(newTracks.length, 'трек', 'трека', 'треков')} с компьютера`, 'success');
       }
     } catch (err) {
       console.error("Failed to open dialog:", err);
-      notify('Ошибка при добавлении треков', 'error');
+      notify('Не получилось добавить файлы — возможно, формат не тот', 'error');
     }
   }
 
@@ -123,10 +237,29 @@
     e.stopPropagation();
     await removeTrack(id);
     localTracks = localTracks.filter(t => t.id !== id);
-    notify('Трек удален из локальных', 'info');
+    notify('Убрал из локальных', 'info');
   }
 
+  /**
+   * Запуск трека из любого списка библиотеки.
+   *
+   * Флаг `isBanned` здесь больше не блокирует запуск, и это осознанно. В обработчиках
+   * стояло `if (!track.isBanned) playTrackList(...)` — то есть клик по помеченной строке
+   * не делал ВООБЩЕ ничего: ни звука, ни уведомления, ни следа в консоли. А пометку
+   * ставил плеер при любой неудаче с получением ссылки и складывал в localStorage, так
+   * что одна сетевая осечка навсегда выключала строку. Отсюда и «с главной играет, а из
+   * лайков нет»: лента фильтрует недоступные треки при загрузке и каждый запуск заново,
+   * а лайки лежат на диске вместе с флагами.
+   *
+   * Теперь флаг — предупреждение, а не запрет: пробуем всё равно, а если источник и
+   * правда не отдаст поток, об этом честно скажет плеер. Молчаливого клика не остаётся
+   * ни в одном случае.
+   */
   function playTrackList(track: any, list: any[]) {
+    if (!track) return;
+    if (track.isBanned) {
+      notify('Источник считал трек недоступным. Пробую ещё раз', 'info');
+    }
     const idx = list.findIndex(t => t.title === track.title && t.artist === track.artist);
     if (idx !== -1) {
       queue.set(list.slice(idx + 1));
@@ -137,46 +270,34 @@
 
   function removeLikedTrack(e: Event, track: any) {
     e.stopPropagation();
-    likedTracks.set($likedTracks.filter(t => t.title !== track.title || t.artist !== track.artist));
-    notify('Удалено из любимых', 'info');
+    // Через `$lib/likes`: снятие уезжает в аккаунт Яндекса, а у SoundCloud запоминается
+    // локально — иначе сверка при следующем запуске вернула бы трек обратно.
+    setTrackLiked(track, false);
+    notify('Убрал из любимых', 'info');
   }
 
   function createPlaylist() {
     if (!newPlaylistName.trim()) return;
     playlists.update(p => [...p, { id: Date.now().toString(), title: newPlaylistName.trim(), tracks: [] }]);
-    notify(`Плейлист "${newPlaylistName.trim()}" создан`, 'success');
+    notify(`Плейлист «${newPlaylistName.trim()}» готов`, 'success');
     newPlaylistName = '';
   }
 
   function deletePlaylist(e: Event, id: string) {
     e.stopPropagation();
     playlists.update(p => p.filter(pl => pl.id !== id));
-    notify('Плейлист удален', 'info');
+    notify('Плейлист удалён', 'info');
   }
 
-  function addToPlaylist(e: Event, track: any, playlistId: string) {
-    e.stopPropagation();
-    playlists.update(p => {
-      const idx = p.findIndex(pl => pl.id === playlistId);
-      if (idx !== -1) {
-        if (!p[idx].tracks.some((t: any) => t.title === track.title && t.artist === track.artist)) {
-          p[idx].tracks.push(track);
-          notify(`Добавлено в "${p[idx].title}"`, 'success');
-        } else {
-          notify(`Трек уже есть в "${p[idx].title}"`, 'info');
-        }
-      }
-      return p;
-    });
-  }
-
+  // Добавление в плейлист живёт в `PlaylistMenu` — здесь осталось только удаление, которым
+  // пользуется раскрытый плейлист (крестик у строки).
   function removeFromPlaylist(e: Event, track: any, playlistId: string) {
     e.stopPropagation();
     playlists.update(p => {
       const idx = p.findIndex(pl => pl.id === playlistId);
       if (idx !== -1) {
         p[idx].tracks = p[idx].tracks.filter((t: any) => t.title !== track.title || t.artist !== track.artist);
-        notify(`Удалено из "${p[idx].title}"`, 'info');
+        notify(`Убрал из «${p[idx].title}»`, 'info');
       }
       return p;
     });
@@ -190,17 +311,13 @@
         url = await getAudioUrl(track);
       }
       if (!url) {
-        // Track is dead/banned
-        track.isBanned = true;
-        if (track.id) {
-           const dbTrack = await getTracks().then(ts => ts.find((t: any) => t.id === track.id));
-           if (dbTrack) {
-             dbTrack.isBanned = true;
-             await saveTrack(dbTrack);
-             likedTracks.update(ts => ts.map(t => t.id === track.id ? { ...t, isBanned: true } : t));
-           }
-        }
-        throw new Error("No audio URL found (possibly banned)");
+        // Пометок «заблокирован» здесь больше нет. Раньше неудача скачивания писала
+        // `isBanned = true` в объект, в базу и в лайки — то есть в localStorage, навсегда.
+        // После этого строка в «Любимом» переставала реагировать на клик даже при живом
+        // треке: причиной могла быть просроченная подпись, 403 из-за заголовков или обрыв
+        // сети, а последствие было одно и то же и необратимое. Не удалось скачать — значит
+        // не удалось скачать, и только сейчас.
+        throw new Error("No audio URL found");
       }
       
       const trackIdStr = track.id ? track.id : `${track.title}-${track.artist}`;
@@ -216,11 +333,11 @@
       await invoke('track_ensure_cached', { request });
       cachedUrns.add(urn);
       cachedUrns = cachedUrns; // trigger reactivity
-      if (e) notify(`Трек ${track.title} скачан`, 'success');
+      if (e) notify(`«${track.title}» на диске`, 'success');
       return true;
     } catch (err) {
       console.error(err);
-      if (e) notify(`Ошибка скачивания ${track.title}`, 'error');
+      if (e) notify(`Не смог скачать «${track.title}»`, 'error');
       return false;
     }
   }
@@ -246,11 +363,11 @@
     
     isDownloadingAll = false;
     if (cancelDownloadAll) {
-      notify(`Загрузка отменена. Скачано треков: ${downloadedCount}`, 'info');
+      notify(`Остановил. Успел скачать ${withCount(downloadedCount, 'трек', 'трека', 'треков')}`, 'info');
     } else if (downloadedCount > 0) {
-      notify(`Загрузка завершена! Скачано треков: ${downloadedCount}`, 'success');
+      notify(`Готово — ${withCount(downloadedCount, 'трек', 'трека', 'треков')} на диске`, 'success');
     } else {
-      notify('Все треки уже скачаны', 'info');
+      notify('Всё уже скачано', 'info');
     }
   }
 
@@ -262,45 +379,87 @@
   }
 </script>
 
-<div class="w-full max-w-6xl {$settings.leftAlignTracks ? 'mr-auto ml-0' : 'mx-auto'} flex flex-col">
+<div class="w-full max-w-6xl mx-auto flex flex-col">
   <div class="flex items-center justify-between mb-8">
-    <h1 class="text-4xl font-extrabold tracking-tight drop-shadow-md">Медиатека</h1>
+    <h1 class="page-title">Медиатека</h1>
   </div>
 
-  <!-- Tabs -->
-  <div class="flex gap-4 mb-8 border-b border-white/10 pb-4">
-    <button 
-      class="flex items-center gap-2 px-6 py-3 rounded-2xl font-bold transition-all shadow-sm {activeTab === 'liked' ? 'bg-primary text-black scale-105 shadow-primary/30' : 'glass-button text-neutral-300 hover:text-white'}"
-      on:click={() => activeTab = 'liked'}
+  <!-- Вкладки. Тот же переключатель, что на странице артиста между «Треками» и «Альбомами»:
+       активный раздел показывает не перекрашенная кнопка, а одна плашка, которая переезжает
+       между ячейками, а содержимое выезжает в сторону перехода. Раньше здесь были четыре
+       независимые кнопки с `scale-105` — по ним нельзя было понять, что это один орган
+       управления, и связи между «было» и «стало» не возникало.
+       Оформление тянется из токенов (`--color-primary`), поэтому в теме aurora переключатель
+       выглядит по-аврорному сам, без второго набора правил. -->
+  <div class="library-tabs">
+    <div
+      class="seg-control is-lg"
+      style="--seg-count: 4; --seg-index: {tabIndex}"
+      role="tablist"
+      aria-label="Разделы медиатеки"
     >
-      <Heart size={18} fill={activeTab === 'liked' ? "black" : "none"} /> Любимые треки
-    </button>
-    <button 
-      class="flex items-center gap-2 px-6 py-3 rounded-2xl font-bold transition-all shadow-sm {activeTab === 'playlists' ? 'bg-primary text-black scale-105 shadow-primary/30' : 'glass-button text-neutral-300 hover:text-white'}"
-      on:click={() => activeTab = 'playlists'}
-    >
-      <ListMusic size={18} /> Плейлисты
-    </button>
-    <button 
-      class="flex items-center gap-2 px-6 py-3 rounded-2xl font-bold transition-all shadow-sm {activeTab === 'artists' ? 'bg-primary text-black scale-105 shadow-primary/30' : 'glass-button text-neutral-300 hover:text-white'}"
-      on:click={() => activeTab = 'artists'}
-    >
-      <User size={18} /> Артисты
-    </button>
-    <button 
-      class="flex items-center gap-2 px-6 py-3 rounded-2xl font-bold transition-all shadow-sm {activeTab === 'local' ? 'bg-primary text-black scale-105 shadow-primary/30' : 'glass-button text-neutral-300 hover:text-white'}"
-      on:click={() => activeTab = 'local'}
-    >
-      <FolderOpen size={18} /> Локальные файлы
-    </button>
+      <span class="seg-pill" aria-hidden="true"></span>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === 'liked'}
+        class="seg-item"
+        class:is-active={activeTab === 'liked'}
+        on:click={() => setTab('liked')}
+      >
+        <Heart size={15} fill={activeTab === 'liked' ? 'currentColor' : 'none'} />
+        Любимые
+        <span class="seg-count tnum">{$likedTracks.length}</span>
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === 'playlists'}
+        class="seg-item"
+        class:is-active={activeTab === 'playlists'}
+        on:click={() => setTab('playlists')}
+      >
+        <ListMusic size={15} />
+        Плейлисты
+        <span class="seg-count tnum">{$playlists.length}</span>
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === 'artists'}
+        class="seg-item"
+        class:is-active={activeTab === 'artists'}
+        on:click={() => setTab('artists')}
+      >
+        <User size={15} />
+        Артисты
+        <span class="seg-count tnum">{groupedArtists.length}</span>
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === 'local'}
+        class="seg-item"
+        class:is-active={activeTab === 'local'}
+        on:click={() => setTab('local')}
+      >
+        <FolderOpen size={15} />
+        Локальные
+        <span class="seg-count tnum">{localTracks.length}</span>
+      </button>
+    </div>
   </div>
 
   <!-- Content -->
-  <div class="flex-1 pr-4 perspective-[1000px]">
+  {#key activeTab}
+    <div
+      class="library-pane flex-1 pr-4 perspective-[1000px]"
+      in:fly={{ x: 34 * navDir, duration: 340, easing: cubicOut }}
+    >
     {#if activeTab === 'local'}
       <div class="flex flex-col gap-4 mb-6">
         <div class="flex items-center justify-between">
-          <h2 class="text-2xl font-bold drop-shadow-md">Офлайн треки</h2>
+          <h2 class="section-title">Офлайн треки</h2>
           <button class="cursor-pointer glass-button hover:bg-primary hover:text-black transition-all px-6 py-3 rounded-2xl font-bold flex items-center gap-2 text-sm shadow-md" on:click={handleFileSelect}>
             <FolderOpen size={18} />
             Выбрать файлы
@@ -309,31 +468,22 @@
       </div>
 
       {#if localTracks.length === 0}
-        <div class="w-full h-[300px] flex flex-col items-center justify-center text-neutral-400 glass-panel rounded-3xl mt-4">
-          <Music size={56} class="mb-4 opacity-50 drop-shadow-lg" />
-          <p class="text-xl font-bold mb-2">Нет локальных треков</p>
-          <p class="text-sm opacity-80">Нажмите "Выбрать файлы", чтобы добавить музыку с компьютера</p>
+        <div class="w-full py-20 px-10 flex flex-col items-start plate mt-4">
+          <Music size={26} class="mb-5 text-white/20" />
+          <p class="display-title">Здесь будет твоя музыка</p>
+          <p class="empty-hint">Всё, что лежит на компьютере — папкой целиком или по одному файлу. Кнопка «Выбрать файлы» сверху.</p>
         </div>
       {:else}
         <div class="flex flex-col gap-3 p-2">
-          {#each localTracks as track, i}
+          {#each visibleLocal as track, i}
             {@const isActive = $currentTrack?.title === track.title && $currentTrack?.artist === track.artist}
             <!-- svelte-ignore a11y-click-events-have-key-events -->
             <!-- svelte-ignore a11y-no-static-element-interactions -->
             <div 
-              class="flex items-center gap-4 group cursor-pointer rounded-xl p-2 transition-all hover:-translate-y-1 hover:shadow-lg w-full {isActive ? 'bg-primary/10 border border-primary/20' : 'hover:bg-white/5'}"
+              class="flex items-center gap-4 group cursor-pointer rounded-xl p-2 transition-colors w-full interactive-item {isActive ? 'bg-primary/10 border border-primary/20' : 'hover:bg-white/5'}"
               on:click={() => playTrackList(track, localTracks)}
             >
-              <div class="w-6 text-right text-[11px] font-mono text-white/30 group-hover:hidden">
-                {#if isActive && $isPlaying}
-                  <EqIcon size={14} class="text-primary animate-pulse ml-auto" />
-                {:else}
-                  {i + 1}
-                {/if}
-              </div>
-              <div class="w-6 text-right hidden group-hover:block text-white/50">
-                <Play size={14} fill="currentColor" class="ml-auto" />
-              </div>
+              <TrackStatus index={i} {isActive} playing={$isPlaying} />
               <div class="relative w-12 h-12 min-w-[3rem] min-h-[3rem] aspect-square shadow-sm rounded-lg overflow-hidden shrink-0 bg-neutral-800">
                 <div class="w-full h-full flex items-center justify-center text-neutral-500">
                   <Music size={20} />
@@ -346,9 +496,9 @@
                     <Check size={14} class="text-primary inline-block ml-2 mb-0.5" />
                   {/if}
                 </span>
-                <span class="text-neutral-400 text-[12px] mt-0.5 truncate"><ArtistTag artist={track.artist} /></span>
+                <span class="text-neutral-400 text-[12px] mt-0.5 min-w-0"><ArtistTag artist={track.artist} artists={track.artists} /></span>
               </div>
-              <button 
+              <button
                 class="opacity-0 group-hover:opacity-100 p-3 hover:bg-red-500/20 hover:text-red-400 text-neutral-500 rounded-full transition-all mr-2"
                 on:click|stopPropagation={(e) => deleteTrack(e, track.id)}
                 aria-label="Удалить"
@@ -362,13 +512,14 @@
 
     {:else if activeTab === 'liked'}
       {#if $likedTracks.length === 0}
-        <div class="w-full h-[300px] flex flex-col items-center justify-center text-neutral-400 glass-panel rounded-3xl mt-4">
-          <Heart size={56} class="mb-4 opacity-50 drop-shadow-lg" />
-          <p class="text-xl font-bold">У вас пока нет любимых треков</p>
+        <div class="w-full py-20 px-10 flex flex-col items-start plate mt-4">
+          <Heart size={26} class="mb-5 text-white/20" />
+          <p class="display-title">Пока ни одного лайка</p>
+          <p class="empty-hint">Жми на сердечко у трека — он окажется здесь и останется доступным даже без сети.</p>
         </div>
       {:else}
         <div class="flex items-center justify-between mb-4 px-2 mt-2">
-          <div class="text-sm text-neutral-400">{$likedTracks.length} треков</div>
+          <div class="text-sm text-neutral-400">{withCount($likedTracks.length, 'трек', 'трека', 'треков')}</div>
           <button 
             class="glass-button transition-all px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm shadow-md {isDownloadingAll ? 'hover:bg-red-500 hover:text-white group' : 'hover:bg-primary hover:text-black'} disabled:opacity-50"
             on:click={() => {
@@ -397,32 +548,22 @@
             {/if}
           </button>
         </div>
-        <div class="flex flex-col gap-3 p-2">
-          {#each $likedTracks as track, i}
+        <!-- svelte-ignore a11y-no-static-element-interactions -->
+        <div class="flex flex-col gap-3 p-2" on:pointerover={onRowHover} on:pointerleave={() => hoveredRow = -1}>
+          {#each visibleLiked as track, i}
             {@const isActive = $currentTrack?.title === track.title && $currentTrack?.artist === track.artist}
+            {@const cached = isTrackCached(track, cachedUrns)}
             <!-- svelte-ignore a11y-click-events-have-key-events -->
             <!-- svelte-ignore a11y-no-static-element-interactions -->
-            <div 
-              class="relative hover:z-50 flex items-center gap-4 group rounded-xl p-2 transition-all w-full {isActive ? 'bg-primary/10 border border-primary/20' : 'hover:bg-white/5'} {track.isBanned ? 'opacity-40 grayscale cursor-not-allowed' : 'cursor-pointer hover:-translate-y-1 hover:shadow-lg'}"
-              on:click={() => { if (!track.isBanned) playTrackList(track, $likedTracks); }}
+            <div
+              data-row={i}
+              class="relative hover:z-50 flex items-center gap-4 group rounded-xl p-2 transition-colors w-full cursor-pointer interactive-item {isActive ? 'bg-primary/10 border border-primary/20' : 'hover:bg-white/5'} {track.isBanned ? 'opacity-60' : ''}"
+              on:click={() => playTrackList(track, $likedTracks)}
             >
-              <div class="w-6 text-right text-[11px] font-mono text-white/30 {track.isBanned ? '' : 'group-hover:hidden'}">
-                {#if track.isBanned}
-                  <X size={14} class="text-red-500 ml-auto" />
-                {:else if isActive && $isPlaying}
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-primary ml-auto"><path d="M3 18v-6a9 9 0 0 1 18 0v6"></path><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path></svg>
-                {:else}
-                  {i + 1}
-                {/if}
-              </div>
-              {#if !track.isBanned}
-                <div class="w-6 text-right hidden group-hover:block text-white/50">
-                  <Play size={14} fill="currentColor" class="ml-auto" />
-                </div>
-              {/if}
+              <TrackStatus index={i} {isActive} playing={$isPlaying} banned={track.isBanned} />
               <div class="relative w-12 h-12 min-w-[3rem] min-h-[3rem] aspect-square shadow-sm rounded-lg overflow-hidden shrink-0 bg-neutral-800">
                 {#if track.coverUrl}
-                  <img src={track.coverUrl} alt="Cover" class="w-full h-full object-cover" />
+                  <img src={track.coverUrl} alt="Cover" class="w-full h-full object-cover" loading="lazy" decoding="async" />
                 {:else}
                   <div class="w-full h-full flex items-center justify-center text-neutral-500">
                     <Music size={20} />
@@ -432,14 +573,14 @@
               <div class="flex flex-col flex-1 min-w-0 pr-4">
                 <div class="flex items-center gap-2">
                   <span class="font-bold text-[14px] truncate {isActive ? 'text-primary' : 'text-white'}">{track.title}</span>
-                  {#if isTrackCached(track, cachedUrns)}
+                  {#if cached}
                     <div title="Скачан" class="flex"><Check size={14} class="text-primary shrink-0" /></div>
                   {/if}
                 </div>
-                <span class="text-neutral-400 text-[12px] mt-0.5 truncate hover:text-white hover:underline cursor-pointer transition-colors w-fit"><ArtistTag artist={track.artist} /></span>
+                <span class="text-neutral-400 text-[12px] mt-0.5 min-w-0"><ArtistTag artist={track.artist} artists={track.artists} /></span>
               </div>
-              {#if !isTrackCached(track, cachedUrns)}
-                <button 
+              {#if !cached}
+                <button
                   class="opacity-0 group-hover:opacity-100 p-2 text-neutral-400 hover:text-white rounded-full transition-all mr-1"
                   on:click|stopPropagation={(e) => downloadTrack(e, track)}
                   aria-label="Скачать"
@@ -452,53 +593,40 @@
                 </div>
               {/if}
 
-              <!-- Dropdown for Info -->
+              <!-- Dropdown for Info. Содержимое — только у строки под курсором (см.
+                   `hoveredRow`): показывается оно всё равно по одному, а строиться успевало
+                   для всех сразу. -->
               <div class="relative group/info mr-1">
                 <button class="opacity-0 group-hover:opacity-100 p-2 text-neutral-400 hover:text-white rounded-full transition-all" aria-label="Информация">
                   <Info size={18} />
                 </button>
-                <div class="absolute right-0 top-full pt-1 w-56 hidden group-hover/info:block z-50">
-                  <div class="bg-neutral-900 border border-white/10 rounded-xl shadow-xl p-3 text-xs text-neutral-300 pointer-events-none">
-                    <p class="mb-1"><strong class="text-white">Автор:</strong> {track.artist}</p>
-                    {#if track.playbackCount != null}
-                      <p class="mb-1"><strong class="text-white">Прослушиваний SC:</strong> {track.playbackCount.toLocaleString('ru-RU')}</p>
-                    {/if}
-                    {#if track.releaseDate}
-                      <p class="mb-1"><strong class="text-white">Выпущен:</strong> {new Date(track.releaseDate).toLocaleDateString('ru-RU')}</p>
-                    {/if}
-                    {#if track.genre}
-                      <p><strong class="text-white">Жанр:</strong> {track.genre}</p>
-                    {/if}
+                {#if hoveredRow === i}
+                  <div class="absolute right-0 top-full pt-1 w-56 hidden group-hover/info:block z-50">
+                    <div class="bg-neutral-900 border border-white/10 rounded-xl shadow-xl p-3 text-xs text-neutral-300 pointer-events-none">
+                      <p class="mb-1"><strong class="text-white">Автор:</strong> {track.artist}</p>
+                      {#if track.playbackCount != null}
+                        <p class="mb-1"><strong class="text-white">Прослушиваний SC:</strong> {track.playbackCount.toLocaleString('ru-RU')}</p>
+                      {/if}
+                      {#if track.releaseDate}
+                        <p class="mb-1"><strong class="text-white">Выпущен:</strong> {new Date(track.releaseDate).toLocaleDateString('ru-RU')}</p>
+                      {/if}
+                      {#if track.genre}
+                        <p><strong class="text-white">Жанр:</strong> {track.genre}</p>
+                      {/if}
+                    </div>
                   </div>
-                </div>
-              </div>
-              
-              <!-- Dropdown for Playlists -->
-              <div class="relative group/dropdown mr-2">
-                <button class="opacity-0 group-hover:opacity-100 p-2 text-neutral-400 hover:text-white rounded-full transition-all" aria-label="Добавить в плейлист">
-                  <Plus size={18} />
-                </button>
-                <div class="absolute right-0 top-full pt-1 w-48 hidden group-hover/dropdown:block z-50">
-                  <div class="bg-neutral-900 border border-white/10 rounded-xl shadow-xl overflow-hidden">
-                    {#if $playlists.length > 0}
-                      {#each $playlists as pl}
-                        {@const isInPlaylist = pl.tracks && pl.tracks.some((t: any) => (t.id && t.id === track.id) || (t.title === track.title && t.artist === track.artist))}
-                        <button class="w-full text-left flex items-center justify-between px-4 py-2 text-sm text-neutral-300 hover:bg-white/10 hover:text-white" on:click|stopPropagation={(e) => isInPlaylist ? removeFromPlaylist(e, track, pl.id) : addToPlaylist(e, track, pl.id)}>
-                          <span>{pl.title}</span>
-                          {#if isInPlaylist}
-                            <Check size={16} class="text-primary" />
-                          {/if}
-                        </button>
-                      {/each}
-                    {:else}
-                      <div class="w-full text-left px-4 py-3 text-xs text-neutral-500 italic">
-                        Нет плейлистов
-                      </div>
-                    {/if}
-                  </div>
-                </div>
+                {/if}
               </div>
 
+              <!-- Меню «в плейлист». Скрытой разметки на строку больше нет: список плейлистов
+                   собирается только у открытого меню, поэтому и гасить его по `hoveredRow`
+                   незачем — на строку остаётся одна кнопка. -->
+              <PlaylistMenu
+                {track}
+                placement="bottom"
+                align="right"
+                buttonClass="opacity-0 group-hover:opacity-100 p-2 text-neutral-400 hover:text-white rounded-full transition-all mr-2"
+              />
 
               <button 
                 class="opacity-0 group-hover:opacity-100 p-3 hover:bg-red-500/20 hover:text-red-400 text-neutral-500 rounded-full transition-all mr-2"
@@ -514,43 +642,59 @@
       
     {:else if activeTab === 'artists'}
       {#if groupedArtists.length === 0}
-        <div class="w-full h-[300px] flex flex-col items-center justify-center text-neutral-400 glass-panel rounded-3xl p-8 text-center gap-4">
-          <User size={56} class="opacity-50 drop-shadow-lg" />
-          <h3 class="text-xl font-bold text-white">Тут пока нет артистов</h3>
-          <p class="text-neutral-400 text-lg">Лайкайте треки, чтобы артисты появились здесь!</p>
+        <div class="w-full py-20 px-10 flex flex-col items-start plate">
+          <User size={26} class="mb-5 text-white/20" />
+          <p class="display-title">Артисты соберутся сами</p>
+          <p class="empty-hint">Как только полайкаешь несколько треков, они сгруппируются здесь по исполнителям.</p>
         </div>
       {:else}
-        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 p-2">
-          {#each groupedArtists as artist}
+        <div class="track-collection grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 p-2">
+          {#each visibleArtists as artist}
             <!-- svelte-ignore a11y-click-events-have-key-events -->
             <!-- svelte-ignore a11y-no-static-element-interactions -->
             <div 
-              class="glass-button p-4 rounded-2xl flex flex-col items-center gap-3 text-center cursor-pointer hover:-translate-y-1 transition-transform group"
-              on:click={() => { currentArtist.set(artist.name); currentView.set('artist'); }}
+              class="glass-button p-4 rounded-2xl flex flex-col items-center gap-3 text-center cursor-pointer group"
+              on:click={() => goToArtist(artist.name)}
             >
-              <div class="w-16 h-16 rounded-full bg-neutral-800 flex items-center justify-center shadow-lg overflow-hidden group-hover:shadow-[0_0_20px_var(--color-primary)] transition-shadow">
-                {#if artist.avatarUrl}
-                  <img src={artist.avatarUrl} alt={artist.name} class="w-full h-full object-cover" />
-                {:else}
-                  <User size={24} class="text-neutral-400 group-hover:text-primary transition-colors" />
-                {/if}
+              <!-- Свечение аватара — отдельный слой-сосед, а не `box-shadow` по ховеру.
+                   `transition-shadow` перерисовывает тень каждый кадр перехода, а внутрь
+                   самого аватара её не спрятать: у него `overflow: hidden` под обложку.
+                   Слой лежит ровно по кругу аватара, отрисован заранее и проявляется
+                   одной `opacity`. -->
+              <div class="relative w-16 h-16">
+                <div
+                  class="absolute inset-0 rounded-full shadow-[0_0_20px_var(--color-primary)] opacity-0 group-hover:opacity-100 transition-opacity"
+                  aria-hidden="true"
+                ></div>
+                <div class="relative w-16 h-16 rounded-full bg-neutral-800 flex items-center justify-center shadow-lg overflow-hidden">
+                  {#if artist.avatarUrl}
+                    <img src={artist.avatarUrl} alt={artist.name} class="w-full h-full object-cover" loading="lazy" decoding="async" />
+                  {:else}
+                    <User size={24} class="text-neutral-400 group-hover:text-primary transition-colors" />
+                  {/if}
+                </div>
               </div>
               <div>
-                <div class="font-bold text-white truncate w-full max-w-[100px]"><ArtistTag artist={artist.name} /></div>
-                <div class="text-[11px] text-neutral-400 mt-1">{artist.count} треков</div>
+                <div class="font-bold text-white w-full max-w-[100px] min-w-0"><ArtistTag artist={artist.name} /></div>
+                <div class="text-[11px] text-neutral-400 mt-1">{withCount(artist.count, 'трек', 'трека', 'треков')}</div>
               </div>
+
+              <!-- Блик проходит по всей карточке, поэтому его носитель — накладка во всю
+                   карточку, а не сама карточка: `overflow: hidden` на `.glass-button`
+                   срезал бы её свечение наведения, которое рисуется снаружи рамки. -->
+              <div class="sheen-art sheen-overlay" aria-hidden="true"></div>
             </div>
           {/each}
         </div>
       {/if}
 
     {:else if activeTab === 'playlists'}
-      <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 p-2">
+      <div class="track-collection grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 p-2">
         <!-- Create Playlist Tile -->
         <!-- svelte-ignore a11y-click-events-have-key-events -->
         <!-- svelte-ignore a11y-no-static-element-interactions -->
         <div 
-          class="glass-button p-4 rounded-2xl flex flex-col items-center justify-center gap-3 text-center cursor-pointer hover:-translate-y-1 transition-transform group min-h-[200px] border border-dashed border-white/20 hover:border-primary/50 bg-black/20"
+          class="glass-button p-4 rounded-2xl flex flex-col items-center justify-center gap-3 text-center cursor-pointer group min-h-[200px] border border-dashed border-white/20 hover:border-primary/50 bg-black/20"
           on:click={() => {
             newPlaylistName = '';
             showCreatePlaylistModal = true;
@@ -560,6 +704,8 @@
             <Plus size={32} class="text-neutral-400 group-hover:text-primary transition-colors" />
           </div>
           <div class="font-bold text-neutral-300 mt-2">Новый плейлист</div>
+
+          <div class="sheen-art sheen-overlay" aria-hidden="true"></div>
         </div>
 
         <!-- Playlist Tiles -->
@@ -580,7 +726,12 @@
             }}
           >
             <!-- Cover -->
-            <div class="w-full aspect-square min-w-[3rem] min-h-[3rem] rounded-xl overflow-hidden shadow-lg relative bg-neutral-800 mb-3 border border-white/5 group-hover:border-primary/30 transition-all duration-300 group-hover:-translate-y-1">
+            <!-- `spec-art` — глянцевая поверхность: по ней ходит отражение света, положение
+                 которого считается из наклона (`$lib/utils/tilt`). Бегущей полосы здесь нет
+                 намеренно — один блик на поверхность. Свой `-translate-y-1` снят: карточка
+                 уже поднимается целиком через `interactive-item`, и два подъёма складывались
+                 в 8px. -->
+            <div class="w-full aspect-square min-w-[3rem] min-h-[3rem] rounded-xl overflow-hidden shadow-lg relative bg-neutral-800 mb-3 border border-white/5 transition-colors duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] spec-art art-glow">
               {#if pl.tracks && pl.tracks.length > 0 && pl.tracks[0].coverUrl}
                 <img src={pl.tracks[0].coverUrl} alt="Cover" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
               {:else}
@@ -613,9 +764,14 @@
                 </button>
               </div>
 
-              <!-- Delete Button -->
-              <button 
+              <!-- Delete Button
+                   Срабатывает на отпускании (`data-press-late`), в отличие от остальных кнопок.
+                   Плейлист удаляется молча — ни подтверждения, ни отмены, — а кнопка сидит в углу
+                   карточки и появляется по наведению, то есть под курсором оказывается сама.
+                   Отпускание оставляет путь назад: увёл курсор — ничего не произошло. -->
+              <button
                 class="absolute top-2 right-2 p-1.5 bg-black/50 hover:bg-red-500/80 text-white rounded-full opacity-0 group-hover:opacity-100 transition-all"
+                data-press-late
                 on:click|stopPropagation={(e) => deletePlaylist(e, pl.id)}
               >
                 <Trash2 size={14} />
@@ -625,7 +781,7 @@
             <!-- Metadata -->
             <div class="px-1 relative">
               <div class="font-bold text-[14px] text-white truncate">{pl.title}</div>
-              <div class="text-neutral-400 text-[12px] mt-0.5">{pl.tracks?.length || 0} треков</div>
+              <div class="text-neutral-400 text-[12px] mt-0.5">{withCount(pl.tracks?.length || 0, 'трек', 'трека', 'треков')}</div>
             </div>
           </div>
         {/each}
@@ -640,7 +796,7 @@
               <X size={24} />
             </button>
             <div class="flex items-center justify-between mb-6 mt-2">
-              <h2 class="text-2xl font-bold text-white flex items-center gap-3 pr-8">
+              <h2 class="section-title flex items-center gap-3 pr-8">
                 <ListMusic class="text-primary" /> {pl.title}
               </h2>
               <button 
@@ -678,22 +834,13 @@
                   <!-- svelte-ignore a11y-click-events-have-key-events -->
                   <!-- svelte-ignore a11y-no-static-element-interactions -->
                   <div 
-                    class="flex items-center gap-4 group/track cursor-pointer rounded-xl p-2 transition-all hover:-translate-y-1 hover:shadow-lg w-full {isActive ? 'bg-primary/10 border border-primary/20' : 'hover:bg-white/5'}"
+                    class="flex items-center gap-4 group/track cursor-pointer rounded-xl p-2 transition-colors w-full interactive-item {isActive ? 'bg-primary/10 border border-primary/20' : 'hover:bg-white/5'}"
                     on:click={() => playTrackList(track, pl.tracks)}
                   >
-                    <div class="w-6 text-right text-[11px] font-mono text-white/30 group-hover/track:hidden">
-                      {#if isActive && $isPlaying}
-                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-primary ml-auto"><path d="M3 18v-6a9 9 0 0 1 18 0v6"></path><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path></svg>
-                      {:else}
-                        {i + 1}
-                      {/if}
-                    </div>
-                    <div class="w-6 text-right hidden group-hover/track:block text-white/50">
-                      <Play size={14} fill="currentColor" class="ml-auto" />
-                    </div>
+                    <TrackStatus index={i} {isActive} playing={$isPlaying} />
                     <div class="relative w-12 h-12 min-w-[3rem] min-h-[3rem] aspect-square shadow-sm rounded-lg overflow-hidden shrink-0 bg-neutral-800">
                       {#if track.coverUrl}
-                        <img src={track.coverUrl} alt="Cover" class="w-full h-full object-cover" />
+                        <img src={track.coverUrl} alt="Cover" class="w-full h-full object-cover" loading="lazy" decoding="async" />
                       {:else}
                         <div class="w-full h-full flex items-center justify-center text-neutral-500">
                           <Music size={20} />
@@ -707,10 +854,13 @@
                           <Check size={14} class="text-primary inline-block ml-2 mb-0.5" />
                         {/if}
                       </span>
-                      <span class="text-neutral-400 text-[12px] mt-0.5 truncate"><ArtistTag artist={track.artist} /></span>
+                      <span class="text-neutral-400 text-[12px] mt-0.5 min-w-0"><ArtistTag artist={track.artist} artists={track.artists} /></span>
                     </div>
-                    <button 
+                    <!-- Тоже на отпускании: трек вылетает из плейлиста без подтверждения, а кнопка
+                         лежит в конце строки, по которой ведут курсором. -->
+                    <button
                       class="opacity-0 group-hover/track:opacity-100 p-2 hover:bg-white/10 text-neutral-500 rounded-full transition-all mr-2"
+                      data-press-late
                       on:click|stopPropagation={(e) => removeFromPlaylist(e, track, pl.id)}
                       aria-label="Убрать из плейлиста"
                     >
@@ -724,7 +874,8 @@
         {/if}
       {/if}
     {/if}
-  </div>
+    </div>
+  {/key}
 </div>
 
 {#if activePreviewPlaylist}
@@ -739,12 +890,12 @@
       <button class="absolute top-4 right-4 p-2 rounded-full bg-white/5 hover:bg-white/10 text-white transition-colors" on:click={() => showCreatePlaylistModal = false}>
         <X size={20} />
       </button>
-      <h2 class="text-xl font-bold text-white mb-4">Новый плейлист</h2>
+      <h2 class="section-title mb-4">Новый плейлист</h2>
       <!-- svelte-ignore a11y-autofocus -->
       <input 
         type="text" 
         bind:value={newPlaylistName} 
-        placeholder="Введите название..." 
+        placeholder="Как назовём?" 
         class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-neutral-500 focus:outline-none focus:border-primary mb-6 transition-colors"
         on:keydown={(e) => e.key === 'Enter' && handleCreatePlaylistSubmit()}
         autofocus
