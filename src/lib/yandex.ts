@@ -492,6 +492,14 @@ function ymCover(uri: string | null | undefined, size = '400x400'): string {
   return sized.startsWith('http') ? sized : `https://${sized}`;
 }
 
+function normalizeLyricsLanguage(value: unknown): string {
+  const raw = `${value ?? ''}`.trim().toLocaleLowerCase('ru-RU').replace(/_/g, '-');
+  if (!raw) return '';
+  if (raw === 'ru' || raw.startsWith('ru-') || raw.startsWith('rus') || raw.startsWith('рус')) return 'ru';
+  if (raw === 'en' || raw.startsWith('en-') || raw.startsWith('eng') || raw.startsWith('англ')) return 'en';
+  return raw.split('-')[0] || 'other';
+}
+
 /**
  * Порт `normalizovat_track`. Возвращает трек в том же виде, что `searchSoundCloud` — иначе
  * плеер, полки, лайки и кэш пришлось бы учить второму формату. `null` — карточка, которой
@@ -526,6 +534,26 @@ export function mapYandexTrack(raw: any): any | null {
 
   const baseTitle = (t.title ?? '').trim() || 'Без названия';
   const title = t.version ? `${baseTitle} (${t.version})` : baseTitle;
+  const lyricsInfo = t.lyricsInfo && typeof t.lyricsInfo === 'object' ? t.lyricsInfo : null;
+  const lyricsFlags = lyricsInfo
+    ? [
+        lyricsInfo.hasAvailableSyncLyrics,
+        lyricsInfo.hasAvailableTextLyrics,
+        lyricsInfo.hasAvailableLyrics
+      ].filter((value) => typeof value === 'boolean')
+    : [];
+  const lyricsAvailable = lyricsFlags.length > 0
+    ? lyricsFlags.some(Boolean)
+    : typeof t.hasLyrics === 'boolean'
+      ? t.hasLyrics
+      : undefined;
+  const lyricsLanguage = normalizeLyricsLanguage(
+    lyricsInfo?.language ??
+    lyricsInfo?.languageCode ??
+    t.lyricsLanguage ??
+    t.language ??
+    album?.language
+  );
 
   return {
     id: `${id}`,
@@ -547,12 +575,8 @@ export function mapYandexTrack(raw: any): any | null {
     genres,
     // Rotor и поиск отдают один и тот же `lyricsInfo`. Храним сам факт наличия текста,
     // чтобы фильтр волны не делал отдельный сетевой запрос для каждого кандидата.
-    lyricsAvailable: Boolean(
-      t.lyricsInfo?.hasAvailableSyncLyrics ||
-      t.lyricsInfo?.hasAvailableTextLyrics ||
-      t.lyricsInfo?.hasAvailableLyrics ||
-      t.hasLyrics
-    ),
+    lyricsAvailable,
+    lyricsLanguage: lyricsLanguage || undefined,
     // `null`, а не ноль. Счётчиков прослушиваний и лайков по трекам API Музыки не отдаёт
     // вовсе, а ноль — это утверждение «трек не слушали ни разу», и интерфейс честно его
     // печатал: «Прослушиваний SC: 0» на треке из Яндекса. Интерфейс проверяет `!= null` и с

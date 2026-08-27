@@ -426,7 +426,19 @@
     $settings.theme = theme;
   }
 
-  type FontId = 'inter' | 'manrope' | 'onest' | 'golos' | 'playfair' | 'unbounded';
+  type FontId =
+    | 'inter'
+    | 'manrope'
+    | 'onest'
+    | 'golos'
+    | 'playfair'
+    | 'unbounded'
+    | 'caveat'
+    | 'comfortaa'
+    | 'cormorant'
+    | 'jost'
+    | 'raleway'
+    | 'rubik';
   const lyricsFonts: { id: FontId; name: string; hint: string; family: string }[] = [
     {
       id: 'inter',
@@ -463,6 +475,42 @@
       name: 'Unbounded',
       hint: 'Широкий футуристичный гротеск',
       family: "'Unbounded Variable', 'Segoe UI', sans-serif"
+    },
+    {
+      id: 'caveat',
+      name: 'Caveat',
+      hint: 'Живой рукописный почерк',
+      family: "'Caveat Variable', 'Segoe Print', cursive"
+    },
+    {
+      id: 'comfortaa',
+      name: 'Comfortaa',
+      hint: 'Округлый и дружелюбный',
+      family: "'Comfortaa Variable', 'Segoe UI', sans-serif"
+    },
+    {
+      id: 'cormorant',
+      name: 'Cormorant Garamond',
+      hint: 'Лиричная журнальная антиква',
+      family: "'Cormorant Garamond Variable', Georgia, serif"
+    },
+    {
+      id: 'jost',
+      name: 'Jost',
+      hint: 'Чистый геометричный ритм',
+      family: "'Jost Variable', 'Segoe UI', sans-serif"
+    },
+    {
+      id: 'raleway',
+      name: 'Raleway',
+      hint: 'Тонкий и музыкальный характер',
+      family: "'Raleway Variable', 'Segoe UI', sans-serif"
+    },
+    {
+      id: 'rubik',
+      name: 'Rubik',
+      hint: 'Мягкий современный гротеск',
+      family: "'Rubik Variable', 'Segoe UI', sans-serif"
     }
   ];
 
@@ -506,7 +554,7 @@
   }
 </script>
 
-<div class="max-w-3xl mx-auto py-8 perspective-[1000px]">
+<div class="max-w-3xl mx-auto py-8">
   <h2 class="page-title mb-5">Настройки</h2>
 
   <div class="settings-tabs-shell">
@@ -685,16 +733,16 @@
 
           <div class="setting-row mt-3">
             <div class="flex-1 min-w-0">
-              <div class="setting-title">Стиль волны</div>
+              <div class="setting-title">Стиль тусни</div>
               <div class="setting-hint">
-                Как «Моя волна» на главной реагирует на музыку: сглаженное дыхание или живой ритм.
+                Как «Моя тусня» на главной реагирует на музыку: сглаженное дыхание или живой ритм.
               </div>
             </div>
             <div
               class="seg-control"
               style="--seg-count: 2; --seg-index: {$settings.waveStyle === 'pulse' ? 1 : 0}"
               role="radiogroup"
-              aria-label="Стиль волны"
+              aria-label="Стиль тусни"
             >
               <span class="seg-pill" aria-hidden="true"></span>
               <button
@@ -820,8 +868,8 @@
           <h3 class="section-title">Движение под курсором</h3>
           <p class="empty-hint !mt-1.5 !max-w-[54ch] mb-6">
             Выключенный эффект не «анимируется в ноль», а не выполняется вовсе: ни расчётов
-            на кадр, ни отдельного слоя на видеокарте под него. При системной настройке
-            «меньше движения» все четыре отключаются сами, независимо от этих тумблеров.
+            на кадр, ни отдельного слоя на видеокарте под него. В режиме производительности
+            все четыре отключаются сами, независимо от этих тумблеров.
           </p>
 
           <div class="flex flex-col gap-3">

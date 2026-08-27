@@ -4,5 +4,5 @@
  * thinks to look when cutting a release.
  */
 export const APP_NAME = 'LomifyNEXT';
-export const APP_VERSION = '9.2.0';
-export const APP_CHANNEL = 'нестабильная сборка';
+export const APP_VERSION = '9.2.5';
+export const APP_CHANNEL = 'почти стабильная';

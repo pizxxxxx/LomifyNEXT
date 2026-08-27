@@ -30,6 +30,7 @@
 
   let localTracks: any[] = [];
   let cachedUrns = new Set<string>();
+  let removingCachedUrns = new Set<string>();
   let expandedPlaylist: string | null = null;
   let activePreviewPlaylist: any = null;
 
@@ -182,14 +183,23 @@
     growRows();
 
     const handleCacheCleared = () => {
-      cachedUrns.clear();
-      cachedUrns = cachedUrns;
+      cachedUrns = new Set();
+    };
+    const handleTrackCacheChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ urn?: string; cached?: boolean }>).detail;
+      if (!detail?.urn) return;
+      const next = new Set(cachedUrns);
+      if (detail.cached) next.add(detail.urn);
+      else next.delete(detail.urn);
+      cachedUrns = next;
     };
     window.addEventListener('cacheCleared', handleCacheCleared);
+    window.addEventListener('trackCacheChanged', handleTrackCacheChanged);
     window.addEventListener('pointerdown', onTrackMenuPointerDown, true);
     window.addEventListener('keydown', onTrackMenuKeydown);
     return () => {
       window.removeEventListener('cacheCleared', handleCacheCleared);
+      window.removeEventListener('trackCacheChanged', handleTrackCacheChanged);
       window.removeEventListener('pointerdown', onTrackMenuPointerDown, true);
       window.removeEventListener('keydown', onTrackMenuKeydown);
     };
@@ -219,6 +229,14 @@
   // Svelte перерисовал строки, когда пополнился набор скачанного.
   function isTrackCached(track: any, _cache?: Set<string>) {
     return cachedUrns.has(trackUrn(track));
+  }
+
+  function isRemovingCachedTrack(track: any) {
+    return removingCachedUrns.has(trackUrn(track));
+  }
+
+  function publishTrackCacheState(urn: string, cached: boolean) {
+    window.dispatchEvent(new CustomEvent('trackCacheChanged', { detail: { urn, cached } }));
   }
 
   import { open } from '@tauri-apps/plugin-dialog';
@@ -368,8 +386,7 @@
         throw new Error("No audio URL found");
       }
       
-      const trackIdStr = track.id ? track.id : `${track.title}-${track.artist}`;
-      const urn = `lomify:${track.source}:${trackIdStr}`.replace(/[^a-zA-Z0-9а-яА-ЯёЁ:-]/g, '');
+      const urn = trackUrn(track);
       const request = {
         urn,
         url,
@@ -379,14 +396,39 @@
       };
 
       await invoke('track_ensure_cached', { request });
-      cachedUrns.add(urn);
-      cachedUrns = cachedUrns; // trigger reactivity
+      publishTrackCacheState(urn, true);
       if (e) notify(`«${track.title}» на диске`, 'success');
       return true;
     } catch (err) {
       console.error(err);
       if (e) notify(`Не смог скачать «${track.title}»`, 'error');
       return false;
+    }
+  }
+
+  /** Удаляет только сохранённый звук и его служебные метаданные. Сам трек остаётся в
+      лайках/плейлисте и сразу снова получает действие «Скачать». */
+  async function removeDownloadedTrack(e: Event, track: any) {
+    e.stopPropagation();
+    const urn = trackUrn(track);
+    if (removingCachedUrns.has(urn)) return;
+
+    removingCachedUrns = new Set(removingCachedUrns).add(urn);
+    try {
+      const removed = await invoke<boolean>('track_remove_cached', { urn });
+      const stillCached = await invoke<boolean>('track_is_cached', { urn });
+      if (!removed && stillCached) {
+        throw new Error('cache file is still in use');
+      }
+      publishTrackCacheState(urn, false);
+      notify(`Удалил «${track.title}» с диска`, 'info');
+    } catch (err) {
+      console.error('Could not remove cached track', err);
+      notify(`Не смог удалить «${track.title}» — возможно, файл сейчас используется`, 'error');
+    } finally {
+      const next = new Set(removingCachedUrns);
+      next.delete(urn);
+      removingCachedUrns = next;
     }
   }
 
@@ -419,7 +461,7 @@
     }
   }
 
-  $: isAllLikedCached = $likedTracks.length > 0 && $likedTracks.every(track => isTrackCached(track));
+  $: isAllLikedCached = $likedTracks.length > 0 && $likedTracks.every(track => isTrackCached(track, cachedUrns));
 
   function isAllPlaylistCached(tracks: any[]) {
     if (!tracks || tracks.length === 0) return false;
@@ -661,9 +703,22 @@
                     <Download size={18} />
                   </button>
                 {:else}
-                  <div class="track-row-action is-saved" title="Скачан">
-                    <Check size={18} />
-                  </div>
+                  <button
+                    type="button"
+                    class="track-row-action is-saved cache-state-control"
+                    class:is-busy={isRemovingCachedTrack(track)}
+                    on:click|stopPropagation={(e) => removeDownloadedTrack(e, track)}
+                    aria-label={`Удалить скачанный файл «${track.title}»`}
+                    title="Удалить скачанный файл"
+                    disabled={isRemovingCachedTrack(track)}
+                  >
+                    {#if isRemovingCachedTrack(track)}
+                      <Loader2 size={17} class="animate-spin" />
+                    {:else}
+                      <span class="cache-state-saved"><Check size={18} /></span>
+                      <span class="cache-state-remove"><Trash2 size={17} /></span>
+                    {/if}
+                  </button>
                 {/if}
 
                 <!-- Информация и плейлисты управляются одним состоянием. Поэтому открытие
@@ -759,15 +814,19 @@
                         aria-label={isActive && $isPlaying ? `Поставить «${track.title}» на паузу` : `Воспроизвести «${track.title}»`}
                         on:click={(e) => toggleTrackPlayback(e, track, $likedTracks)}
                       >
-                        <MorphIcon
-                          icon={isActive && $isPlaying ? PauseIcon : PlayIcon}
-                          size={20}
-                          strokeWidth={2.3}
-                          fill="currentColor"
-                          class="play-pause-morph"
-                          spring="snappy"
-                          reducedMotion="user"
-                        />
+                        {#if isActive}
+                          <MorphIcon
+                            icon={$isPlaying ? PauseIcon : PlayIcon}
+                            size={20}
+                            strokeWidth={2.3}
+                            fill="currentColor"
+                            class="play-pause-morph"
+                            spring="snappy"
+                            reducedMotion="user"
+                          />
+                        {:else}
+                          <Play fill="currentColor" size={20} />
+                        {/if}
                       </button>
                     </div>
                   </div>
@@ -790,9 +849,22 @@
                         <Download size={16} />
                       </button>
                     {:else}
-                      <span class="library-tile-action is-saved" title="Скачан">
-                        <Check size={16} />
-                      </span>
+                      <button
+                        type="button"
+                        class="library-tile-action is-saved cache-state-control"
+                        class:is-busy={isRemovingCachedTrack(track)}
+                        aria-label={`Удалить скачанный файл «${track.title}»`}
+                        title="Удалить скачанный файл"
+                        disabled={isRemovingCachedTrack(track)}
+                        on:click|stopPropagation={(e) => removeDownloadedTrack(e, track)}
+                      >
+                        {#if isRemovingCachedTrack(track)}
+                          <Loader2 size={15} class="animate-spin" />
+                        {:else}
+                          <span class="cache-state-saved"><Check size={16} /></span>
+                          <span class="cache-state-remove"><Trash2 size={15} /></span>
+                        {/if}
+                      </button>
                     {/if}
 
                     <button
@@ -1078,6 +1150,25 @@
                       </span>
                       <span class="text-neutral-400 text-[12px] mt-0.5 min-w-0"><ArtistTag artist={track.artist} artists={track.artists} /></span>
                     </div>
+                    {#if isTrackCached(track, cachedUrns)}
+                      <button
+                        type="button"
+                        class="cache-state-control playlist-cache-action opacity-0 group-hover/track:opacity-100 p-2 text-primary rounded-full transition-all"
+                        class:is-busy={isRemovingCachedTrack(track)}
+                        data-press-late
+                        on:click|stopPropagation={(e) => removeDownloadedTrack(e, track)}
+                        aria-label={`Удалить скачанный файл «${track.title}»`}
+                        title="Удалить скачанный файл"
+                        disabled={isRemovingCachedTrack(track)}
+                      >
+                        {#if isRemovingCachedTrack(track)}
+                          <Loader2 size={16} class="animate-spin" />
+                        {:else}
+                          <span class="cache-state-saved"><Check size={16} /></span>
+                          <span class="cache-state-remove"><Trash2 size={15} /></span>
+                        {/if}
+                      </button>
+                    {/if}
                     <!-- Тоже на отпускании: трек вылетает из плейлиста без подтверждения, а кнопка
                          лежит в конце строки, по которой ведут курсором. -->
                     <button

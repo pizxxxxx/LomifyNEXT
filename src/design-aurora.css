@@ -87,9 +87,8 @@ html body[data-design="aurora"] {
      нарочно не переопределяются — проход привязан по времени к подъёму карточки, а он у обоих
      дизайнов один.
 
-     0.25 против базовых 0.18 потому, что стекло Aurora темнее и контрастнее: на нём базовая
-     полоса почти не читается. */
-  --sheen-alpha: 0.25;
+     В Aurora значение немного выше базового, потому что её стекло темнее и контрастнее. */
+  --sheen-alpha: 0.14;
 
   /* Отражение на обложке — по той же причине сильнее базового: обложка в Aurora сидит на
      угольном стекле с высоким контрастом, и мягкая лента на 0.3 белого на ней тонет. */
@@ -893,13 +892,48 @@ body[data-design="aurora"] .tile-art {
   border-radius: var(--aurora-r-tile);
   border-color: rgba(255, 255, 255, 0.07);
   box-shadow: 0 14px 30px -18px rgba(0, 0, 0, 0.95);
-  backdrop-filter: blur(var(--aurora-blur-xs));
-  -webkit-backdrop-filter: blur(var(--aurora-blur-xs));
+  /* Обложка полностью закрыта непрозрачным изображением, поэтому размытие материала под
+     ней не видно. При 3D-наклоне WebView всё равно пересобирал backdrop на каждом кадре —
+     дорогой проход без единого видимого пикселя. Фон-заглушка и стеклянная кромка остаются. */
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 body[data-design="aurora"] .tile-art::before {
   box-shadow: inset 0 10px 22px -12px rgba(255, 255, 255, 0.22),
               inset 0 0 30px -6px color-mix(in srgb, var(--color-primary) 42%, transparent);
+}
+
+/* Верхние действия полноэкранного режима — тот же плотный материал Aurora, что у боковой
+   панели и поповеров. Геометрия остаётся общей, дизайн меняет только свет и глубину. */
+body[data-design="aurora"] .fs-top-actions {
+  border-color: rgba(255, 255, 255, 0.105);
+  background: linear-gradient(165deg, rgba(24, 24, 36, 0.78), rgba(7, 7, 12, 0.72));
+  box-shadow: 0 22px 52px -28px rgba(0, 0, 0, 1),
+              inset 0 1px 0 rgba(255, 255, 255, 0.09);
+  backdrop-filter: blur(var(--aurora-blur-md)) saturate(1.35);
+  -webkit-backdrop-filter: blur(var(--aurora-blur-md)) saturate(1.35);
+}
+
+body[data-design="aurora"] .fs-top-action {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+body[data-design="aurora"] .fs-top-action.is-active {
+  border-color: color-mix(in srgb, var(--color-primary) 34%, rgba(255, 255, 255, 0.08));
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--color-primary) 18%, rgba(255, 255, 255, 0.065)),
+    color-mix(in srgb, var(--color-primary) 9%, rgba(255, 255, 255, 0.025))
+  );
+}
+
+body[data-design="aurora"] .fs-settings-pop {
+  border-color: var(--aurora-edge);
+  background: rgba(7, 7, 12, 0.88);
+  box-shadow: var(--aurora-lift-hi), inset 0 1px 0 rgba(255, 255, 255, 0.065);
+  backdrop-filter: blur(var(--aurora-blur-md)) saturate(1.4);
+  -webkit-backdrop-filter: blur(var(--aurora-blur-md)) saturate(1.4);
 }
 
 /* Отражение по обложке живёт в app.css — `.spec-art::after`, положение считает
@@ -931,6 +965,16 @@ body[data-design="aurora"] .library-view-toggle,
 body[data-design="aurora"] .library-tile-actions {
   border-color: var(--aurora-edge);
   background-color: rgba(8, 8, 12, 0.66);
+}
+
+body[data-design="aurora"] .library-view-toggle {
+  border-color: transparent;
+  background-color: transparent;
+}
+
+body[data-design="aurora"] .library-view-toggle:hover {
+  border-color: rgba(255, 255, 255, 0.055);
+  background-color: rgba(255, 255, 255, 0.045);
 }
 
 body[data-design="aurora"] .tile-sub {

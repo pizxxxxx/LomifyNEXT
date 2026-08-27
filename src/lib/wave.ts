@@ -51,8 +51,8 @@ let startedId = '';
 const REFILL_AT = 2;
 
 /** При активном фильтре просматриваем несколько порций, пока не наберётся очередь. */
-const FILTER_SCAN_BATCHES = 12;
-const FILTER_TARGET_TRACKS = 8;
+const FILTER_SCAN_BATCHES = 18;
+const FILTER_TARGET_TRACKS = 10;
 const MAX_TRACK_OCCURRENCES = 2;
 
 /** Сколько раз трек уже попадал в очередь текущего сеанса волны. */

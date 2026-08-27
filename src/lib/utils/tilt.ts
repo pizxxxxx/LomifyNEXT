@@ -73,8 +73,10 @@
  * Один делегированный слушатель на окно (карточек в полках сотни, они постоянно
  * создаются и уничтожаются), одна запись стилей за кадр и ровно на один элемент —
  * обёртку. Все величины уезжают в CSS-переменные, а они наследуются, поэтому слой обложки
- * читает их сам, без второй записи. `getBoundingClientRect` вызывается один раз на вход в
- * карточку, а не на каждое движение мыши.
+ * читает их сам, без второй записи. Одинаковые округлённые значения повторно в DOM не
+ * пишутся, поэтому блик остаётся плавным на 60 кадрах, но не инвалидирует стили в кадрах,
+ * где округлённая позиция фактически не изменилась. `getBoundingClientRect` вызывается один
+ * раз на вход в карточку, а не на каждое движение мыши.
  *
  * Атрибут `data-tilt` ставится на время движения и снимается, когда пружина успокоилась.
  * Это не косметика: постоянный `transform` на всех обложках держал бы шесть десятков
@@ -142,6 +144,13 @@ const STEP = 1 / 120;
 /** Потолок кадра: после сворачивания окна `now` прыгает на минуты, dt надо обрезать. */
 const MAX_DT = 1 / 30;
 
+/**
+ * Градиенты блика требуют paint, но на 30 Гц их движение ощущается менее связанным с
+ * 60-герцовым наклоном. Оставляем одинаковую частоту; нагрузку снимают дедупликация записей,
+ * локальная область paint и ограничение числа одновременно живых карточек.
+ */
+const GLARE_FRAME_MS = 1000 / 60;
+
 /** Порог покоя: ниже него движение уже не видно, слой можно отпускать. */
 const EPS_POS = 0.01;
 const EPS_VEL = 0.05;
@@ -157,7 +166,9 @@ const VARS = [
   '--tilt-rx',
   '--tilt-ry',
   '--tilt-lift',
-];
+] as const;
+
+type StyleVar = (typeof VARS)[number];
 
 interface Spring {
   /** Текущее значение. */
@@ -187,6 +198,10 @@ interface Card {
   ny: number;
   /** Курсор ещё на карточке. */
   held: boolean;
+  /** Уже записанные округлённые значения — одинаковое значение не инвалидирует стили. */
+  painted: Partial<Record<StyleVar, string>>;
+  /** Время последней перерисовки paint-зависимых градиентов. */
+  glarePaintedAt: number;
 }
 
 function spring(x = 0): Spring {
@@ -230,22 +245,28 @@ function clamp1(v: number): number {
   return v < -1 ? -1 : v > 1 ? 1 : v;
 }
 
-function paint(card: Card) {
-  const style = card.root.style;
+function writeVar(card: Card, name: StyleVar, value: string) {
+  if (card.painted[name] === value) return;
+  card.painted[name] = value;
+  card.root.style.setProperty(name, value);
+}
 
+function paint(card: Card, now: number, forceGlare = false) {
   if (fxTilt) {
-    style.setProperty('--tilt-rx', `${card.rx.x.toFixed(2)}deg`);
-    style.setProperty('--tilt-ry', `${card.ry.x.toFixed(2)}deg`);
-    style.setProperty('--tilt-lift', `${(card.env.x * MAX_LIFT).toFixed(1)}px`);
+    writeVar(card, '--tilt-rx', `${card.rx.x.toFixed(2)}deg`);
+    writeVar(card, '--tilt-ry', `${card.ry.x.toFixed(2)}deg`);
+    writeVar(card, '--tilt-lift', `${(card.env.x * MAX_LIFT).toFixed(1)}px`);
   }
 
   if (!fxGlare) return;
+  if (!forceGlare && now - card.glarePaintedAt < GLARE_FRAME_MS) return;
+  card.glarePaintedAt = now;
 
   // Свечение стекла карточки: диффузная часть того же источника. Обёртка не поворачивается,
   // поэтому пятно просто следует за курсором.
-  style.setProperty('--mouse-x', `${card.gx.x.toFixed(1)}px`);
-  style.setProperty('--mouse-y', `${card.gy.x.toFixed(1)}px`);
-  style.setProperty('--glare', card.env.x.toFixed(3));
+  writeVar(card, '--mouse-x', `${card.gx.x.toFixed(1)}px`);
+  writeVar(card, '--mouse-y', `${card.gy.x.toFixed(1)}px`);
+  writeVar(card, '--glare', card.env.x.toFixed(3));
 
   // Отражение на обложке. Проекция наклона на ось градиента — вывод в заголовке файла:
   // блик едет вправо от положительного `rotateY` и вверх от положительного `rotateX`, то
@@ -268,10 +289,10 @@ function paint(card: Card) {
   const spotX = SPEC_ENTRY_X + card.env.x * (targetX - SPEC_ENTRY_X);
   const spotY = SPEC_ENTRY_Y + card.env.x * (targetY - SPEC_ENTRY_Y);
 
-  style.setProperty('--spec-pos', `${pos.toFixed(2)}%`);
-  style.setProperty('--spec-x', `${spotX.toFixed(2)}%`);
-  style.setProperty('--spec-y', `${spotY.toFixed(2)}%`);
-  style.setProperty('--spec-a', card.env.x.toFixed(3));
+  writeVar(card, '--spec-pos', `${pos.toFixed(2)}%`);
+  writeVar(card, '--spec-x', `${spotX.toFixed(2)}%`);
+  writeVar(card, '--spec-y', `${spotY.toFixed(2)}%`);
+  writeVar(card, '--spec-a', card.env.x.toFixed(3));
 }
 
 function release(card: Card) {
@@ -296,17 +317,19 @@ function tick(now: number) {
   let busy = false;
 
   for (const card of Array.from(live.values())) {
-    advance(card.rx, TILT_K, TILT_C, dt);
-    advance(card.ry, TILT_K, TILT_C, dt);
-    advance(card.gx, GLARE_K, GLARE_C, dt);
-    advance(card.gy, GLARE_K, GLARE_C, dt);
+    if (fxTilt) {
+      advance(card.rx, TILT_K, TILT_C, dt);
+      advance(card.ry, TILT_K, TILT_C, dt);
+    }
+    if (fxGlare) {
+      advance(card.gx, GLARE_K, GLARE_C, dt);
+      advance(card.gy, GLARE_K, GLARE_C, dt);
+    }
     advance(card.env, ENV_K, ENV_C, dt);
 
     const still =
-      settled(card.rx) &&
-      settled(card.ry) &&
-      settled(card.gx) &&
-      settled(card.gy) &&
+      (!fxTilt || (settled(card.rx) && settled(card.ry))) &&
+      (!fxGlare || (settled(card.gx) && settled(card.gy))) &&
       settled(card.env);
 
     // Отпущенная и успокоившаяся карточка отдаёт композитный слой обратно.
@@ -314,7 +337,9 @@ function tick(now: number) {
       release(card);
       continue;
     }
-    paint(card);
+    // Последний кадр пишем принудительно, иначе цикл мог бы остановиться между двумя
+    // обновлениями блика и оставить его чуть ярче конечного значения.
+    paint(card, now, still);
     if (!still) busy = true;
   }
 
@@ -346,6 +371,14 @@ function letGo(card: Card | null) {
   // читалось бы как второе, самостоятельное движение.
   card.gx.to = card.gx.x;
   card.gy.to = card.gy.x;
+
+  // При быстром проходе по сетке раньше каждая задетая карточка ещё ~300 мс держала свой
+  // transform-слой и два перерисовываемых градиента. Оставляем мягкий возврат только у
+  // последней: более старые карточки уже далеко от курсора, их движение не различимо, а
+  // число одновременно живых GPU-слоёв теперь жёстко ограничено двумя.
+  for (const older of Array.from(live.values())) {
+    if (older !== card && !older.held) release(older);
+  }
   wake();
 }
 
@@ -373,6 +406,8 @@ function acquire(root: HTMLElement, x: number, y: number): Card {
     nx: 0,
     ny: 0,
     held: true,
+    painted: {},
+    glarePaintedAt: Number.NEGATIVE_INFINITY,
   };
   measure(card);
   // Блик начинается сразу под курсором, а не в центре: иначе на входе пятно пролетало бы
@@ -412,20 +447,24 @@ function onMouseMove(e: MouseEvent) {
   const card = current!;
   const lx = e.clientX - card.left;
   const ly = e.clientY - card.top;
-  card.gx.to = lx;
-  card.gy.to = ly;
+  if (fxGlare) {
+    card.gx.to = lx;
+    card.gy.to = ly;
+  }
 
-  // Нормируем в [-1, 1] от центра и обрезаем: курсор может оказаться и за боксом обёртки
-  // (например, на всплывающем меню внутри карточки), а угол за пределы кромки уводить
-  // незачем.
-  card.nx = clamp1((lx / card.width) * 2 - 1);
-  card.ny = clamp1((ly / card.height) * 2 - 1);
+  if (fxTilt) {
+    // Нормируем в [-1, 1] от центра и обрезаем: курсор может оказаться и за боксом обёртки
+    // (например, на всплывающем меню внутри карточки), а угол за пределы кромки уводить
+    // незачем.
+    card.nx = clamp1((lx / card.width) * 2 - 1);
+    card.ny = clamp1((ly / card.height) * 2 - 1);
 
-  // Кромка под курсором уходит в глубину — карточку как будто придавливают в этом углу.
-  // Знаки следуют из системы координат CSS: положительный `rotateY` уводит правую кромку
-  // от зрителя, положительный `rotateX` — верхнюю (ось Y направлена вниз), отсюда минус.
-  card.ry.to = card.nx * MAX_TILT;
-  card.rx.to = -card.ny * MAX_TILT;
+    // Кромка под курсором уходит в глубину — карточку как будто придавливают в этом углу.
+    // Знаки следуют из системы координат CSS: положительный `rotateY` уводит правую кромку
+    // от зрителя, положительный `rotateX` — верхнюю (ось Y направлена вниз), отсюда минус.
+    card.ry.to = card.nx * MAX_TILT;
+    card.rx.to = -card.ny * MAX_TILT;
+  }
   card.env.to = 1;
   wake();
 }

@@ -192,41 +192,54 @@
       {/if}
     </div>
     
-    <div class="absolute top-8 right-8 z-50 flex gap-4">
+    <div class="fs-top-actions">
       {#if immersive}
         <!-- В иммерсивной раскладке обложка с включённым текстом уходит за экран — вместе с
              ней уезжает и наведение на неё, которым текст переключали. Без этой кнопки
              состояние было бы необратимым, поэтому здесь она обязательна, а не украшение.
              В панельной раскладке её нет намеренно: там обложка на месте и всё уже работает. -->
         <button
-          class="w-12 h-12 bg-white/10 rounded-full flex items-center justify-center backdrop-blur-md transition-colors {showLyrics ? 'text-primary hover:bg-white/20' : noLyrics ? 'text-white/40 cursor-not-allowed' : 'text-white hover:bg-white/20'}"
+          type="button"
+          class="fs-top-action"
+          class:is-active={showLyrics}
           on:click={toggleLyrics}
           disabled={noLyrics}
           aria-pressed={showLyrics}
           aria-label={lyricsHint}
-          title={lyricsHint}
+          data-label={lyricsHint}
         >
           {#if showLyrics}
-            <AlignCenter size={24} />
+            <AlignCenter size={21} strokeWidth={1.8} />
           {:else if noLyrics}
-            <Ghost size={24} />
+            <Ghost size={21} strokeWidth={1.8} />
           {:else}
-            <AlignLeft size={24} />
+            <AlignLeft size={21} strokeWidth={1.8} />
           {/if}
         </button>
       {/if}
 
-      <div class="relative">
-        <button 
-          class="w-12 h-12 bg-white/10 hover:bg-white/20 rounded-full flex items-center justify-center backdrop-blur-md transition-colors {showSettings ? 'bg-white/20 text-primary' : 'text-white'}"
+      <div class="fs-settings-anchor">
+        <button
+          type="button"
+          class="fs-top-action"
+          class:is-active={showSettings}
           on:click={() => showSettings = !showSettings}
-          aria-label="Settings"
+          aria-label="Настройки полноэкранного режима"
+          aria-expanded={showSettings}
+          aria-controls="fullscreen-settings-pop"
+          data-label="Настройки экрана"
         >
-          <Settings2 size={24} />
+          <Settings2 size={21} strokeWidth={1.8} />
         </button>
         
         {#if showSettings}
-          <div transition:popFade class="absolute top-14 right-0 w-64 bg-black/40 backdrop-blur-xl border border-white/10 rounded-2xl p-5 shadow-2xl flex flex-col gap-6 origin-top-right">
+          <div
+            id="fullscreen-settings-pop"
+            role="dialog"
+            aria-label="Настройки полноэкранного режима"
+            transition:popFade
+            class="fs-settings-pop flex flex-col gap-6 origin-top-right"
+          >
             <!-- Раскладка экрана. Стоит первой: она меняет всё остальное, что здесь есть. -->
             <div class="flex flex-col gap-2">
               <div class="flex flex-col">
@@ -352,12 +365,16 @@
         {/if}
       </div>
 
+      <span class="fs-top-actions-divider" aria-hidden="true"></span>
+
       <button
-        class="w-12 h-12 bg-white/10 hover:bg-white/20 rounded-full flex items-center justify-center backdrop-blur-md transition-colors"
+        type="button"
+        class="fs-top-action fs-top-action-exit"
         on:click={exitOverlay}
-        aria-label="Exit Fullscreen"
+        aria-label="Выйти из полноэкранного режима"
+        data-label="Свернуть экран"
       >
-        <Minimize2 size={24} />
+        <Minimize2 size={21} strokeWidth={1.8} />
       </button>
     </div>
 

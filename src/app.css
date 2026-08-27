@@ -5,6 +5,12 @@
 @import "@fontsource-variable/golos-text";
 @import "@fontsource-variable/playfair-display";
 @import "@fontsource-variable/unbounded";
+@import "@fontsource-variable/caveat";
+@import "@fontsource-variable/comfortaa";
+@import "@fontsource-variable/cormorant-garamond";
+@import "@fontsource-variable/jost";
+@import "@fontsource-variable/raleway";
+@import "@fontsource-variable/rubik";
 @import "./sc-theme.css";
 /* Альтернативный глобальный дизайн. Все его правила висят на `body[data-design="aurora"]`
    (а токены — на `html body[...]`), поэтому по специфичности они всегда перебивают
@@ -25,6 +31,14 @@
   --color-dark-gradient: #1d1d1f;
   --font-ui: 'Inter Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-lyrics: 'Inter Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  --lyrics-size: 30px;
+  --lyrics-plain-size: 24px;
+  --lyrics-weight: 600;
+  --lyrics-plain-weight: 500;
+  --lyrics-leading: 1.34;
+  --lyrics-plain-leading: 1.56;
+  --lyrics-tracking: -0.028em;
+  --lyrics-plain-tracking: -0.022em;
   
   /* Premium Motion Tokens from transitions.dev */
   --duration-stagger:   80ms;
@@ -65,20 +79,19 @@
      проход ничего не знает. На одной поверхности блик один — совмещение двух и читалось
      рябью.
 
-     Скорость привязана к `--duration-hover`, и это не экономия на токене. Проблеск и подъём
-     карточки — один жест: карточка поднимается под курсор за 300 мс, а полоса раньше шла
-     550 мс, то есть продолжала ехать по уже неподвижной плитке — движение распадалось на
-     два. Совпадение времён и делает из них одно событие.
+     Проход короткий и мягкий: он успевает вместе с реакцией карточки и не превращается в
+     сканирующую белую полосу. На уходе свет сначала растворяется, затем незаметно возвращает
+     слой к старту — обратного пробега по карточке нет.
 
      `--sheen-fade` — проявление и гашение на концах пути. Держится заметно меньше самого
      прохода: это его кромки, а не проход. */
   --sheen-angle: 115deg;
-  --sheen-width: 45%;
-  --sheen-skew: -20deg;
-  --sheen-speed: var(--duration-hover);
-  --sheen-fade: 70ms;
+  --sheen-width: 64%;
+  --sheen-skew: -14deg;
+  --sheen-speed: var(--duration-quick);
+  --sheen-fade: 110ms;
   /* Сила полосы. В Aurora стекло темнее и полосе нужно больше, чтобы читаться. */
-  --sheen-alpha: 0.18;
+  --sheen-alpha: 0.105;
 
   /* ── Отражение на обложке ─────────────────────────────────────────────────
      Обложка — глянцевая плоскость, и на ней ровно ОДИН блик: отражение источника света,
@@ -231,10 +244,70 @@ body[data-lyrics-font="golos"] {
 
 body[data-lyrics-font="playfair"] {
   --font-lyrics: 'Playfair Display Variable', Georgia, serif;
+  --lyrics-size: 32px;
+  --lyrics-plain-size: 26px;
+  --lyrics-weight: 560;
+  --lyrics-leading: 1.26;
 }
 
 body[data-lyrics-font="unbounded"] {
   --font-lyrics: 'Unbounded Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  --lyrics-size: 26px;
+  --lyrics-plain-size: 21px;
+  --lyrics-weight: 540;
+  --lyrics-leading: 1.42;
+  --lyrics-tracking: -0.02em;
+}
+
+body[data-lyrics-font="caveat"] {
+  --font-lyrics: 'Caveat Variable', 'Segoe Print', cursive;
+  --lyrics-size: 38px;
+  --lyrics-plain-size: 31px;
+  --lyrics-weight: 590;
+  --lyrics-plain-weight: 540;
+  --lyrics-leading: 1.12;
+  --lyrics-plain-leading: 1.3;
+  --lyrics-tracking: 0.004em;
+  --lyrics-plain-tracking: 0;
+}
+
+body[data-lyrics-font="comfortaa"] {
+  --font-lyrics: 'Comfortaa Variable', 'Segoe UI', sans-serif;
+  --lyrics-size: 28px;
+  --lyrics-plain-size: 22px;
+  --lyrics-weight: 570;
+  --lyrics-leading: 1.4;
+  --lyrics-tracking: -0.02em;
+}
+
+body[data-lyrics-font="cormorant"] {
+  --font-lyrics: 'Cormorant Garamond Variable', Georgia, serif;
+  --lyrics-size: 36px;
+  --lyrics-plain-size: 29px;
+  --lyrics-weight: 610;
+  --lyrics-plain-weight: 560;
+  --lyrics-leading: 1.16;
+  --lyrics-plain-leading: 1.34;
+  --lyrics-tracking: -0.018em;
+}
+
+body[data-lyrics-font="jost"] {
+  --font-lyrics: 'Jost Variable', 'Segoe UI', sans-serif;
+  --lyrics-size: 31px;
+  --lyrics-plain-size: 25px;
+  --lyrics-weight: 570;
+}
+
+body[data-lyrics-font="raleway"] {
+  --font-lyrics: 'Raleway Variable', 'Segoe UI', sans-serif;
+  --lyrics-weight: 570;
+  --lyrics-tracking: -0.018em;
+}
+
+body[data-lyrics-font="rubik"] {
+  --font-lyrics: 'Rubik Variable', 'Segoe UI', sans-serif;
+  --lyrics-weight: 560;
+  --lyrics-tracking: -0.02em;
 }
 
 [data-theme="toxic-sludge"] {
@@ -312,9 +385,11 @@ html, body {
   user-select: none;
   font-family: var(--font-ui);
   -webkit-font-smoothing: antialiased;
-  /* Both follow the accent, so a track change carries them along together. */
-  transition: background-color var(--duration-very-slow) var(--ease-smooth-out),
-              --color-primary var(--duration-very-slow) var(--ease-smooth-out);
+  /* `--color-primary` — наследуемое свойство. Его прежняя анимация заставляла каждую
+     карточку в плотной сетке пересчитывать `color-mix()` каждый кадр почти секунду после
+     запуска трека. Акцент теперь меняется одним пересчётом, а плавно дышит только дешёвый
+     фон самого окна. */
+  transition: background-color var(--duration-very-slow) var(--ease-smooth-out);
 }
 
 /* ── Text selection ──────────────────────────────────────────────────────────
@@ -2202,10 +2277,10 @@ body[data-design="aurora"] .track-row-card > .track-status {
      `padding-bottom` also guarantees the glow and the descenders of the last line are
      never clipped by the container's scroll mask. */
   padding: 9px 0 12px;
-  line-height: 1.34;
-  font-size: 30px;
-  font-weight: 600;
-  letter-spacing: -0.028em;
+  line-height: var(--lyrics-leading);
+  font-size: var(--lyrics-size);
+  font-weight: var(--lyrics-weight);
+  letter-spacing: var(--lyrics-tracking);
   color: rgba(255, 255, 255, 0.26);
   opacity: 0.4;
   max-width: 30ch;
@@ -2440,10 +2515,10 @@ body[data-design="aurora"] .track-row-card > .track-status {
 
 .lyrics-plain-line {
   font-family: var(--font-lyrics);
-  font-size: 24px;
-  line-height: 1.56;
-  font-weight: 500;
-  letter-spacing: -0.022em;
+  font-size: var(--lyrics-plain-size);
+  line-height: var(--lyrics-plain-leading);
+  font-weight: var(--lyrics-plain-weight);
+  letter-spacing: var(--lyrics-plain-tracking);
   color: rgba(255, 255, 255, 0.8);
   text-wrap: pretty;
 }
@@ -2674,6 +2749,183 @@ body[data-design="aurora"] .track-row-card > .track-status {
    `overflow: hidden` that truncation brings with it. Real leading plus a hair of
    padding below the baseline, and the glyphs render whole. `nowrap` keeps the ellipsis
    on one line, so the extra padding can't reveal a sliver of the next one. */
+
+/* ── Fullscreen: верхние действия ────────────────────────────────────────────
+   Раньше каждая кнопка была отдельным полупрозрачным кругом 48×48: между ними оставалось
+   по 16px пустоты, а настройки раскрывались в прямоугольник из совсем другого материала.
+   Теперь это одна системная группа — тот же стеклянный слой, радиус и светлая кромка, что у
+   остальных плавающих панелей приложения. Размер цели 44×44 сохраняет удобное попадание,
+   но визуально блок стал компактнее и не спорит с обложкой.
+
+   На hover геометрия не меняется: правый верхний угол используется часто, и подпрыгивающие
+   системные кнопки выглядели бы шумно. Нажатие получает короткую композиторную усадку, а
+   активные состояния различаются не одним цветом — у них есть ещё фон и граница. */
+.fs-top-actions {
+  position: absolute;
+  top: 1.5rem;
+  right: 1.5rem;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.3rem;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 1.05rem;
+  background: linear-gradient(180deg, rgba(24, 25, 31, 0.66), rgba(8, 9, 13, 0.58));
+  box-shadow: 0 18px 44px -24px rgba(0, 0, 0, 0.92),
+              inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  isolation: isolate;
+}
+
+.fs-settings-anchor {
+  position: relative;
+}
+
+.fs-top-action {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  flex: 0 0 2.75rem;
+  border: 1px solid transparent;
+  border-radius: 0.78rem;
+  color: rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.025);
+  cursor: pointer;
+  touch-action: manipulation;
+  transform: scale(1);
+  transition: color var(--duration-micro) var(--ease-out),
+              background-color var(--duration-micro) var(--ease-out),
+              border-color var(--duration-micro) var(--ease-out),
+              transform var(--duration-micro) var(--ease-standard);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .fs-top-action:hover:not(:disabled) {
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.11);
+    background: rgba(255, 255, 255, 0.09);
+  }
+
+  /* Короткая подпись появляется под контролом, не меняя его размер и не сдвигая соседей. */
+  .fs-top-action::after {
+    content: attr(data-label);
+    position: absolute;
+    top: calc(100% + 0.72rem);
+    left: 50%;
+    width: max-content;
+    max-width: 13rem;
+    padding: 0.38rem 0.58rem;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.58rem;
+    color: rgba(255, 255, 255, 0.82);
+    background: rgba(8, 9, 13, 0.9);
+    box-shadow: 0 10px 28px -14px rgba(0, 0, 0, 0.95);
+    font-size: 11px;
+    font-weight: 550;
+    line-height: 1.25;
+    text-align: center;
+    white-space: normal;
+    pointer-events: none;
+    opacity: 0;
+    transform: translate3d(-50%, -4px, 0);
+    transition: opacity var(--duration-micro) var(--ease-out),
+                transform var(--duration-micro) var(--ease-out);
+  }
+
+  .fs-top-action:hover::after,
+  .fs-top-action:focus-visible::after {
+    opacity: 1;
+    transform: translate3d(-50%, 0, 0);
+  }
+
+  /* Правая подпись выравнивается по краю экрана и не обрезается окном. */
+  .fs-top-action-exit::after {
+    right: 0;
+    left: auto;
+    transform: translate3d(0, -4px, 0);
+  }
+
+  .fs-top-action-exit:hover::after,
+  .fs-top-action-exit:focus-visible::after {
+    transform: translate3d(0, 0, 0);
+  }
+
+  /* Открытая панель уже объясняет действие кнопки — второй ярлык поверх неё не нужен. */
+  .fs-top-action[aria-expanded="true"]::after {
+    opacity: 0;
+  }
+}
+
+.fs-top-action.is-active {
+  color: var(--color-primary);
+  border-color: color-mix(in srgb, var(--color-primary) 28%, rgba(255, 255, 255, 0.08));
+  background: color-mix(in srgb, var(--color-primary) 14%, rgba(255, 255, 255, 0.055));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09),
+              0 8px 20px -16px color-mix(in srgb, var(--color-primary) 72%, transparent);
+}
+
+.fs-top-action:active:not(:disabled) {
+  transform: scale(0.94);
+  transition-duration: var(--duration-micro);
+}
+
+.fs-top-action:disabled {
+  color: rgba(255, 255, 255, 0.32);
+  background: transparent;
+  cursor: not-allowed;
+}
+
+.fs-top-actions-divider {
+  width: 1px;
+  height: 1.35rem;
+  margin: 0 0.1rem;
+  background: linear-gradient(180deg, transparent, rgba(255, 255, 255, 0.16), transparent);
+}
+
+.fs-settings-pop {
+  position: absolute;
+  top: calc(100% + 0.8rem);
+  /* Якорь — кнопка настроек, но визуальный край задаёт вся группа вместе с кнопкой выхода.
+     Компенсация ровно повторяет её хвост: два gap, разделитель с полями, 44px кнопки и
+     правую внутреннюю отбивку контейнера. */
+  right: -3.875rem;
+  width: 17rem;
+  padding: 1.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 1.15rem;
+  background: linear-gradient(165deg, rgba(20, 21, 28, 0.88), rgba(7, 8, 12, 0.84));
+  box-shadow: 0 28px 70px -28px rgba(0, 0, 0, 0.98),
+              inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  backdrop-filter: blur(24px) saturate(1.25);
+  -webkit-backdrop-filter: blur(24px) saturate(1.25);
+}
+
+@media (max-width: 720px) {
+  .fs-top-actions {
+    top: 1rem;
+    right: 1rem;
+  }
+
+  .fs-settings-pop {
+    width: min(17rem, calc(100vw - 2rem));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fs-top-action,
+  .fs-top-action::after {
+    transform: none;
+    transition: color var(--duration-micro) var(--ease-out),
+                background-color var(--duration-micro) var(--ease-out),
+                border-color var(--duration-micro) var(--ease-out),
+                opacity var(--duration-micro) var(--ease-out);
+  }
+}
+
 .fs-title {
   font-size: 48px;
   font-weight: 500;
@@ -3428,22 +3680,22 @@ body[data-design="aurora"] .track-row-card > .track-status {
   align-items: center;
   justify-content: center;
   gap: 0.48rem;
-  padding: 0.5rem 0.78rem;
-  border: 1px solid rgba(255, 255, 255, 0.075);
+  padding: 0.5rem 0.64rem;
+  border: 1px solid transparent;
   border-radius: 0.75rem;
-  color: rgba(255, 255, 255, 0.68);
-  background: rgba(255, 255, 255, 0.035);
+  color: rgba(255, 255, 255, 0.48);
+  background: transparent;
   font-size: 12.5px;
   font-weight: 650;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  box-shadow: none;
   cursor: pointer;
   transition: color 160ms var(--ease-out), background-color 160ms var(--ease-out), border-color 160ms var(--ease-out), transform 160ms var(--ease-out);
 }
 
 .library-view-toggle:hover {
-  color: #fff;
-  border-color: color-mix(in srgb, var(--color-primary) 30%, rgba(255, 255, 255, 0.08));
-  background: color-mix(in srgb, var(--color-primary) 8%, rgba(255, 255, 255, 0.045));
+  color: rgba(255, 255, 255, 0.88);
+  border-color: rgba(255, 255, 255, 0.055);
+  background: rgba(255, 255, 255, 0.045);
 }
 
 .library-view-toggle:active {
@@ -3605,6 +3857,63 @@ body[data-fx-tilt="off"] [data-tilt].library-track-tile .library-tile-art-clip {
   background: rgba(244, 63, 94, 0.13);
 }
 
+/* Скачанный трек показывает привычную галочку, но на наведении она мягко уступает корзине.
+   Так состояние «файл на диске» остаётся видимым, а удаление не занимает ещё одну кнопку в
+   и без того плотных строках и плитках. Удаляется только локальная копия. */
+.cache-state-control {
+  position: relative;
+  color: var(--color-primary);
+}
+
+.cache-state-saved,
+.cache-state-remove {
+  display: grid;
+  place-items: center;
+  transition:
+    opacity 140ms var(--ease-out),
+    transform 170ms var(--ease-out);
+}
+
+.cache-state-remove {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transform: scale(0.72);
+}
+
+.cache-state-control:hover:not(:disabled) {
+  color: #fb7185 !important;
+  background: rgba(244, 63, 94, 0.12) !important;
+}
+
+.cache-state-control:hover:not(:disabled) .cache-state-saved {
+  opacity: 0;
+  transform: scale(0.72);
+}
+
+.cache-state-control:hover:not(:disabled) .cache-state-remove {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.cache-state-control:disabled {
+  cursor: progress;
+  opacity: 0.72;
+}
+
+.player-cache-action {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  padding: 0;
+  border-radius: 999px;
+}
+
+.playlist-cache-action {
+  flex: 0 0 auto;
+}
+
 .library-track-tile:hover .library-tile-actions,
 .library-track-tile:focus-within .library-tile-actions,
 .library-track-tile.has-open-menu .library-tile-actions {
@@ -3696,6 +4005,12 @@ body[data-fx-tilt="off"] [data-tilt].library-track-tile .library-tile-art-clip {
   .library-view-toggle:active,
   .library-tile-action:active,
   .library-tile-actions {
+    transform: none;
+  }
+
+  .cache-state-saved,
+  .cache-state-remove {
+    transition: opacity 120ms var(--ease-out);
     transform: none;
   }
 }
@@ -3825,24 +4140,10 @@ body[data-fx-tilt="off"] [data-tilt].library-track-tile .library-tile-art-clip {
    часть, сила полосы: `--sheen-alpha` в Aurora выше, потому что там стекло темнее.
 
    ── Почему переход, а не анимация ─────────────────────────────────────────────
-   У прохода два направления. На вход полоса едет вправо, на уход — возвращается той же
-   дорогой на исходную позицию, вместе с самой плиткой, которая ровно так же откатывает свой
-   подъём. `@keyframes` этого не умеет в принципе: анимация проигрывается только вперёд от
-   нуля, а в момент ухода курсора правило с ней просто перестаёт применяться — полоса
-   мгновенно щёлкает в исходное состояние из любого положения. Переход же всегда стартует от
-   ТЕКУЩЕГО вычисленного значения: уход на 20% пути даёт короткий откат, уход на 90% —
-   длинный, и оба читаются как одно движение.
-
-   Асимметрия нужна только гашению, и она сделана двумя наборами таймингов вместо одного:
-   переход берётся из правила того состояния, в которое элемент идёт. В `.is-sheening` лежит
-   вход (альфа поднимается за `--sheen-fade` и дальше полоса едет на полной), в базовом
-   правиле — уход (альфа держится и гаснет последние `--sheen-fade`, когда полоса уже у левой
-   кромки). Так вход не читается как щелчок, а уход — как обрыв.
-
-   Кривая — `linear`, и это тоже из разбора. С замедляющей `--ease-standard` полоса проходила
-   ~80% пути за первую половину времени и остаток срока ползла уже за правой кромкой: на глаз
-   проход получался вдвое короче заявленного. У равномерного движения света такой проблемы
-   нет, да и физически блик не тормозит на середине.
+   Переход можно прервать без скачка, если курсор ушёл в середине прохода. При снятии класса
+   сначала меняется только `opacity`; возврат `transform` задержан на время гашения и поэтому
+   происходит уже на невидимом слое. Широкая лента и сильная ease-in-out кривая дают один
+   спокойный световой жест вместо резкого линейного сканирования.
 
    Дёшево это потому, что полоса нарисована один раз и не перерисовывается: двигается
    `transform`, гаснет `opacity` — оба свойства композитор считает сам, layout и paint не
@@ -3855,23 +4156,25 @@ body[data-fx-tilt="off"] [data-tilt].library-track-tile .library-tile-art-clip {
   left: 0;
   width: var(--sheen-width);
   background: linear-gradient(
-    var(--sheen-angle),
-    transparent 20%,
-    rgb(255 255 255 / var(--sheen-alpha)) 50%,
-    transparent 80%
+    100deg,
+    rgb(255 255 255 / 0) 8%,
+    rgb(255 255 255 / calc(var(--sheen-alpha) * 0.24)) 30%,
+    rgb(255 255 255 / calc(var(--sheen-alpha) * 0.72)) 46%,
+    rgb(255 255 255 / var(--sheen-alpha)) 52%,
+    rgb(255 255 255 / calc(var(--sheen-alpha) * 0.38)) 62%,
+    rgb(255 255 255 / 0) 88%
   );
   /* Наклон даёт `skewX` на самой полосе, а не угол внутри градиента: так блик остаётся
      ровной лентой с чёткими кромками и не размазывается по диагонали. Вертикальных
      запасов при этом не нужно — `skewX` сдвигает точки только по горизонтали. */
-  transform: translateX(-150%) skewX(var(--sheen-skew));
+  transform: translateX(-170%) skewX(var(--sheen-skew));
   opacity: 0;
-  /* Тайминги ухода. Альфа гаснет не сразу, а последние `--sheen-fade` пути: пока полоса
-     возвращается, она должна быть видна — иначе «возврат» превратится в то самое мгновенное
-     исчезновение, от которого мы уходим. */
+  /* На уходе свет быстро растворяется и только затем невидимо возвращается к старту.
+     Обратной белой полосы больше нет: плоская поверхность один раз ловит источник света,
+     а не таскает его туда-сюда за курсором. */
   transition:
-    transform var(--sheen-speed) linear,
-    opacity var(--sheen-fade) linear
-      calc(var(--sheen-speed) - var(--sheen-fade));
+    opacity var(--sheen-fade) cubic-bezier(0.23, 1, 0.32, 1),
+    transform 1ms linear var(--sheen-fade);
   pointer-events: none;
   z-index: 7;
 }
@@ -3883,15 +4186,16 @@ body[data-fx-tilt="off"] [data-tilt].library-track-tile .library-tile-art-clip {
    поднимается от курсора до границ карточки сам. Вторая — `prefers-reduced-motion`: скрипт
    при этой настройке класс просто не ставит.
 
-   Класс ставится на входе курсора и снимается на выходе — то есть держится ровно столько,
-   сколько курсор на карточке. Именно это и даёт блику обратный ход. */
+   Класс ставится на входе курсора и снимается на выходе. Снятие гасит полосу, а её обратный
+   сброс проходит уже невидимым. */
 .sheen-art.is-sheening::after {
-  transform: translateX(200%) skewX(var(--sheen-skew));
-  opacity: 1;
-  /* Тайминги входа: полоса проявляется за первые `--sheen-fade` и дальше едет на полной. */
+  transform: translateX(170%) skewX(var(--sheen-skew));
+  opacity: 0.78;
+  /* Широкий мягкий проход: достаточно короткий для частого hover, без линейной «сканирующей»
+     полосы и без резкого белого ядра. */
   transition:
-    transform var(--sheen-speed) linear,
-    opacity var(--sheen-fade) linear;
+    transform var(--sheen-speed) cubic-bezier(0.77, 0, 0.175, 1),
+    opacity var(--sheen-fade) cubic-bezier(0.23, 1, 0.32, 1);
 }
 
 /* Блик отключён с двух сторон: скрипт при `prefers-reduced-motion` класс не ставит вовсе, а
@@ -3932,6 +4236,10 @@ body[data-fx-tilt="off"] [data-tilt].library-track-tile .library-tile-art-clip {
 .spec-art {
   position: relative;
   overflow: hidden;
+  /* Движущийся градиент блика требует paint. Ограничиваем его инвалидирование самой
+     обложкой: содержимое уже обрезается `overflow: hidden`, поэтому визуально containment
+     ничего не меняет, но соседние карточки больше не попадают в область перерисовки. */
+  contain: paint;
   /* Тот же изолированный контекст, что и у `.sheen-art`: обложка внутри получает
      `group-hover:scale-105`, а трансформированный элемент сам становится контекстом
      наложения и красится как `z-index: 0`. Без `isolate` порядок отрисовки блика зависел бы
@@ -4816,11 +5124,12 @@ body[data-fx-press="off"] .seg-item:active:not(:disabled) {
 
 .settings-tabs-control {
   width: 100%;
-  background: rgba(12, 12, 16, 0.76);
-  backdrop-filter: blur(20px) saturate(1.15);
-  -webkit-backdrop-filter: blur(20px) saturate(1.15);
+  background: rgba(12, 12, 16, 0.58);
+  border-color: rgba(255, 255, 255, 0.075);
+  backdrop-filter: blur(24px) saturate(1.24);
+  -webkit-backdrop-filter: blur(24px) saturate(1.24);
   box-shadow: 0 20px 44px -30px rgba(0, 0, 0, 0.95),
-              inset 0 1px 0 rgba(255, 255, 255, 0.035);
+              inset 0 1px 0 rgba(255, 255, 255, 0.055);
 }
 
 .settings-tabs-control.is-lg .seg-item {

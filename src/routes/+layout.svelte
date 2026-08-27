@@ -202,6 +202,18 @@
     if (key === appliedAccentFor) return;
     appliedAccentFor = key;
 
+    // Декодирование картинки и чтение canvas не должны бороться за первый кадр с запуском
+    // аудио. Отдаём эту декоративную работу ближайшему простою интерфейса; timeout не даёт
+    // теме зависнуть на старом цвете, если окно всё время занято.
+    await new Promise<void>((resolve) => {
+      const requestIdle = (window as any).requestIdleCallback as
+        | ((callback: () => void, options?: { timeout: number }) => number)
+        | undefined;
+      if (requestIdle) requestIdle(resolve, { timeout: 420 });
+      else window.setTimeout(resolve, 32);
+    });
+    if (appliedAccentFor !== key) return;
+
     const accent = await extractCoverAccent(coverUrl);
     // A slower cover can resolve after the next track already won the race.
     if (appliedAccentFor !== key) return;
@@ -232,10 +244,10 @@
         <span>{APP_NAME} {APP_VERSION} · {APP_CHANNEL}</span>
       </div>
 
-      <h2 id="startup-title" class="display-title startup-title">Это сборка на ходу</h2>
+      <h2 id="startup-title" class="display-title startup-title">Версия уже почти стабильная</h2>
       <p id="startup-text" class="startup-text">
-        Что-то может отвалиться на полпути — трек не загрузится, кнопка не нажмётся.
-        Если поймаешь такое, это баг, а не ты.
+        Основные сценарии уже работают уверенно. Редкий сбой всё ещё возможен — если
+        что-то поведёт себя странно, это повод сообщить о баге, а не сомневаться в себе.
       </p>
 
       <button class="startup-action" use:focusOnMount on:click={dismissWarning}>

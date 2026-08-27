@@ -14,6 +14,9 @@ src-tauri/target/
 **/target/
 Cargo.lock
 
+# Separate Rust TUI project, kept local only
+noverplay-tui-main/
+
 # AI agents, temp files & local logs
 .agents/
 .claude/

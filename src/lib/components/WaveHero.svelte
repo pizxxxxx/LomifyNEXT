@@ -58,7 +58,9 @@
     describeWaveFilters,
     trackMatchesWaveGenre,
     waveGenreLabel,
-    WAVE_GENRES
+    waveLanguageLabel,
+    WAVE_GENRES,
+    WAVE_LANGUAGES
   } from '$lib/waveFilters';
 
   /** Приветствие и имя приходят с главной — там они и считаются по часам и по ОС. */
@@ -116,8 +118,13 @@
   $: cover = active ? $currentTrack?.coverUrl || '' : '';
   $: waveFilterLabel = describeWaveFilters($settings);
   $: selectedGenre = waveGenreLabel($settings.waveGenre) || 'Любой жанр';
-  $: activeFilterCount = ($settings.waveContent === 'lyrics' ? 1 : 0) + ($settings.waveGenre ? 1 : 0);
-  $: ignoredLocalFilters = !yandexWave && $settings.waveContent === 'lyrics';
+  $: selectedLanguage = waveLanguageLabel($settings.waveLanguage);
+  $: activeFilterCount = ($settings.waveContent && $settings.waveContent !== 'all' ? 1 : 0) +
+    ($settings.waveLanguage ? 1 : 0) +
+    ($settings.waveGenre ? 1 : 0);
+  $: ignoredLocalFilters = !yandexWave && (
+    ($settings.waveContent && $settings.waveContent !== 'all') || Boolean($settings.waveLanguage)
+  );
   $: if (!onPage && tuneOpen) setTuneOpen(false);
   $: if (!onPage && expanded) void setExpanded(false, true);
 
@@ -287,8 +294,17 @@
     if (event.detail === 0) void setTuneOpen(!tuneOpen);
   }
 
-  function setWaveContent(value: 'all' | 'lyrics') {
-    settings.update((state) => ({ ...state, waveContent: value }));
+  function setWaveContent(value: 'all' | 'lyrics' | 'instrumental') {
+    settings.update((state) => ({
+      ...state,
+      waveContent: value,
+      // У инструментала нет языка текста; не оставляем невидимый лишний фильтр активным.
+      waveLanguage: value === 'instrumental' ? '' : state.waveLanguage
+    }));
+  }
+
+  function setWaveLanguage(value: string) {
+    settings.update((state) => ({ ...state, waveLanguage: value }));
   }
 
   function setWaveGenre(value: string) {
@@ -296,7 +312,7 @@
   }
 
   function clearWaveFilters() {
-    settings.update((state) => ({ ...state, waveContent: 'all', waveGenre: '' }));
+    settings.update((state) => ({ ...state, waveContent: 'all', waveLanguage: '', waveGenre: '' }));
   }
 
   async function applyWaveFilters() {
@@ -927,7 +943,7 @@
     class="wave-expand-backdrop"
     class:is-active={overlayActive}
     on:click={() => setExpanded(false)}
-    aria-label="Закрыть развёрнутую волну"
+    aria-label="Закрыть развёрнутую тусню"
     tabindex="-1"
   ></button>
 {/if}
@@ -938,7 +954,7 @@
   class:is-idle={!awake}
   class:is-expanded={expanded}
   bind:this={hostEl}
-  aria-label="Моя волна"
+  aria-label="Моя тусня"
   aria-busy={expansionBusy}
 >
   <div class="wave-hero-bg" aria-hidden="true">
@@ -961,7 +977,7 @@
         </div>
       {/if}
 
-      <h1 class="wave-hero-title">Моя волна</h1>
+      <h1 class="wave-hero-title">Моя тусня</h1>
 
       <div class="wave-hero-meta">
         <span class="wave-chip">
@@ -996,8 +1012,8 @@
       {#if ignoredLocalFilters}
         <p class="wave-hero-note">
           <Info class="wave-note-icon" size={13} aria-hidden="true" />
-          Жанр работает и здесь, а условие «только с текстом» доступно для Яндекс Музыки —
-          SoundCloud не сообщает наличие слов надёжно.
+          Жанр работает и здесь, а слова и язык доступны для Яндекс Музыки — SoundCloud
+          не сообщает эти признаки надёжно.
         </p>
       {/if}
     </div>
@@ -1011,7 +1027,7 @@
         disabled={expansionBusy}
         aria-expanded={expanded}
         aria-controls="my-wave-hero"
-        aria-label={expanded ? 'Свернуть Мою волну' : 'Развернуть Мою волну'}
+        aria-label={expanded ? 'Свернуть Мою тусню' : 'Развернуть Мою тусню'}
         title={expanded ? 'Свернуть' : 'Развернуть'}
       >
         <MorphIcon
@@ -1036,7 +1052,7 @@
         on:click|stopPropagation={onTuneTriggerClick}
         aria-haspopup="dialog"
         aria-expanded={tuneOpen}
-        aria-label="Настроить Мою волну"
+        aria-label="Настроить Мою тусню"
       >
         <SlidersHorizontal size={16} aria-hidden="true" />
         <span>Настроить</span>
@@ -1050,7 +1066,7 @@
         class="wave-play"
         on:click={primary}
         disabled={busy}
-        title={active ? ($isPlaying ? 'Пауза' : 'Продолжить') : 'Включить мою волну'}
+        title={active ? ($isPlaying ? 'Пауза' : 'Продолжить') : 'Включить Мою тусню'}
       >
         {#if busy}
           <Loader2 size={28} class="animate-spin" />
@@ -1070,7 +1086,7 @@
       {#if active}
         <!-- Собрать заново — осознанный жест, а не перезапуск того же: станция Яндекса
              отдаёт новую порцию с учётом всего, что человек успел пропустить и дослушать. -->
-        <button type="button" class="wave-recollect" on:click={collect} disabled={busy} title="Собрать волну заново">
+        <button type="button" class="wave-recollect" on:click={collect} disabled={busy} title="Собрать тусню заново">
           <RefreshCw size={15} />
           Собрать заново
         </button>
@@ -1096,7 +1112,7 @@
       <div class="wave-tune-heading">
         <span class="wave-tune-icon" aria-hidden="true"><SlidersHorizontal size={17} /></span>
         <div>
-          <h2 id="wave-tune-title">Настроить волну</h2>
+          <h2 id="wave-tune-title">Настроить тусню</h2>
           <p>Выбор сохраняется для следующих запусков</p>
         </div>
       </div>
@@ -1109,17 +1125,17 @@
       <div class="wave-tune-label">Текст песни</div>
       <div
         class="seg-control"
-        style="--seg-count: 2; --seg-index: {$settings.waveContent === 'lyrics' ? 1 : 0}"
+        style="--seg-count: 3; --seg-index: {$settings.waveContent === 'lyrics' ? 1 : $settings.waveContent === 'instrumental' ? 2 : 0}"
         role="radiogroup"
-        aria-label="Наличие текста в Моей волне"
+        aria-label="Наличие текста в Моей тусне"
       >
         <span class="seg-pill" aria-hidden="true"></span>
         <button
           type="button"
           role="radio"
-          aria-checked={$settings.waveContent !== 'lyrics'}
+          aria-checked={($settings.waveContent || 'all') === 'all'}
           class="seg-item"
-          class:is-active={$settings.waveContent !== 'lyrics'}
+          class:is-active={($settings.waveContent || 'all') === 'all'}
           on:click={() => setWaveContent('all')}
         >Любые</button>
         <button
@@ -1129,7 +1145,37 @@
           class="seg-item"
           class:is-active={$settings.waveContent === 'lyrics'}
           on:click={() => setWaveContent('lyrics')}
-        >Только с текстом</button>
+        >Со словами</button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={$settings.waveContent === 'instrumental'}
+          class="seg-item"
+          class:is-active={$settings.waveContent === 'instrumental'}
+          on:click={() => setWaveContent('instrumental')}
+        >Без слов</button>
+      </div>
+    </div>
+
+    <div class="wave-tune-section">
+      <div class="wave-tune-section-head">
+        <span class="wave-tune-label">Язык песни</span>
+        <span class="wave-tune-current">{selectedLanguage}</span>
+      </div>
+      <div class="wave-language-grid" role="radiogroup" aria-label="Язык песен в Моей тусне">
+        {#each WAVE_LANGUAGES as language}
+          <button
+            type="button"
+            role="radio"
+            aria-checked={($settings.waveLanguage || '') === language.id}
+            class="wave-language-item"
+            class:is-selected={($settings.waveLanguage || '') === language.id}
+            disabled={$settings.waveContent === 'instrumental' && Boolean(language.id)}
+            on:click={() => setWaveLanguage(language.id)}
+          >
+            {language.label}
+          </button>
+        {/each}
       </div>
     </div>
 
@@ -1138,7 +1184,7 @@
         <span class="wave-tune-label">Жанр</span>
         <span class="wave-tune-current">{selectedGenre}</span>
       </div>
-      <div class="wave-genre-menu" role="radiogroup" aria-label="Жанр Моей волны">
+      <div class="wave-genre-menu" role="radiogroup" aria-label="Жанр Моей тусни">
         <button
           type="button"
           role="radio"
@@ -1176,8 +1222,8 @@
       <Info size={14} aria-hidden="true" />
       <span>
         {yandexWave
-          ? 'Фильтр учитывает жанры альбомов и исполнителей и проверяет до двенадцати порций станции.'
-          : 'SoundCloud фильтруется по жанру; проверка наличия текста включится с Яндекс Музыкой.'}
+          ? 'Язык берётся из метаданных Яндекса, а при их отсутствии мягко определяется по названию. Неизвестный жанр не отбрасывает трек.'
+          : 'SoundCloud фильтруется по жанру; слова и язык включатся с Яндекс Музыкой.'}
       </span>
     </div>
 
@@ -1201,7 +1247,7 @@
 
   /* Слот сохраняет место карточки, пока та развёрнута и временно стала fixed. */
   .wave-hero-slot.is-expanded {
-    min-height: 244px;
+    min-height: 224px;
   }
 
   :global(body.wave-overlay-open main) {
@@ -1244,12 +1290,21 @@
     position: relative;
     width: 100%;
     overflow: hidden;
-    border-radius: 1.75rem;
-    min-height: 244px;
+    border-radius: 1.375rem;
+    min-height: 224px;
     display: flex;
     align-items: flex-end;
-    background: rgba(255, 255, 255, 0.028);
-    border: 1px solid rgba(255, 255, 255, 0.055);
+    background:
+      linear-gradient(
+        150deg,
+        color-mix(in srgb, var(--color-primary) 5%, rgba(255, 255, 255, 0.035)),
+        rgba(10, 10, 14, 0.46) 72%
+      ),
+      rgba(255, 255, 255, 0.024);
+    border: 1px solid rgba(255, 255, 255, 0.065);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.045),
+      0 24px 54px -44px rgba(0, 0, 0, 0.9);
     isolation: isolate;
     /* Композитору незачем перепроверять, не вылезло ли размытие пятен за края блока: рамка
        обрезки и так здесь. С `contain` он перерисовывает только этот прямоугольник. */
@@ -1311,8 +1366,8 @@
     width: 150%;
     height: 150%;
     object-fit: cover;
-    filter: blur(58px) saturate(1.5);
-    opacity: 0.5;
+    filter: blur(64px) saturate(1.28);
+    opacity: 0.3;
     transform: scale(1.1);
     transition: opacity var(--duration-slow, 700ms) ease;
   }
@@ -1324,8 +1379,8 @@
     width: 46%;
     aspect-ratio: 1;
     border-radius: 50%;
-    filter: blur(46px);
-    opacity: 0.55;
+    filter: blur(54px);
+    opacity: 0.28;
     mix-blend-mode: screen;
     will-change: transform;
   }
@@ -1358,6 +1413,16 @@
       transparent 70%
     );
     animation: wave-drift-c 29s ease-in-out infinite;
+  }
+
+  .wave-hero.is-expanded .wave-hero-cover {
+    filter: blur(58px) saturate(1.5);
+    opacity: 0.5;
+  }
+
+  .wave-hero.is-expanded .wave-blob {
+    filter: blur(46px);
+    opacity: 0.55;
   }
 
   @keyframes wave-drift-a {
@@ -1424,7 +1489,7 @@
     align-items: flex-end;
     justify-content: space-between;
     gap: 24px;
-    padding: 28px 32px;
+    padding: 24px 26px;
     flex-wrap: wrap;
   }
 
@@ -1448,17 +1513,18 @@
   }
 
   .wave-hero-greeting {
-    font-size: 12.5px;
+    font-size: 12px;
     font-weight: 500;
     letter-spacing: 0.01em;
     color: rgba(255, 255, 255, 0.44);
-    margin-bottom: 10px;
+    margin-bottom: 8px;
   }
 
   .wave-hero-title {
-    font-size: 42px;
-    font-weight: 400;
-    letter-spacing: -0.035em;
+    font-family: 'Unbounded Variable', var(--font-ui);
+    font-size: 36px;
+    font-weight: 800;
+    letter-spacing: -0.045em;
     line-height: 1.05;
     color: rgba(255, 255, 255, 0.97);
     margin: 0;
@@ -1467,8 +1533,8 @@
   .wave-hero.is-expanded .wave-hero-title {
     max-width: none;
     font-size: clamp(58px, 6.6vw, 104px);
-    font-weight: 350;
-    letter-spacing: -0.055em;
+    font-weight: 800;
+    letter-spacing: -0.06em;
     white-space: nowrap;
     text-shadow: 0 18px 60px rgba(0, 0, 0, 0.42);
   }
@@ -1602,7 +1668,7 @@
   }
 
   .wave-expand {
-    min-height: 44px;
+    min-height: 40px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1610,8 +1676,8 @@
     padding: 0 15px;
     border-radius: 999px;
     color: rgba(255, 255, 255, 0.76);
-    background: rgba(255, 255, 255, 0.055);
-    border: 1px solid rgba(255, 255, 255, 0.09);
+    background: rgba(255, 255, 255, 0.045);
+    border: 1px solid rgba(255, 255, 255, 0.075);
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
@@ -1640,6 +1706,7 @@
   .wave-hero.is-expanded .wave-expand,
   .wave-hero.is-expanded .wave-tune-trigger,
   .wave-hero.is-expanded .wave-recollect {
+    min-height: 44px;
     background: rgba(255, 255, 255, 0.065);
     border-color: transparent;
     backdrop-filter: none;
@@ -1655,7 +1722,7 @@
   }
 
   .wave-tune-trigger {
-    min-height: 44px;
+    min-height: 40px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1663,8 +1730,8 @@
     padding: 0 15px;
     border-radius: 999px;
     color: rgba(255, 255, 255, 0.82);
-    background: rgba(255, 255, 255, 0.07);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.052);
+    border: 1px solid rgba(255, 255, 255, 0.078);
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
@@ -1684,6 +1751,7 @@
   .wave-tune-trigger:focus-visible,
   .wave-expand:focus-visible,
   .wave-tune-clear:focus-visible,
+  .wave-language-item:focus-visible,
   .wave-genre-item:focus-visible,
   .wave-tune-apply:focus-visible {
     outline: 2px solid var(--color-primary);
@@ -1706,8 +1774,8 @@
   }
 
   .wave-play {
-    width: 62px;
-    height: 62px;
+    width: 56px;
+    height: 56px;
     border-radius: 50%;
     display: flex;
     align-items: center;
@@ -1716,7 +1784,7 @@
     background: var(--color-primary);
     border: none;
     cursor: pointer;
-    box-shadow: 0 12px 34px color-mix(in srgb, var(--color-primary) 38%, transparent);
+    box-shadow: 0 12px 30px -8px color-mix(in srgb, var(--color-primary) 38%, transparent);
     transition:
       transform var(--duration-micro, 120ms) var(--ease-out, ease-out),
       box-shadow var(--duration-micro, 120ms) var(--ease-out, ease-out);
@@ -1728,8 +1796,8 @@
   }
 
   .wave-play:hover:not(:disabled) {
-    transform: scale(1.06);
-    box-shadow: 0 16px 44px color-mix(in srgb, var(--color-primary) 52%, transparent);
+    transform: scale(1.045);
+    box-shadow: 0 15px 38px -7px color-mix(in srgb, var(--color-primary) 48%, transparent);
   }
 
   .wave-play:active:not(:disabled) {
@@ -1889,8 +1957,50 @@
     white-space: nowrap;
   }
 
+  .wave-language-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 5px;
+  }
+
+  .wave-language-item {
+    min-width: 0;
+    min-height: 36px;
+    padding: 0 7px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 10px;
+    color: rgba(255, 255, 255, 0.48);
+    background: rgba(255, 255, 255, 0.025);
+    font-size: 10.5px;
+    font-weight: 620;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+      color var(--duration-micro, 120ms) var(--ease-out, ease-out),
+      background-color var(--duration-micro, 120ms) var(--ease-out, ease-out),
+      border-color var(--duration-micro, 120ms) var(--ease-out, ease-out);
+  }
+
+  .wave-language-item:hover:not(:disabled) {
+    color: rgba(255, 255, 255, 0.9);
+    background: rgba(255, 255, 255, 0.055);
+  }
+
+  .wave-language-item.is-selected {
+    color: color-mix(in srgb, var(--color-primary) 45%, white);
+    border-color: color-mix(in srgb, var(--color-primary) 24%, rgba(255, 255, 255, 0.06));
+    background: color-mix(in srgb, var(--color-primary) 9%, rgba(255, 255, 255, 0.025));
+  }
+
+  .wave-language-item:disabled {
+    opacity: 0.34;
+    cursor: default;
+  }
+
   .wave-genre-menu {
-    height: 184px;
+    height: 154px;
     min-height: 136px;
     display: flex;
     flex-direction: column;

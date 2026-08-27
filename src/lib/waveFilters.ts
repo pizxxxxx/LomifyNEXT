@@ -1,4 +1,11 @@
-export type WaveContentMode = 'all' | 'lyrics';
+export type WaveContentMode = 'all' | 'lyrics' | 'instrumental';
+
+export const WAVE_LANGUAGES = [
+  { id: '', label: 'Любой язык', hint: 'Не ограничивать язык песни' },
+  { id: 'ru', label: 'Русский', hint: 'Песни преимущественно на русском' },
+  { id: 'en', label: 'Английский', hint: 'Песни преимущественно на английском' },
+  { id: 'other', label: 'Другой', hint: 'Остальные языки' }
+] as const;
 
 export const WAVE_GENRES = [
   { id: 'pop', label: 'Поп', hint: 'Поп-хиты и поп-музыка', aliases: ['pop', 'поп', 'ruspop', 'rus pop', 'russian pop', 'foreign pop', 'dance pop', 'synthpop', 'synth pop', 'electropop', 'k pop', 'j pop', 'estrada', 'эстрада'] },
@@ -19,6 +26,7 @@ export const WAVE_GENRES = [
 export interface WaveFilterState {
   waveContent?: string;
   waveGenre?: string;
+  waveLanguage?: string;
 }
 
 function normalize(value: unknown): string {
@@ -75,7 +83,14 @@ function trackGenreValues(track: any): string[] {
 }
 
 export function hasWaveFilters(state: WaveFilterState): boolean {
-  return state.waveContent === 'lyrics' || Boolean(normalize(state.waveGenre));
+  return state.waveContent === 'lyrics' ||
+    state.waveContent === 'instrumental' ||
+    Boolean(normalize(state.waveGenre)) ||
+    Boolean(normalize(state.waveLanguage));
+}
+
+export function waveLanguageLabel(id: string | null | undefined): string {
+  return WAVE_LANGUAGES.find((language) => language.id === (id ?? ''))?.label ?? 'Любой язык';
 }
 
 export function waveGenreLabel(id: string | null | undefined): string {
@@ -85,6 +100,9 @@ export function waveGenreLabel(id: string | null | undefined): string {
 export function describeWaveFilters(state: WaveFilterState): string {
   const parts: string[] = [];
   if (state.waveContent === 'lyrics') parts.push('только с текстом');
+  if (state.waveContent === 'instrumental') parts.push('без слов');
+  const language = WAVE_LANGUAGES.find((item) => item.id === state.waveLanguage);
+  if (language?.id) parts.push(language.label.toLocaleLowerCase('ru-RU'));
   const genre = waveGenreLabel(state.waveGenre);
   if (genre) parts.push(genre.toLocaleLowerCase('ru-RU'));
   return parts.join(', ');
@@ -107,12 +125,47 @@ export function trackMatchesWaveGenre(track: any, state: WaveFilterState): boole
   // без единой попытки. При наличии нормальных метаданных этот запасной путь не включается.
   if (actualGenres.length > 0) return false;
   const fallbackText = normalize([track?.title, track?.artist].filter(Boolean).join(' '));
-  return normalizedAliases.some((alias) => {
-    return genreStringsMatch(fallbackText, alias);
-  });
+  if (normalizedAliases.some((alias) => genreStringsMatch(fallbackText, alias))) return true;
+
+  // Rotor иногда присылает трек без жанров альбома. Неизвестное значение не является
+  // несовпадением: отбрасывать такие карточки означало получать пустую волну при живой
+  // станции. Явно присланный чужой жанр по-прежнему отсеивается строкой выше.
+  return track?.source === 'yandex';
+}
+
+function normalizedTrackLanguage(track: any): string {
+  const raw = normalize(track?.lyricsLanguage ?? track?.language);
+  if (raw === 'ru' || raw.startsWith('rus') || raw.startsWith('рус')) return 'ru';
+  if (raw === 'en' || raw.startsWith('eng') || raw.startsWith('англ')) return 'en';
+  if (raw) return 'other';
+
+  // Запасной сигнал только при отсутствии метаданных: название не гарантирует язык слов,
+  // но для кириллических и латинских релизов это лучше, чем отбрасывать всю порцию вслепую.
+  const label = `${track?.title ?? ''} ${track?.artist ?? ''}`;
+  if (/[а-яё]/i.test(label)) return 'ru';
+  if (/[a-z]/i.test(label)) return 'en';
+  return '';
+}
+
+function trackMatchesWaveLanguage(track: any, state: WaveFilterState): boolean {
+  const wanted = normalize(state.waveLanguage);
+  if (!wanted || state.waveContent === 'instrumental') return true;
+  const actual = normalizedTrackLanguage(track);
+  if (!actual) return track?.source === 'yandex';
+  return wanted === 'other' ? actual !== 'ru' && actual !== 'en' : actual === wanted;
 }
 
 export function trackMatchesWaveFilters(track: any, state: WaveFilterState): boolean {
-  if (state.waveContent === 'lyrics' && track?.lyricsAvailable !== true) return false;
-  return trackMatchesWaveGenre(track, state);
+  // `undefined` у Rotor означает, что конкретная порция не прислала lyricsInfo, а не то,
+  // что текста точно нет. Отбрасываем только явное `false`, иначе строгий фильтр съедал
+  // большую часть живой станции из-за неполных метаданных.
+  if (state.waveContent === 'lyrics' && track?.lyricsAvailable === false) return false;
+  if (state.waveContent === 'instrumental') {
+    if (track?.lyricsAvailable === true) return false;
+    if (track?.lyricsAvailable !== false) {
+      const label = normalize(`${track?.title ?? ''} ${track?.version ?? ''}`);
+      if (!/(^| )(instrumental|инструментал|karaoke|караоке|minus|минус)( |$)/.test(label)) return false;
+    }
+  }
+  return trackMatchesWaveLanguage(track, state) && trackMatchesWaveGenre(track, state);
 }

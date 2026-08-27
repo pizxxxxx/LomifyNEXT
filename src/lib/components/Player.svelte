@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { Volume2, SkipBack, SkipForward, Shuffle, Repeat, Mic2, Radio, Heart, Share2, Download, Check } from 'lucide-svelte';
+  import { Volume2, SkipBack, SkipForward, Shuffle, Repeat, Mic2, Radio, Heart, Share2, Download, Check, Trash2, Loader2 } from 'lucide-svelte';
   import { MorphIcon } from 'morphicons/svelte';
   import {
     Maximize2 as Maximize2Data,
@@ -150,12 +150,12 @@
 
   let isDownloaded = false;
   let isDownloading = false;
+  let isRemovingDownload = false;
 
   async function checkIsDownloaded() {
     if (!$currentTrack) return;
     try {
-      const trackIdStr = $currentTrack.id ? $currentTrack.id : `${$currentTrack.title}-${$currentTrack.artist}`;
-      const urn = `lomify:${$currentTrack.source}:${trackIdStr}`.replace(/[^a-zA-Z0-9а-яА-ЯёЁ:-]/g, '');
+      const urn = buildUrn($currentTrack);
       isDownloaded = await invoke('track_is_cached', { urn });
     } catch (e) {
       isDownloaded = false;
@@ -173,8 +173,7 @@
     try {
        const url = await getAudioUrl($currentTrack);
        if (!url) throw new Error("No URL");
-       const trackIdStr = $currentTrack.id ? $currentTrack.id : `${$currentTrack.title}-${$currentTrack.artist}`;
-       const urn = `lomify:${$currentTrack.source}:${trackIdStr}`.replace(/[^a-zA-Z0-9а-яА-ЯёЁ:-]/g, '');
+       const urn = buildUrn($currentTrack);
        const request = {
          urn,
          url,
@@ -184,12 +183,33 @@
        };
        await invoke('track_ensure_cached', { request });
        isDownloaded = true;
+       window.dispatchEvent(new CustomEvent('trackCacheChanged', { detail: { urn, cached: true } }));
        notify('Готово, трек на диске', 'success');
     } catch (e) {
        console.error(e);
        notify('Не смог скачать — сеть или трек убрали', 'error');
     } finally {
        isDownloading = false;
+    }
+  }
+
+  async function handleRemoveDownload() {
+    if (!$currentTrack || !isDownloaded || isRemovingDownload) return;
+    const track = $currentTrack;
+    const urn = buildUrn(track);
+    isRemovingDownload = true;
+    try {
+      const removed = await invoke<boolean>('track_remove_cached', { urn });
+      const stillCached = await invoke<boolean>('track_is_cached', { urn });
+      if (!removed && stillCached) throw new Error('cache file is still in use');
+      isDownloaded = false;
+      window.dispatchEvent(new CustomEvent('trackCacheChanged', { detail: { urn, cached: false } }));
+      notify(`Удалил «${track.title}» с диска`, 'info');
+    } catch (e) {
+      console.error('Could not remove cached track', e);
+      notify('Не смог удалить — возможно, трек сейчас используется', 'error');
+    } finally {
+      isRemovingDownload = false;
     }
   }
 
@@ -511,6 +531,13 @@
   }
 
   onMount(() => {
+    const handleTrackCacheChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ urn?: string; cached?: boolean }>).detail;
+      if (!$currentTrack || !detail?.urn || detail.urn !== buildUrn($currentTrack)) return;
+      isDownloaded = detail.cached === true;
+    };
+    window.addEventListener('trackCacheChanged', handleTrackCacheChanged);
+
     trackListener(listen('audio:tick', (event) => {
       // Muted mid-scrub: the dot must follow the cursor, not the backend position.
       if (isScrubbing) return;
@@ -570,6 +597,7 @@
         }
       }
     }, 1000);
+    return () => window.removeEventListener('trackCacheChanged', handleTrackCacheChanged);
   });
 
   onDestroy(() => {
@@ -1115,9 +1143,9 @@
                выключать то, что не включено, незачем. -->
           {#if $waveActive}
             <button
-              aria-label="Выключить волну"
+              aria-label="Выключить Мою тусню"
               class="interactive-item text-primary"
-              title="Играет «Моя волна» — нажми, чтобы дальше играла только очередь"
+              title="Играет «Моя тусня» — нажми, чтобы дальше играла только очередь"
               on:click={() => stopWave()}
             >
               <Radio size={18} />
@@ -1223,9 +1251,22 @@
           {/if}
         </button>
       {:else}
-        <div class="interactive-item text-primary transition-colors cursor-default flex items-center justify-center" title="Скачан">
-          <Check size={18} />
-        </div>
+        <button
+          type="button"
+          class="interactive-item player-cache-action cache-state-control"
+          class:is-busy={isRemovingDownload}
+          aria-label={`Удалить скачанный файл «${$currentTrack?.title ?? 'трека'}»`}
+          title="Удалить скачанный файл"
+          on:click={handleRemoveDownload}
+          disabled={isRemovingDownload}
+        >
+          {#if isRemovingDownload}
+            <Loader2 size={17} class="animate-spin" />
+          {:else}
+            <span class="cache-state-saved"><Check size={18} /></span>
+            <span class="cache-state-remove"><Trash2 size={17} /></span>
+          {/if}
+        </button>
       {/if}
 
       <button aria-label="Share" class="interactive-item hover:text-white transition-colors" on:click={handleShare} title="Поделиться">
