@@ -5,7 +5,7 @@
 [![Поддержать через ЮMoney](https://img.shields.io/badge/ЮMoney-поддержать-8b3ffd)](https://yoomoney.ru/to/4100116984624656)
 
 <p align="center">
-  <img src="main/NewIcon.png" alt="LomifyNEXT Logo" width="160" />
+  <img src="NewIcon.png" alt="LomifyNEXT Logo" width="160" />
 </p>
 
 ## О проекте
