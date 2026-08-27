@@ -147,6 +147,9 @@
         document.body.setAttribute('data-theme', $settings.theme);
       }
       document.body.setAttribute('data-ui-style', $settings.uiStyle || 'style1');
+      // Пользовательская гарнитура относится только к словам песни. Интерфейс остаётся
+      // стабильным по метрикам: переключение текста не двигает меню, кнопки и карточки.
+      document.body.setAttribute('data-lyrics-font', $settings.fontFamily || 'inter');
       document.body.setAttribute('data-global-theme', $settings.globalThemeEffect ? 'true' : 'false');
       // Глобальный дизайн — отдельная ось от uiStyle/theme: он переопределяет сами
       // материалы и типографику (src/design-aurora.css), а не только оттенок.

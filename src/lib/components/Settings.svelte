@@ -1,16 +1,145 @@
 <script lang="ts">
   import { settings, playlists, listenStats, notify, currentTrack, isPlaying } from '$lib/stores';
-  import { Download, Loader2, Check, Music, Volume2, RefreshCw } from 'lucide-svelte';
+  import {
+    Download,
+    Loader2,
+    Check,
+    Music,
+    Volume2,
+    RefreshCw,
+    ExternalLink,
+    Heart,
+    HandCoins,
+    WalletCards,
+    X,
+    Palette,
+    Headphones,
+    Captions,
+    MonitorCog,
+    Database
+  } from 'lucide-svelte';
   import { enable, isEnabled, disable } from '@tauri-apps/plugin-autostart';
   import { appDataDir, appLocalDataDir } from '@tauri-apps/api/path';
   import { openUrl } from '@tauri-apps/plugin-opener';
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { withCount } from '$lib/utils/plural';
   import { APP_NAME, APP_VERSION, APP_CHANNEL } from '$lib/version';
   import { listOutputs, applyOutput, type AudioOutput } from '$lib/audioOutput';
   let autostartEnabled = false;
   let dataPath = '';
   let localDataPath = '';
+  const RELEASES_URL = 'https://github.com/pizxxxxx/LomifyNEXT/releases';
+  const YOOMONEY_BUTTON_URL = 'https://yoomoney.ru/quickpay/fundraise/button?billNumber=1JTH771HF4Q.260827';
+  const YOOMONEY_WALLET_URL = 'https://yoomoney.ru/to/4100116984624656';
+  let supportOpen = false;
+  let supportTrigger: HTMLButtonElement;
+  let supportDialog: HTMLElement;
+  let appIconOpen = false;
+  let appIconTrigger: HTMLButtonElement;
+  let appIconDialog: HTMLElement;
+
+  type SettingsTab = 'appearance' | 'music' | 'lyrics' | 'system' | 'data';
+  const settingsTabs: SettingsTab[] = ['appearance', 'music', 'lyrics', 'system', 'data'];
+  let settingsTab: SettingsTab = 'appearance';
+  $: settingsTabIndex = settingsTabs.indexOf(settingsTab);
+
+  function setSettingsTab(tab: SettingsTab) {
+    settingsTab = tab;
+  }
+
+  async function onSettingsTabsKeydown(event: KeyboardEvent) {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+
+    const current = settingsTabs.indexOf(settingsTab);
+    let next = current;
+    if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = settingsTabs.length - 1;
+    else if (event.key === 'ArrowRight') next = (current + 1) % settingsTabs.length;
+    else next = (current - 1 + settingsTabs.length) % settingsTabs.length;
+
+    settingsTab = settingsTabs[next];
+    await tick();
+    document.getElementById(`settings-tab-${settingsTab}`)?.focus();
+  }
+
+  /**
+   * Внешние страницы остаются осознанным действием пользователя: приложение ничего не
+   * скачивает и не проводит платежи внутри webview, а передаёт адрес системному браузеру.
+   * В браузерной разработке используем обычное окно, в Tauri — системный браузер.
+   */
+  async function openExternalPage(url: string, errorMessage: string) {
+    try {
+      if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+        await openUrl(url);
+      } else {
+        const externalWindow = window.open(url, '_blank', 'noopener,noreferrer');
+        if (!externalWindow) throw new Error('Popup blocked');
+      }
+    } catch (e) {
+      console.warn(errorMessage, e);
+      notify(errorMessage, 'error');
+    }
+  }
+
+  function openReleases() {
+    return openExternalPage(RELEASES_URL, 'Не удалось открыть страницу обновлений');
+  }
+
+  function portalToBody(node: HTMLElement) {
+    document.body.appendChild(node);
+    return { destroy: () => node.remove() };
+  }
+
+  async function setSupportOpen(next: boolean) {
+    supportOpen = next;
+    await tick();
+    if (next) supportDialog?.focus();
+    else supportTrigger?.focus();
+  }
+
+  async function setAppIconOpen(next: boolean) {
+    appIconOpen = next;
+    await tick();
+    if (next) appIconDialog?.focus();
+    else appIconTrigger?.focus();
+  }
+
+  function onAppIconKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      void setAppIconOpen(false);
+      return;
+    }
+    if (event.key !== 'Tab' || !appIconDialog) return;
+    event.preventDefault();
+    appIconDialog.querySelector<HTMLButtonElement>('button')?.focus();
+  }
+
+  function onSupportKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      void setSupportOpen(false);
+      return;
+    }
+    if (event.key !== 'Tab' || !supportDialog) return;
+    const controls = [...supportDialog.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
+    if (!controls.length) return;
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  function chooseSupport(url: string) {
+    supportOpen = false;
+    void openExternalPage(url, 'Не удалось открыть ЮMoney');
+  }
 
   async function handleGibberishToggle() {
     $settings.gibberishMode = !$settings.gibberishMode;
@@ -296,6 +425,50 @@
   function setTheme(theme: string) {
     $settings.theme = theme;
   }
+
+  type FontId = 'inter' | 'manrope' | 'onest' | 'golos' | 'playfair' | 'unbounded';
+  const lyricsFonts: { id: FontId; name: string; hint: string; family: string }[] = [
+    {
+      id: 'inter',
+      name: 'Inter',
+      hint: 'Нейтральный и очень читаемый',
+      family: "'Inter Variable', 'Segoe UI', sans-serif"
+    },
+    {
+      id: 'manrope',
+      name: 'Manrope',
+      hint: 'Современный и выразительный',
+      family: "'Manrope Variable', 'Segoe UI', sans-serif"
+    },
+    {
+      id: 'onest',
+      name: 'Onest',
+      hint: 'Мягкий, спокойный ритм',
+      family: "'Onest Variable', 'Segoe UI', sans-serif"
+    },
+    {
+      id: 'golos',
+      name: 'Golos Text',
+      hint: 'Плотный набор с отличной кириллицей',
+      family: "'Golos Text Variable', 'Segoe UI', sans-serif"
+    },
+    {
+      id: 'playfair',
+      name: 'Playfair Display',
+      hint: 'Контрастная книжная антиква',
+      family: "'Playfair Display Variable', Georgia, serif"
+    },
+    {
+      id: 'unbounded',
+      name: 'Unbounded',
+      hint: 'Широкий футуристичный гротеск',
+      family: "'Unbounded Variable', 'Segoe UI', sans-serif"
+    }
+  ];
+
+  function setFont(font: FontId) {
+    $settings.fontFamily = font;
+  }
   
   const themes = [
     { id: 'default', name: 'Pure', color: '#1DB954' },
@@ -334,29 +507,104 @@
 </script>
 
 <div class="max-w-3xl mx-auto py-8 perspective-[1000px]">
-  <h2 class="page-title mb-8">Настройки</h2>
+  <h2 class="page-title mb-5">Настройки</h2>
 
-  <!-- Страница была плоским столбцом из полутора десятков плашек в порядке, в котором их
-       когда-то добавляли: автозапуск, системные пути, привязка SoundCloud, привязка Яндекса,
-       офлайн-режим, Discord, easter egg, источник аудио, тема… Родственные настройки стояли
-       на разных концах списка — «Тема оформления», «Глобальный дизайн» и «Стиль интерфейса»
-       разделяли Discord и системные пути, — поэтому найти нужное можно было только
-       прокруткой сверху донизу.
+  <div class="settings-tabs-shell">
+    <div
+      class="seg-control is-lg settings-tabs-control"
+      style="--seg-count: 5; --seg-index: {settingsTabIndex}"
+      role="tablist"
+      tabindex="-1"
+      aria-label="Разделы настроек"
+      on:keydown={onSettingsTabsKeydown}
+    >
+      <span class="seg-pill" aria-hidden="true"></span>
+      <button
+        id="settings-tab-appearance"
+        type="button"
+        role="tab"
+        aria-controls="settings-tab-panel"
+        aria-selected={settingsTab === 'appearance'}
+        tabindex={settingsTab === 'appearance' ? 0 : -1}
+        class="seg-item"
+        class:is-active={settingsTab === 'appearance'}
+        on:click={() => setSettingsTab('appearance')}
+      >
+        <Palette size={16} aria-hidden="true" />
+        <span class="settings-tab-label">Вид</span>
+      </button>
+      <button
+        id="settings-tab-music"
+        type="button"
+        role="tab"
+        aria-controls="settings-tab-panel"
+        aria-selected={settingsTab === 'music'}
+        tabindex={settingsTab === 'music' ? 0 : -1}
+        class="seg-item"
+        class:is-active={settingsTab === 'music'}
+        on:click={() => setSettingsTab('music')}
+      >
+        <Headphones size={16} aria-hidden="true" />
+        <span class="settings-tab-label">Музыка</span>
+      </button>
+      <button
+        id="settings-tab-lyrics"
+        type="button"
+        role="tab"
+        aria-controls="settings-tab-panel"
+        aria-selected={settingsTab === 'lyrics'}
+        tabindex={settingsTab === 'lyrics' ? 0 : -1}
+        class="seg-item"
+        class:is-active={settingsTab === 'lyrics'}
+        on:click={() => setSettingsTab('lyrics')}
+      >
+        <Captions size={16} aria-hidden="true" />
+        <span class="settings-tab-label">Тексты</span>
+      </button>
+      <button
+        id="settings-tab-system"
+        type="button"
+        role="tab"
+        aria-controls="settings-tab-panel"
+        aria-selected={settingsTab === 'system'}
+        tabindex={settingsTab === 'system' ? 0 : -1}
+        class="seg-item"
+        class:is-active={settingsTab === 'system'}
+        on:click={() => setSettingsTab('system')}
+      >
+        <MonitorCog size={16} aria-hidden="true" />
+        <span class="settings-tab-label">Система</span>
+      </button>
+      <button
+        id="settings-tab-data"
+        type="button"
+        role="tab"
+        aria-controls="settings-tab-panel"
+        aria-selected={settingsTab === 'data'}
+        tabindex={settingsTab === 'data' ? 0 : -1}
+        class="seg-item"
+        class:is-active={settingsTab === 'data'}
+        on:click={() => setSettingsTab('data')}
+      >
+        <Database size={16} aria-hidden="true" />
+        <span class="settings-tab-label">Данные</span>
+      </button>
+    </div>
+  </div>
 
-       Теперь порядок отвечает на вопрос «за чем я сюда пришёл»: сначала то, что видно
-       постоянно (внешний вид), потом движение, потом музыка и её источники, потом текст
-       песен, потом системные вещи, которые открывают раз в жизни, и в самом конце
-       необратимое. Заголовок группы стоит НАД плашками, а не оборачивает их рамкой:
-       ещё один уровень вложенных рамок сделал бы страницу тяжелее, а не понятнее.
-
-       Разметка групп — `<section>` с внутренним `space-y-6`, а не общий `space-y-*` на всю
-       страницу: у Tailwind `space-y` вешает отступ на всех соседей кроме первого селектором
-       с тремя классами, и заголовку группы пришлось бы перебивать его через `!mt-*`. С
-       вложенностью каждый отступ задан там, где он нужен, и ничего перебивать не надо. -->
-  <div class="space-y-12">
+  <!-- Все группы остаются смонтированы внутри одного tabpanel, но CSS показывает только
+       выбранную категорию. Так поля ввода и локальное состояние не теряются при переходе,
+       а длинный технический список превращается в пять предсказуемых экранов. -->
+  <div
+    id="settings-tab-panel"
+    class="settings-tab-panels"
+    data-settings-tab={settingsTab}
+    role="tabpanel"
+    aria-labelledby="settings-tab-{settingsTab}"
+  >
 
     <!-- ── Внешний вид ─────────────────────────────────────────────────────── -->
-    <section>
+    <section class="settings-pane" data-settings-pane="appearance">
       <div class="settings-group">
         <span class="settings-group-title">Внешний вид</span>
         <span class="settings-group-rule"></span>
@@ -558,7 +806,7 @@
     </section>
 
     <!-- ── Движение и эффекты ──────────────────────────────────────────────── -->
-    <section>
+    <section class="settings-pane" data-settings-pane="appearance">
       <div class="settings-group">
         <span class="settings-group-title">Движение и эффекты</span>
         <span class="settings-group-rule"></span>
@@ -661,7 +909,7 @@
     </section>
 
     <!-- ── Музыка ──────────────────────────────────────────────────────────── -->
-    <section>
+    <section class="settings-pane" data-settings-pane="music">
       <div class="settings-group">
         <span class="settings-group-title">Музыка</span>
         <span class="settings-group-rule"></span>
@@ -682,7 +930,7 @@
                 : 'bg-neutral-800/50 text-neutral-300 border border-white/5 hover:bg-neutral-700/60'}"
               on:click={() => setSource('soundcloud')}
             >
-              SoundCloud (Рекомендуется)
+              SoundCloud
             </button>
             <button
               class="flex-1 py-4 rounded-xl font-bold transition-all shadow-md flex flex-col items-center justify-center gap-0.5 {$settings.searchSource === 'yandex'
@@ -690,7 +938,14 @@
                 : 'bg-neutral-800/50 text-neutral-300 border border-white/5 hover:bg-neutral-700/60'}"
               on:click={() => setSource('yandex')}
             >
-              <span>Яндекс Музыка</span>
+              <span class="flex items-center justify-center gap-2">
+                <span>Яндекс Музыка</span>
+                <span class="rounded-full border px-1.5 py-0.5 text-[8px] font-extrabold uppercase tracking-[0.06em] {$settings.searchSource === 'yandex'
+                  ? 'border-black/15 bg-black/10 text-black/65'
+                  : 'border-[#ffcc00]/25 bg-[#ffcc00]/10 text-[#ffe26b]'}">
+                  Рекомендуется
+                </span>
+              </span>
               <span class="text-xs font-normal opacity-60">
                 {$settings.yandexUser ? $settings.yandexUser.displayName : 'Нужен OAuth-токен'}
               </span>
@@ -1027,12 +1282,41 @@
     </section>
 
     <!-- ── Текст песен ─────────────────────────────────────────────────────── -->
-    <section>
+    <section class="settings-pane" data-settings-pane="lyrics">
       <div class="settings-group">
         <span class="settings-group-title">Текст песен</span>
         <span class="settings-group-rule"></span>
       </div>
       <div class="space-y-6">
+        <!-- Каждая карточка рисуется своей гарнитурой, поэтому разницу видно до
+             переключения. Все шрифты лежат в сборке и содержат кириллицу. -->
+        <div class="plate p-8">
+          <h3 class="section-title">Шрифт текста песен</h3>
+          <p class="empty-hint !mt-1.5 !max-w-[54ch] mb-6">
+            Меняет только строки песни — меню, кнопки и заголовки приложения остаются прежними. Шрифты работают офлайн.
+          </p>
+          <div class="font-picker" role="radiogroup" aria-label="Шрифт текста песен">
+            {#each lyricsFonts as font}
+              <button
+                type="button"
+                role="radio"
+                aria-checked={$settings.fontFamily === font.id}
+                class="font-choice"
+                class:is-active={$settings.fontFamily === font.id}
+                style="--font-choice: {font.family}"
+                on:click={() => setFont(font.id)}
+              >
+                <span class="font-choice-check" aria-hidden="true">
+                  {#if $settings.fontFamily === font.id}<Check size={14} strokeWidth={2.5} />{/if}
+                </span>
+                <span class="font-choice-name">{font.name}</span>
+                <span class="font-choice-sample">Музыка без лишнего</span>
+                <span class="font-choice-hint">{font.hint}</span>
+              </button>
+            {/each}
+          </div>
+        </div>
+
         <!-- Плашка «Текст в полноэкранном режиме» была отдельной и содержала ровно один
              тумблер, стоя при этом далеко от настроек текста. Тумблер переехал сюда первой
              строкой: это одна и та же тема, и держать её в двух плашках было незачем. -->
@@ -1089,7 +1373,7 @@
     </section>
 
     <!-- ── Система ─────────────────────────────────────────────────────────── -->
-    <section>
+    <section class="settings-pane" data-settings-pane="system">
       <div class="settings-group">
         <span class="settings-group-title">Система</span>
         <span class="settings-group-rule"></span>
@@ -1184,7 +1468,7 @@
     </section>
 
     <!-- ── Опасная зона ────────────────────────────────────────────────────── -->
-    <section>
+    <section class="settings-pane" data-settings-pane="data">
       <div class="settings-group">
         <span class="settings-group-title">Опасная зона</span>
         <span class="settings-group-rule"></span>
@@ -1239,22 +1523,184 @@
       </div>
     </section>
 
-    <!-- About / Info -->
-    <div class="flex flex-col items-center justify-center mt-10 mb-12 gap-3">
-      <!-- Капсула вместо трёх отдельных строк текста: имя, версия и канал сборки —
-           одна сущность, и читаются они как один объект. -->
-      <div class="version-badge">
-        <span class="version-badge-name">{APP_NAME}</span>
-        <span class="version-badge-sep"></span>
-        <span class="version-badge-num">{APP_VERSION}</span>
-        <span class="version-badge-tag">
-          <span class="version-badge-dot"></span>
-          {APP_CHANNEL}
+    <!-- Версия, обновления и поддержка собраны в одном месте: это информация о самом
+         приложении, а не системные параметры. -->
+    <div class="settings-pane mb-12" data-settings-pane="data">
+      <div class="plate settings-about-card p-8">
+        <span class="settings-about-icon" aria-hidden="true">
+          <Music size={21} />
         </span>
+        <div class="settings-about-copy">
+          <h3 class="section-title">О приложении</h3>
+          <div class="settings-version-line">
+            <div class="version-badge">
+              <span class="version-badge-name">{APP_NAME}</span>
+              <span class="version-badge-sep"></span>
+              <span class="version-badge-num">{APP_VERSION}</span>
+              <span class="version-badge-tag">
+                <span class="version-badge-dot"></span>
+                {APP_CHANNEL}
+              </span>
+            </div>
+            <button
+              type="button"
+              class="settings-app-icon-button"
+              bind:this={appIconTrigger}
+              aria-label="Открыть иконку приложения"
+              aria-haspopup="dialog"
+              aria-expanded={appIconOpen}
+              title="Открыть иконку"
+              on:click={() => setAppIconOpen(true)}
+            >
+              <img src="/app-icon-full.png?v=1" alt="" aria-hidden="true" />
+            </button>
+          </div>
+          <a href="https://t.me/dopaminegdev" target="_blank" class="settings-about-author">
+            Автор — @dopaminegdev
+            <ExternalLink size={13} aria-hidden="true" />
+          </a>
+        </div>
+        <div class="settings-about-actions">
+          <button
+            type="button"
+            class="settings-about-action is-update"
+            aria-label="Проверить обновления в GitHub Releases"
+            on:click={openReleases}
+          >
+            <span class="settings-about-action-icon" aria-hidden="true">
+              <RefreshCw size={19} />
+            </span>
+            <span class="settings-about-action-copy">
+              <strong>Проверить обновления</strong>
+              <span>GitHub Releases</span>
+            </span>
+            <ExternalLink size={15} class="settings-about-action-arrow" aria-hidden="true" />
+          </button>
+
+          <button
+            type="button"
+            class="settings-about-action is-support"
+            bind:this={supportTrigger}
+            aria-label="Поддержать LomifyNEXT"
+            aria-haspopup="dialog"
+            aria-expanded={supportOpen}
+            on:click={() => setSupportOpen(true)}
+          >
+            <span class="settings-about-action-icon" aria-hidden="true">
+              <Heart size={19} />
+            </span>
+            <span class="settings-about-action-copy">
+              <strong>Поддержать проект</strong>
+              <span>ЮMoney · 2 способа</span>
+            </span>
+            <ExternalLink size={15} class="settings-about-action-arrow" aria-hidden="true" />
+          </button>
+        </div>
       </div>
-      <a href="https://t.me/dopaminegdev" target="_blank" class="text-[12.5px] text-white/35 hover:text-white/75 transition-colors mt-1">
-        Автор — @dopaminegdev
-      </a>
     </div>
   </div>
 </div>
+
+{#if appIconOpen}
+  <div
+    class="settings-app-icon-lightbox"
+    use:portalToBody
+    bind:this={appIconDialog}
+    role="dialog"
+    tabindex="-1"
+    aria-modal="true"
+    aria-label="Иконка приложения {APP_NAME}"
+    on:pointerdown|self={() => setAppIconOpen(false)}
+    on:keydown={onAppIconKeydown}
+  >
+    <button
+      type="button"
+      class="settings-app-icon-lightbox-close"
+      aria-label="Закрыть"
+      on:click={() => setAppIconOpen(false)}
+    >
+      <X size={28} aria-hidden="true" />
+    </button>
+    <img
+      src="/app-icon-full.png?v=1"
+      alt="Иконка приложения {APP_NAME}"
+      class="settings-app-icon-lightbox-image"
+    />
+  </div>
+{/if}
+
+{#if supportOpen}
+  <!-- pointerdown уже завершён к моменту появления слоя, поэтому исходное нажатие по
+       кнопке не закрывает только что открытое окно; следующие нажатия по фону закрывают. -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="support-dialog-backdrop"
+    use:portalToBody
+    role="presentation"
+    on:pointerdown|self={() => setSupportOpen(false)}
+  >
+    <div
+      class="support-dialog"
+      bind:this={supportDialog}
+      role="dialog"
+      tabindex="-1"
+      aria-modal="true"
+      aria-labelledby="support-dialog-title"
+      aria-describedby="support-dialog-description"
+      on:keydown={onSupportKeydown}
+    >
+      <header class="support-dialog-head">
+        <div class="support-dialog-brand" aria-hidden="true">
+          <Heart size={21} strokeWidth={2.2} />
+        </div>
+        <div class="support-dialog-copy">
+          <h2 id="support-dialog-title">Поддержать LomifyNEXT</h2>
+          <p id="support-dialog-description">Выберите удобный способ — платёж пройдёт на стороне ЮMoney.</p>
+        </div>
+        <button
+          type="button"
+          class="support-dialog-close"
+          aria-label="Закрыть окно поддержки"
+          on:click={() => setSupportOpen(false)}
+        >
+          <X size={18} aria-hidden="true" />
+        </button>
+      </header>
+
+      <div class="support-methods">
+        <button
+          type="button"
+          class="support-method is-quick"
+          on:click={() => chooseSupport(YOOMONEY_BUTTON_URL)}
+        >
+          <span class="support-method-icon" aria-hidden="true">
+            <HandCoins size={21} />
+          </span>
+          <span class="support-method-copy">
+            <strong>Быстрый платёж</strong>
+            <span>Готовая сумма — останется выбрать способ оплаты</span>
+          </span>
+          <span class="support-method-price">150 ₽</span>
+          <ExternalLink size={16} aria-hidden="true" />
+        </button>
+
+        <button
+          type="button"
+          class="support-method"
+          on:click={() => chooseSupport(YOOMONEY_WALLET_URL)}
+        >
+          <span class="support-method-icon is-wallet" aria-hidden="true">
+            <WalletCards size={21} />
+          </span>
+          <span class="support-method-copy">
+            <strong>Перевод на кошелёк</strong>
+            <span>Сумму можно указать самостоятельно</span>
+          </span>
+          <ExternalLink size={16} aria-hidden="true" />
+        </button>
+      </div>
+
+      <p class="support-dialog-footnote">Поддержка добровольная и не открывает платные функции приложения.</p>
+    </div>
+  </div>
+{/if}

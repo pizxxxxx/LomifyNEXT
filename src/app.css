@@ -1,4 +1,10 @@
 @import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/manrope";
+@import "@fontsource-variable/onest";
+@import "@fontsource-variable/golos-text";
+@import "@fontsource-variable/playfair-display";
+@import "@fontsource-variable/unbounded";
 @import "./sc-theme.css";
 /* Альтернативный глобальный дизайн. Все его правила висят на `body[data-design="aurora"]`
    (а токены — на `html body[...]`), поэтому по специфичности они всегда перебивают
@@ -17,6 +23,8 @@
   --app-primary: #1DB954; /* Spotify Green */
   --color-dark: #0a0a0c;
   --color-dark-gradient: #1d1d1f;
+  --font-ui: 'Inter Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-lyrics: 'Inter Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
   
   /* Premium Motion Tokens from transitions.dev */
   --duration-stagger:   80ms;
@@ -83,8 +91,9 @@
 
      `--spec-w` — полуширина мягкой ленты по оси градиента. Шире полосы прохода: отражение
      точечного источника на неидеальном глянце — это размытое пятно, а не кромка. */
-  --spec-w: 26%;
-  --spec-alpha: 0.3;
+  --spec-w: 30%;
+  --spec-core: 4.5%;
+  --spec-alpha: 0.28;
 
   /* ── Глубина при наведении ────────────────────────────────────────────────
      Раньше здесь жил `--lift-hover: -4px` и карточка при наведении уезжала вверх по
@@ -204,6 +213,30 @@
   --scale-tiny:   0.99;
 }
 
+body[data-lyrics-font="inter"] {
+  --font-lyrics: 'Inter Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+body[data-lyrics-font="manrope"] {
+  --font-lyrics: 'Manrope Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+body[data-lyrics-font="onest"] {
+  --font-lyrics: 'Onest Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+body[data-lyrics-font="golos"] {
+  --font-lyrics: 'Golos Text Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+body[data-lyrics-font="playfair"] {
+  --font-lyrics: 'Playfair Display Variable', Georgia, serif;
+}
+
+body[data-lyrics-font="unbounded"] {
+  --font-lyrics: 'Unbounded Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
 [data-theme="toxic-sludge"] {
   --color-primary: #bada55;
 }
@@ -277,7 +310,7 @@ html, body {
   padding: 0;
   overflow: hidden;
   user-select: none;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-ui);
   -webkit-font-smoothing: antialiased;
   /* Both follow the accent, so a track change carries them along together. */
   transition: background-color var(--duration-very-slow) var(--ease-smooth-out),
@@ -447,6 +480,351 @@ html, body {
   color: rgba(255, 255, 255, 0.4);
   margin-top: 3px;
   max-width: 54ch;
+}
+
+/* Поддержка — часть страницы настроек, а не рекламный баннер. Цвет виден только в
+   небольшом знаке и кнопке; сама плита остаётся тем же материалом, что соседние секции. */
+.plate.support-plate {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 28px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 8% 0%, color-mix(in srgb, var(--color-primary) 13%, transparent), transparent 42%),
+    rgba(255, 255, 255, 0.028);
+  border-color: color-mix(in srgb, var(--color-primary) 22%, rgba(255, 255, 255, 0.035));
+}
+
+.support-copy {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 16px;
+}
+
+.support-icon {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 32%, transparent);
+  border-radius: 16px;
+  color: color-mix(in srgb, var(--color-primary) 82%, white);
+  background: color-mix(in srgb, var(--color-primary) 13%, rgba(0, 0, 0, 0.2));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+
+.support-action {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex: 0 0 auto;
+  width: min(360px, 100%);
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+}
+
+.support-button {
+  display: flex;
+  width: 100%;
+  min-height: 50px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px 8px 9px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 50%, rgba(255, 255, 255, 0.08));
+  border-radius: 14px;
+  color: rgba(255, 255, 255, 0.94);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--color-primary) 24%, rgba(15, 15, 20, 0.92)), rgba(15, 15, 20, 0.94));
+  box-shadow:
+    0 14px 34px -24px color-mix(in srgb, var(--color-primary) 80%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  font-family: var(--font-ui);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-micro) var(--ease-standard),
+    border-color var(--duration-micro) var(--ease-standard),
+    transform var(--duration-micro) var(--ease-standard);
+}
+
+.support-button:hover {
+  border-color: color-mix(in srgb, var(--color-primary) 74%, rgba(255, 255, 255, 0.1));
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--color-primary) 32%, rgba(15, 15, 20, 0.9)), rgba(18, 18, 24, 0.96));
+}
+
+.support-button:active {
+  transform: translateY(1px);
+}
+
+.support-button-mark {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 10px;
+  color: #fff;
+  background: #702ff4;
+  font-size: 15px;
+  font-weight: 800;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.support-button-label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 680;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.support-button-amount {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.78);
+  background: rgba(255, 255, 255, 0.055);
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.support-payment-note {
+  color: rgba(255, 255, 255, 0.34);
+  font-size: 11px;
+  line-height: 1.3;
+  text-align: center;
+}
+
+.support-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(4, 5, 8, 0.68);
+  backdrop-filter: blur(14px) saturate(90%);
+  -webkit-backdrop-filter: blur(14px) saturate(90%);
+}
+
+.support-dialog {
+  width: min(520px, 100%);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 28%, rgba(255, 255, 255, 0.09));
+  border-radius: 24px;
+  color: #fff;
+  background:
+    radial-gradient(circle at 10% 0%, color-mix(in srgb, var(--color-primary) 15%, transparent), transparent 42%),
+    #101015;
+  box-shadow:
+    0 34px 90px -34px rgba(0, 0, 0, 0.96),
+    inset 0 1px 0 rgba(255, 255, 255, 0.065);
+}
+
+.support-dialog[tabindex]:focus-visible {
+  outline: none;
+}
+
+.support-dialog-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 14px;
+  padding: 24px 24px 20px;
+}
+
+.support-dialog-brand,
+.support-method-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--color-primary) 82%, white);
+  background: color-mix(in srgb, var(--color-primary) 15%, rgba(255, 255, 255, 0.025));
+  border: 1px solid color-mix(in srgb, var(--color-primary) 26%, transparent);
+}
+
+.support-dialog-brand {
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+}
+
+.support-dialog-copy {
+  min-width: 0;
+}
+
+.support-dialog-copy h2 {
+  margin: 1px 0 0;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+
+.support-dialog-copy p {
+  max-width: 42ch;
+  margin: 6px 0 0;
+  color: rgba(255, 255, 255, 0.43);
+  font-size: 12.5px;
+  line-height: 1.48;
+}
+
+.support-dialog-close {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
+  color: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.035);
+  transition:
+    color var(--duration-micro) var(--ease-standard),
+    background-color var(--duration-micro) var(--ease-standard),
+    border-color var(--duration-micro) var(--ease-standard);
+}
+
+.support-dialog-close:hover {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.13);
+  background: rgba(255, 255, 255, 0.075);
+}
+
+.support-methods {
+  display: grid;
+  gap: 10px;
+  padding: 0 16px;
+}
+
+.support-method {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 13px;
+  min-height: 76px;
+  padding: 13px 15px;
+  border: 1px solid rgba(255, 255, 255, 0.065);
+  border-radius: 17px;
+  color: rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.025);
+  text-align: left;
+  transition:
+    color var(--duration-micro) var(--ease-standard),
+    background-color var(--duration-micro) var(--ease-standard),
+    border-color var(--duration-micro) var(--ease-standard),
+    transform var(--duration-micro) var(--ease-standard);
+}
+
+.support-method:hover {
+  color: #fff;
+  border-color: color-mix(in srgb, var(--color-primary) 32%, rgba(255, 255, 255, 0.08));
+  background: color-mix(in srgb, var(--color-primary) 8%, rgba(255, 255, 255, 0.035));
+}
+
+.support-method:active {
+  transform: translateY(1px);
+}
+
+.support-method.is-quick {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  border-color: color-mix(in srgb, var(--color-primary) 26%, rgba(255, 255, 255, 0.07));
+  background: color-mix(in srgb, var(--color-primary) 7%, rgba(255, 255, 255, 0.025));
+}
+
+.support-method-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 13px;
+}
+
+.support-method-icon.is-wallet {
+  color: #b99aff;
+  border-color: rgba(112, 47, 244, 0.28);
+  background: rgba(112, 47, 244, 0.13);
+}
+
+.support-method-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.support-method-copy strong {
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 13.5px;
+  font-weight: 680;
+}
+
+.support-method-copy span {
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.38);
+  font-size: 11.5px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.support-method-price {
+  padding: 5px 9px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 20%, rgba(255, 255, 255, 0.07));
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.82);
+  background: color-mix(in srgb, var(--color-primary) 9%, rgba(255, 255, 255, 0.035));
+  font-size: 12px;
+  font-weight: 720;
+  white-space: nowrap;
+}
+
+.support-dialog-footnote {
+  margin: 0;
+  padding: 16px 24px 20px;
+  color: rgba(255, 255, 255, 0.28);
+  font-size: 10.5px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+@media (max-width: 720px) {
+  .plate.support-plate {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .support-copy {
+    align-items: flex-start;
+  }
+
+  .support-action {
+    width: 100%;
+  }
+
+  .support-dialog-backdrop {
+    align-items: end;
+    padding: 12px;
+  }
+
+  .support-dialog {
+    border-radius: 22px;
+  }
+
+  .support-dialog-head {
+    padding: 20px 18px 18px;
+  }
+
+  .support-method-copy span {
+    white-space: normal;
+  }
 }
 
 .wave-filter-card {
@@ -716,6 +1094,109 @@ body[data-fx-press="off"] .switch:active:not(:disabled) .switch-knob {
 
 .theme-swatch:disabled {
   cursor: default;
+}
+
+/* Font picker: типографику нельзя выбирать по одному названию — карточка обязана показать
+   гарнитуру в деле. Образец крупнее служебной подписи, а активность отмечается той же
+   акцентной кромкой, что у тем и глобальных дизайнов. */
+.font-picker {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.font-choice {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 16px;
+  overflow: hidden;
+  text-align: left;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.055);
+  border-radius: 15px;
+  color: rgba(255, 255, 255, 0.78);
+  transition: background-color 200ms ease,
+              border-color 200ms ease,
+              color 200ms ease,
+              transform var(--duration-micro) var(--ease-standard);
+}
+
+.font-choice:hover {
+  background: rgba(255, 255, 255, 0.045);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.font-choice:active {
+  transform: perspective(var(--depth-perspective)) translateZ(calc(var(--depth-press) * 0.5));
+}
+
+body[data-fx-press="off"] .font-choice:active {
+  transform: none;
+}
+
+.font-choice.is-active {
+  background: color-mix(in srgb, var(--color-primary) 10%, rgba(0, 0, 0, 0.18));
+  border-color: color-mix(in srgb, var(--color-primary) 62%, transparent);
+  color: #fff;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-primary) 22%, transparent);
+}
+
+.font-choice-check {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 9999px;
+  color: #000;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.font-choice.is-active .font-choice-check {
+  border-color: transparent;
+  background: var(--color-primary);
+}
+
+.font-choice-name,
+.font-choice-sample {
+  max-width: calc(100% - 28px);
+  font-family: var(--font-choice);
+}
+
+.font-choice-name {
+  font-size: 13px;
+  font-weight: 650;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.font-choice-sample {
+  margin-top: 12px;
+  font-size: clamp(18px, 2.2vw, 24px);
+  font-weight: 650;
+  line-height: 1.08;
+  letter-spacing: -0.035em;
+  color: #fff;
+}
+
+.font-choice-hint {
+  margin-top: 9px;
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+@media (max-width: 640px) {
+  .font-picker {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* Строка списка устройств вывода. Форма взята у .theme-swatch — это тот же выбор одного из
@@ -1145,6 +1626,434 @@ textarea:focus-visible,
   opacity: 1;
 }
 
+/* ── Строка трека ────────────────────────────────────────────────────────────
+   Компактная строка для лайков, профиля артиста и треков релиза. В покое она не выглядит
+   отдельной большой карточкой: поверхность появляется только как спокойный hover-отклик.
+   Геометрия строки не анимируется — часто используемый список не должен двигать текст. */
+.track-row-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+}
+
+.track-row-list.is-compact {
+  gap: 2px;
+  padding: 0;
+}
+
+.track-row-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 3px 12px;
+  padding: 4px;
+}
+
+@media (min-width: 768px) {
+  .track-row-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.track-row-card {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  min-height: 60px;
+  padding: 6px 8px;
+  overflow: visible;
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background-color: transparent;
+  background-image: none;
+  box-shadow: none;
+  transition:
+    background-color 200ms var(--ease-out),
+    border-color 200ms var(--ease-out);
+}
+
+/* Контент выше беглого specular-слоя `.interactive-item::after`: блик остаётся частью
+   материала, но больше не выбеливает буквы и тонкие иконки. */
+.track-row-card > * {
+  position: relative;
+  z-index: 11;
+}
+
+.track-row-card::before,
+.track-row-card::after {
+  display: none;
+}
+
+.track-row-card:hover {
+  z-index: 50;
+  background-color: rgba(255, 255, 255, 0.047);
+  border-color: rgba(255, 255, 255, 0.035);
+}
+
+.track-row-card.is-active {
+  background-color: color-mix(in srgb, var(--color-primary) 7%, rgba(255, 255, 255, 0.025));
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.track-row-card.has-open-menu {
+  z-index: 100;
+  background-color: rgba(255, 255, 255, 0.052);
+  border-color: rgba(255, 255, 255, 0.04);
+}
+
+.track-row-card.interactive-item:active {
+  transform: none;
+}
+
+.track-row-card.is-banned {
+  opacity: 0.56;
+  filter: saturate(0.7);
+}
+
+/* Внутри раскрытого альбома обложка уже показана крупно в шапке, поэтому строка короче,
+   но сохраняет ту же поверхность и ритм, а не превращается в другой тип списка. */
+.track-row-card.is-plain {
+  min-height: 48px;
+  padding: 6px 8px;
+  background-color: transparent;
+}
+
+.track-row-card > .track-status {
+  width: 26px;
+  height: 26px;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.3);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  transition: color 180ms var(--ease-out),
+              background-color 180ms var(--ease-out),
+              border-color 180ms var(--ease-out);
+}
+
+.track-row-card:hover > .track-status-play,
+.track-row-card.is-active > .track-status {
+  color: var(--color-primary);
+  background: transparent;
+  border-color: transparent;
+}
+
+.track-row-card.is-plain > .track-status {
+  width: 26px;
+  height: 26px;
+}
+
+.track-row-art {
+  position: relative;
+  width: 46px;
+  height: 46px;
+  min-width: 46px;
+  flex-shrink: 0;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.065);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.045);
+  box-shadow: 0 6px 16px -11px rgba(0, 0, 0, 0.95);
+}
+
+.track-row-art::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.11), transparent 40%, rgba(0, 0, 0, 0.12));
+}
+
+.track-row-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scale(1.001);
+  transition: transform 200ms var(--ease-out), opacity 180ms var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .track-row-card:hover .track-row-art img {
+    transform: scale(1.025);
+  }
+}
+
+.track-row-card.is-active .track-row-art {
+  border-color: color-mix(in srgb, var(--color-primary) 22%, rgba(255, 255, 255, 0.08));
+  box-shadow: 0 7px 18px -12px color-mix(in srgb, var(--color-primary) 36%, rgba(0, 0, 0, 0.95));
+}
+
+.track-row-art-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: rgba(255, 255, 255, 0.28);
+  background: radial-gradient(circle at 35% 25%, rgba(255, 255, 255, 0.08), transparent 58%);
+}
+
+.track-row-copy {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  padding-right: 4px;
+}
+
+.track-row-title {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 14px;
+  font-weight: 590;
+  line-height: 1.25;
+  letter-spacing: -0.008em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 180ms var(--ease-out);
+}
+
+.track-row-card.is-active .track-row-title {
+  color: color-mix(in srgb, var(--color-primary) 78%, white);
+}
+
+.track-row-artist {
+  display: block;
+  min-width: 0;
+  margin-top: 4px;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.43);
+  font-size: 12px;
+  font-weight: 430;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.track-row-saved {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 21px;
+  height: 21px;
+  color: var(--color-primary);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 22%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-primary) 9%, transparent);
+}
+
+.track-row-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  color: rgba(255, 255, 255, 0.5);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  opacity: 0;
+  transform: translateX(2px);
+  transition: opacity 200ms var(--ease-out),
+              transform 200ms var(--ease-out),
+              color 150ms var(--ease-out),
+              background-color 150ms var(--ease-out),
+              border-color 150ms var(--ease-out);
+}
+
+.track-row-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 1px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  opacity: 1;
+  transition:
+    opacity 140ms var(--ease-out),
+    background-color 160ms var(--ease-out),
+    border-color 160ms var(--ease-out);
+}
+
+.track-row-menu-slot {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.track-row-card:hover .track-row-action,
+.track-row-card:focus-within .track-row-action,
+.track-row-card.has-open-menu .track-row-action,
+.track-row-action.is-open {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+/* Когда один popover открыт, соседние строки остаются под ним и не проявляют hover-кнопки.
+   Именно их stacking context раньше перекрывал меню плейлистов сердцами и иконками. */
+.track-row-list.has-open-track-menu .track-row-card:not(.has-open-menu),
+.track-row-grid.has-open-track-menu .track-row-card:not(.has-open-menu) {
+  z-index: 0;
+}
+
+.track-row-list.has-open-track-menu .track-row-card:not(.has-open-menu) .track-row-action,
+.track-row-grid.has-open-track-menu .track-row-card:not(.has-open-menu) .track-row-action {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(3px);
+}
+
+.track-row-list.has-open-track-menu .track-row-card:not(.has-open-menu) .track-row-actions,
+.track-row-grid.has-open-track-menu .track-row-card:not(.has-open-menu) .track-row-actions {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.track-row-action:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.075);
+  border-color: rgba(255, 255, 255, 0.09);
+}
+
+.track-row-action.is-saved,
+.track-row-action.is-liked {
+  color: var(--color-primary);
+}
+
+.track-row-action.is-liked {
+  opacity: 0.62;
+  transform: none;
+}
+
+.track-row-card:hover .track-row-action.is-liked {
+  opacity: 1;
+}
+
+.track-row-action.is-danger:hover {
+  color: #fb7185;
+  background: rgba(244, 63, 94, 0.11);
+  border-color: rgba(251, 113, 133, 0.16);
+}
+
+.track-row-popover {
+  padding: 12px 13px;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 12px;
+  line-height: 1.45;
+  pointer-events: none;
+  background: rgba(14, 14, 19, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 13px;
+  box-shadow: 0 18px 48px -18px rgba(0, 0, 0, 0.95),
+              inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.track-row-info-pop {
+  position: absolute;
+  right: 8px;
+  z-index: 120;
+  width: 15rem;
+  max-width: calc(100% - 16px);
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.track-row-info-pop.is-bottom {
+  top: calc(100% + 0.5rem);
+}
+
+.track-row-info-pop.is-top {
+  bottom: calc(100% + 0.5rem);
+}
+
+/* Aurora использует более тёмное стекло и акцент только как отражение по кромке. Так
+   список совпадает с плеером и боковой панелью, но не превращается в фиолетовую сетку. */
+body[data-design="aurora"] .track-row-card {
+  background-color: transparent;
+  background-image: none;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+body[data-design="aurora"] .track-row-card:hover {
+  background-color: rgba(255, 255, 255, 0.045);
+  border-color: transparent;
+}
+
+body[data-design="aurora"] .track-row-card.is-active {
+  background-color: color-mix(in srgb, var(--color-primary) 7%, rgba(255, 255, 255, 0.018));
+  border-color: transparent;
+  box-shadow: none;
+}
+
+body[data-design="aurora"] .track-row-card.has-open-menu {
+  background-color: rgba(255, 255, 255, 0.05);
+  border-color: transparent;
+}
+
+body[data-design="aurora"] .track-row-card > .track-status {
+  background: transparent;
+  border-color: transparent;
+}
+
+@media (hover: none) {
+  .track-row-action {
+    opacity: 0.72;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .track-row-card {
+    transition-duration: 140ms;
+  }
+
+  .track-row-art img,
+  .track-row-card:hover .track-row-art img,
+  .track-row-action {
+    transform: none;
+  }
+
+  .track-row-action,
+  .track-row-actions {
+    transition-property: opacity, color, background-color, border-color;
+    transition-duration: 140ms;
+  }
+}
+
+@media (max-width: 640px) {
+  .track-row-list,
+  .track-row-grid {
+    padding-inline: 2px;
+  }
+
+  .track-row-card {
+    gap: 9px;
+    padding-right: 8px;
+  }
+
+  .track-row-action {
+    flex-basis: 32px;
+    width: 32px;
+    height: 32px;
+  }
+}
+
 /* ── Статус трека в списке ───────────────────────────────────────────────────
    Ячейка слева от обложки: номер, наушники у играющего, крестик у забаненного, «плей»
    под курсором. Разметку выдаёт `TrackStatus.svelte`, здесь только геометрия и подмена.
@@ -1286,6 +2195,7 @@ textarea:focus-visible,
 /* Lyrics CSS Ported from SC Desktop */
 .lyric-line {
   cursor: pointer;
+  font-family: var(--font-lyrics);
   /* Was `padding: 10px 0; line-height: 1.32; font-weight: 700` — at 28px the block read
      as a wall of bold text with the lines almost touching. Slightly larger, one weight
      lighter and with real leading it reads like lyrics instead of a headline stack.
@@ -1529,6 +2439,7 @@ textarea:focus-visible,
 }
 
 .lyrics-plain-line {
+  font-family: var(--font-lyrics);
   font-size: 24px;
   line-height: 1.56;
   font-weight: 500;
@@ -1990,19 +2901,23 @@ textarea:focus-visible,
   width: auto;
   max-width: 88vw;
   transform: none;
-  /* Уход за край — движение «прочь», ему идёт разгон без перелёта: пружинная кривая на
-     таком расстоянии дала бы отскок уже за пределами экрана, то есть паузу на пустом
-     месте. Прозрачность гаснет быстрее сдвига, иначе обложка видна на полпути вверх. */
-  transition: transform var(--fs-dur) cubic-bezier(0.32, 0, 0.67, 0),
-              opacity 520ms var(--ease-out);
+  /* Возврат — вход элемента на экран, поэтому сильный ease-out: обложка быстро проходит
+     невидимую часть пути за верхней кромкой и мягко тормозит уже там, где её видит человек.
+     Прежний ease-in делал обратное — держал её снаружи, а затем вбрасывал в последний кадр. */
+  transition: transform var(--duration-fast) var(--ease-smooth-out),
+              opacity var(--duration-fast) var(--ease-smooth-out);
 }
 
 .fs-stage.is-immersive.is-lyrics .fs-cover-side {
   /* 104vh — гарантия, а не догадка: за краем должна оказаться не только обложка (55vh), но
      и подпись под ней, а сцена по вертикали центрирована. */
-  transform: translate3d(0, -104vh, 0) scale(0.9);
+  transform: translate3d(0, -104vh, 0);
   opacity: 0;
   pointer-events: none;
+  /* Уход короче и с разгоном, возврат берёт базовый transition выше. Разные правила
+     для двух направлений убирают резкий «вброс» обложки, не замедляя открытие текста. */
+  transition: transform var(--duration-fast) cubic-bezier(0.32, 0, 0.67, 0),
+              opacity var(--duration-quick) var(--ease-out);
 }
 
 /* Обложка улетает целиком, поэтому по дороге не сжимается, а подпись не подтягивается:
@@ -2033,10 +2948,10 @@ textarea:focus-visible,
   padding: 0;
   border-radius: 0;
   transform: translate3d(-50%, 46vh, 0);
-  /* Медленнее и мягче обложки: она уходит, а текст приходит — приход должен читаться как
-     прибытие, с длинным затуханием в конце. */
-  transition: transform var(--duration-very-slow) cubic-bezier(0.16, 1, 0.3, 1),
-              opacity 620ms var(--ease-out);
+  /* Текст и обложка меняются местами одним жестом. Одинаковый тайминг не оставляет их
+     наложенными после быстрого возврата обложки и легко ретаргетится при повторном клике. */
+  transition: transform var(--duration-fast) var(--ease-smooth-out),
+              opacity var(--duration-fast) var(--ease-smooth-out);
 }
 
 .fs-stage.is-immersive.is-lyrics .fs-lyrics-side {
@@ -2090,17 +3005,152 @@ textarea:focus-visible,
    nearly the same weight, so the name and the author competed instead of stacking. The
    card now carries the hierarchy: title bright and tight, author quiet until you reach
    for it, and the artwork gets the depth (shadow + hairline) instead of the text. */
+.track-tile {
+  isolation: isolate;
+  min-width: 0;
+  padding: 0.5rem 0.5rem 0.65rem;
+  border: 1px solid rgba(255, 255, 255, 0.055);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.052), rgba(255, 255, 255, 0.018));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035),
+              0 12px 30px -24px rgba(0, 0, 0, 0.9);
+}
+
+/* У обложки уже есть физически привязанный specular-блик. Второе пятно поверх всей
+   карточки сделало бы свет двойным, поэтому здесь оставляем только тень `::before`. */
+.track-tile.interactive-item::after {
+  display: none;
+}
+
+.track-tile.is-active {
+  border-color: color-mix(in srgb, var(--color-primary) 34%, rgba(255, 255, 255, 0.08));
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-primary) 9%, rgba(255, 255, 255, 0.05)),
+      color-mix(in srgb, var(--color-primary) 3%, rgba(255, 255, 255, 0.018))
+    );
+}
+
 .tile-art {
   position: relative;
   width: 100%;
   aspect-ratio: 1 / 1;
-  margin-bottom: 0.7rem;
-  border-radius: 0.9rem;
+  margin-bottom: 0.65rem;
+  border-radius: 0.95rem;
   overflow: hidden;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.06);
-  box-shadow: 0 12px 28px -16px rgba(0, 0, 0, 0.9);
+  box-shadow: 0 16px 34px -18px rgba(0, 0, 0, 0.95);
   transition: border-color var(--duration-hover) var(--ease-standard);
+}
+
+.tile-cover-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: translate3d(0, 0, 0) scale(1);
+  transition: transform 240ms var(--ease-out);
+}
+
+.tile-cover-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(circle at 50% 55%, rgba(0, 0, 0, 0.04), rgba(0, 0, 0, 0.48) 78%),
+    linear-gradient(180deg, rgba(6, 7, 10, 0.08), rgba(6, 7, 10, 0.3));
+  opacity: 0;
+  transition: opacity 180ms var(--ease-out);
+}
+
+.tile-play-button {
+  position: relative;
+  z-index: 8;
+  display: grid;
+  width: 3rem;
+  height: 3rem;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 56%, white 18%);
+  border-radius: 999px;
+  color: #fff;
+  background: color-mix(in srgb, var(--color-primary) 82%, rgba(15, 17, 22, 0.88));
+  box-shadow: 0 12px 28px -10px rgba(0, 0, 0, 0.8),
+              0 0 24px -8px color-mix(in srgb, var(--color-primary) 70%, transparent);
+  opacity: 0;
+  transform: translate3d(0, 8px, 0) scale(0.96);
+  transition: transform 180ms var(--ease-out), opacity 160ms var(--ease-out);
+}
+
+.tile-play-button.is-muted {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(20, 22, 27, 0.76);
+}
+
+.tile-like-button {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  z-index: 9;
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.82);
+  background: rgba(10, 11, 15, 0.48);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  opacity: 0;
+  transform: translate3d(0, 6px, 0);
+  transition: transform 180ms var(--ease-out),
+              opacity 160ms var(--ease-out),
+              color 160ms var(--ease-out);
+}
+
+.tile-like-button.is-liked {
+  color: var(--color-primary);
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
+}
+
+.tile-preview-progress {
+  position: absolute;
+  right: 0.55rem;
+  bottom: 0.45rem;
+  left: 0.55rem;
+  z-index: 9;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--color-primary);
+  box-shadow: 0 0 12px -2px color-mix(in srgb, var(--color-primary) 88%, transparent);
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+  transition: transform var(--preview-duration, 700ms) linear;
+}
+
+.tile-preview-progress.is-previewing {
+  transform: scaleX(1);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .track-tile:hover .tile-cover-image {
+    transform: translate3d(0, 0, 0) scale(1.025);
+  }
+
+  .track-tile:hover .tile-cover-overlay {
+    opacity: 1;
+  }
+
+  .track-tile:hover .tile-play-button,
+  .track-tile:hover .tile-like-button {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
 }
 
 /* `.group` — маркер, который разметка плитки уже носит для своих hover-состояний;
@@ -2269,15 +3319,15 @@ textarea:focus-visible,
 
 .tile-meta {
   position: relative;
-  padding: 0 0.25rem;
+  padding: 0 0.2rem 0.05rem;
 }
 
 .tile-title {
-  font-size: 13.5px;
-  font-weight: 500;
-  line-height: 1.35;
-  letter-spacing: -0.012em;
-  color: rgba(255, 255, 255, 0.88);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.32;
+  letter-spacing: -0.018em;
+  color: rgba(255, 255, 255, 0.92);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2293,19 +3343,25 @@ textarea:focus-visible,
 }
 
 .tile-sub {
-  margin-top: 1px;
+  margin-top: 2px;
   min-width: 0;
   font-size: 12px;
   line-height: 1.4;
   letter-spacing: -0.006em;
-  color: rgba(255, 255, 255, 0.44);
+  color: rgba(255, 255, 255, 0.48);
 }
 
 /* The little ⓘ affordance — invisible until the card is hovered, never a layout shift. */
 .tile-info-btn {
-  margin-top: 1px;
-  color: rgba(255, 255, 255, 0.3);
-  opacity: 0;
+  display: grid;
+  width: 1.75rem;
+  height: 1.75rem;
+  margin-top: -0.2rem;
+  place-items: center;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.04);
+  opacity: 0.42;
   transition: opacity var(--duration-micro) var(--ease-out),
               color var(--duration-micro) var(--ease-out);
 }
@@ -2346,6 +3402,302 @@ textarea:focus-visible,
 
 .tile-tip dd:last-child {
   margin-bottom: 0;
+}
+
+/* ── Виды любимых треков в медиатеке ────────────────────────────────────────
+   Список остаётся быстрым рабочим режимом, плитка — визуальным. Переключатель меняет
+   только представление тех же данных: очередь, меню и состояние скачивания общие. */
+.library-liked-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0.5rem 0 1rem;
+  padding-inline: 0.5rem;
+}
+
+.library-liked-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.library-view-toggle {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 0.48rem;
+  padding: 0.5rem 0.78rem;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 0.75rem;
+  color: rgba(255, 255, 255, 0.68);
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 12.5px;
+  font-weight: 650;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  cursor: pointer;
+  transition: color 160ms var(--ease-out), background-color 160ms var(--ease-out), border-color 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+
+.library-view-toggle:hover {
+  color: #fff;
+  border-color: color-mix(in srgb, var(--color-primary) 30%, rgba(255, 255, 255, 0.08));
+  background: color-mix(in srgb, var(--color-primary) 8%, rgba(255, 255, 255, 0.045));
+}
+
+.library-view-toggle:active {
+  transform: scale(0.97);
+}
+
+.library-view-toggle:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-primary) 78%, white);
+  outline-offset: 2px;
+}
+
+.library-track-grid {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 1.05rem;
+  padding: 0.25rem 0.4rem 0.8rem;
+}
+
+.library-track-tile {
+  position: relative;
+  overflow: visible;
+  border-radius: 1.2rem;
+}
+
+.library-track-tile.has-open-menu {
+  z-index: 100;
+}
+
+.library-track-tile.is-banned {
+  opacity: 0.58;
+  filter: saturate(0.72);
+}
+
+.library-track-tile > .tile-art {
+  margin-bottom: 0.7rem;
+  overflow: visible;
+}
+
+.library-tile-art-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  background: inherit;
+}
+
+/* В плитке медиатеки наклоняется только визуальная плоскость обложки. Нижняя панель
+   действий остаётся в неподвижном слое `.tile-art`: так её hit-area не уезжает вслед за
+   perspective-transform и все четыре кнопки надёжно нажимаются даже на сильном наклоне. */
+[data-tilt].library-track-tile > .tile-art {
+  transform: none;
+  will-change: auto;
+}
+
+[data-tilt].library-track-tile .library-tile-art-clip {
+  transform: perspective(var(--tilt-perspective))
+             translateZ(var(--tilt-lift, 0px))
+             rotateX(var(--tilt-rx, 0deg))
+             rotateY(var(--tilt-ry, 0deg));
+  will-change: transform;
+}
+
+body[data-fx-tilt="off"] [data-tilt].library-track-tile .library-tile-art-clip {
+  transform: none;
+  will-change: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-tilt].library-track-tile .library-tile-art-clip {
+    transform: none;
+    will-change: auto;
+  }
+}
+
+.library-tile-art-empty {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  color: rgba(255, 255, 255, 0.24);
+  background:
+    radial-gradient(circle at 38% 28%, color-mix(in srgb, var(--color-primary) 18%, transparent), transparent 52%),
+    rgba(255, 255, 255, 0.025);
+}
+
+.library-tile-cached {
+  position: absolute;
+  top: 0.58rem;
+  left: 0.58rem;
+  z-index: 9;
+  display: grid;
+  width: 1.65rem;
+  height: 1.65rem;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 30%, rgba(255, 255, 255, 0.1));
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--color-primary) 72%, white);
+  background: rgba(8, 9, 13, 0.58);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.library-tile-actions {
+  position: absolute;
+  right: 0.55rem;
+  bottom: 0.55rem;
+  left: 0.55rem;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 999px;
+  background: rgba(8, 9, 13, 0.58);
+  backdrop-filter: blur(14px) saturate(125%);
+  -webkit-backdrop-filter: blur(14px) saturate(125%);
+  box-shadow: 0 10px 24px -14px rgba(0, 0, 0, 0.92);
+  opacity: 0;
+  transform: translate3d(0, 7px, 0);
+  transition: opacity 160ms var(--ease-out), transform 190ms var(--ease-out);
+}
+
+.library-tile-action {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.66);
+  background: transparent;
+  cursor: pointer;
+  transition: color 150ms var(--ease-out), background-color 150ms var(--ease-out), transform 150ms var(--ease-out);
+}
+
+.library-tile-action:hover,
+.library-tile-action.is-open {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.library-tile-action:active {
+  transform: scale(0.9);
+}
+
+.library-tile-action.is-saved,
+.library-tile-action.is-liked {
+  color: var(--color-primary);
+}
+
+.library-tile-action.is-liked:hover {
+  color: #fb7185;
+  background: rgba(244, 63, 94, 0.13);
+}
+
+.library-track-tile:hover .library-tile-actions,
+.library-track-tile:focus-within .library-tile-actions,
+.library-track-tile.has-open-menu .library-tile-actions {
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
+}
+
+.library-track-grid.has-open-track-menu .library-track-tile:not(.has-open-menu) .library-tile-actions {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.library-tile-meta {
+  padding-inline: 0.22rem;
+}
+
+.library-tile-caption {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.library-tile-caption .tile-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-tile-source {
+  flex: 0 0 auto;
+  color: rgba(255, 255, 255, 0.29);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.025em;
+}
+
+.library-tile-source.is-yandex {
+  color: rgba(255, 213, 74, 0.5);
+}
+
+.library-track-tile > .track-row-info-pop {
+  right: 0.55rem;
+  width: min(15rem, calc(100vw - 3rem));
+  max-width: none;
+}
+
+@media (hover: none) {
+  .library-tile-actions {
+    opacity: 1;
+    transform: none;
+  }
+
+  .library-track-tile .tile-cover-overlay {
+    opacity: 0.72;
+  }
+
+  .library-track-tile .tile-play-button {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .library-liked-toolbar {
+    align-items: flex-start;
+  }
+
+  .library-liked-tools {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .library-track-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.8rem;
+    padding-inline: 0.1rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .library-view-toggle,
+  .library-tile-actions,
+  .library-tile-action {
+    transition-property: color, background-color, border-color, opacity;
+  }
+
+  .library-view-toggle:active,
+  .library-tile-action:active,
+  .library-tile-actions {
+    transform: none;
+  }
 }
 
 /* ── Плитка плейлиста на главной ──────────────────────────────────────────────
@@ -2592,12 +3944,23 @@ textarea:focus-visible,
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: linear-gradient(
-    var(--sheen-angle),
-    transparent calc(var(--spec-pos, 50%) - var(--spec-w)),
-    rgb(255 255 255 / var(--spec-alpha)) var(--spec-pos, 50%),
-    transparent calc(var(--spec-pos, 50%) + var(--spec-w))
-  );
+  background:
+    radial-gradient(
+      ellipse 76% 58% at var(--spec-x, 50%) var(--spec-y, 50%),
+      rgb(255 255 255 / calc(var(--spec-alpha) * 0.36)) 0%,
+      rgb(255 255 255 / calc(var(--spec-alpha) * 0.14)) 34%,
+      rgb(255 255 255 / 0) 72%
+    ),
+    linear-gradient(
+      var(--sheen-angle),
+      rgb(255 255 255 / 0) calc(var(--spec-pos, 50%) - var(--spec-w)),
+      rgb(255 255 255 / calc(var(--spec-alpha) * 0.14)) calc(var(--spec-pos, 50%) - 12%),
+      rgb(255 255 255 / calc(var(--spec-alpha) * 0.56)) calc(var(--spec-pos, 50%) - var(--spec-core)),
+      rgb(255 255 255 / var(--spec-alpha)) var(--spec-pos, 50%),
+      rgb(255 255 255 / calc(var(--spec-alpha) * 0.32)) calc(var(--spec-pos, 50%) + var(--spec-core)),
+      rgb(255 255 255 / 0) calc(var(--spec-pos, 50%) + var(--spec-w))
+    );
+  mix-blend-mode: screen;
   /* Конверт скрипта. Значения по умолчанию держат блик невидимым: на карточке, к которой
      курсор не подходил, переменных нет вовсе. */
   opacity: var(--spec-a, 0);
@@ -2610,6 +3973,27 @@ textarea:focus-visible,
    записанное позже. Скрипт при этой настройке переменных не пишет, так что правило страхует
    только случай переключения настройки на уже подсвеченной карточке. */
 @media (prefers-reduced-motion: reduce) {
+  .tile-cover-image,
+  .tile-play-button,
+  .tile-like-button {
+    transform: none;
+    transition: opacity 160ms var(--ease-out), color 160ms var(--ease-out);
+  }
+
+  .tile-preview-progress,
+  .tile-preview-progress.is-previewing {
+    transform: none;
+    transition: opacity 160ms var(--ease-out);
+  }
+
+  .tile-preview-progress {
+    opacity: 0;
+  }
+
+  .tile-preview-progress.is-previewing {
+    opacity: 1;
+  }
+
   .spec-art::after {
     opacity: 0;
   }
@@ -2817,6 +4201,14 @@ body[data-fx-press="off"] .sidebar-profile-arrow {
 .play-btn > :not(.play-btn-glow) {
   position: relative;
   z-index: 1;
+}
+
+/* Один и тот же SVG морфится между Play и Pause, поэтому его бокс никогда не меняет
+   ширину. Отдельного оптического сдвига нет: прежний `ml-1` уводил треугольник на 4px. */
+.play-pause-morph {
+  display: block;
+  flex: 0 0 auto;
+  overflow: visible;
 }
 
 /* ── Бесшовное растворение слоёв (edge mask) ──────────────────────────────────
@@ -3046,6 +4438,137 @@ body[data-fx-press="off"] .sidebar-profile-arrow {
   );
   z-index: -1;
   pointer-events: none;
+}
+
+/* Площадка профиля живёт прямо в баннере: это локальный контекст страницы артиста, а не
+   глобальная настройка приложения. Полупрозрачный жёлоб сохраняет читаемость на любой
+   фотографии, а сам контрол использует ту же геометрию и движение плашки, что вкладки ниже. */
+.artist-source-switch {
+  position: absolute;
+  top: 1.1rem;
+  right: 1.1rem;
+  z-index: 3;
+}
+
+.artist-source-control {
+  min-width: 16.5rem;
+  background: rgba(5, 5, 10, 0.56);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 12px 34px -20px rgba(0, 0, 0, 0.92);
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+}
+
+.artist-source-control .seg-item {
+  padding: 0.48rem 0.72rem;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.65);
+}
+
+.artist-source-control .seg-item.is-unavailable {
+  opacity: 0.48;
+}
+
+.artist-source-control .seg-item.is-unavailable:hover {
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.artist-source-dot {
+  width: 0.48rem;
+  height: 0.48rem;
+  flex: 0 0 auto;
+  border-radius: 9999px;
+  box-shadow: 0 0 12px currentColor;
+}
+
+.artist-source-dot.is-soundcloud {
+  color: #ff6b1a;
+  background: currentColor;
+}
+
+.artist-source-dot.is-yandex {
+  color: #ffcc00;
+  background: currentColor;
+}
+
+/* ── Источник поиска ─────────────────────────────────────────────────────────
+   Поиск и профиль артиста выбирают одну из двух площадок одинаковым segmented-control:
+   человек не должен заново угадывать один и тот же выбор на разных страницах. */
+.search-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 0.85rem;
+  margin-bottom: 2rem;
+}
+
+.search-field {
+  position: relative;
+  min-width: 0;
+}
+
+.search-source-switch {
+  display: flex;
+  min-width: 19rem;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.3rem;
+}
+
+.search-source-label {
+  padding-left: 0.45rem;
+  color: rgba(255, 255, 255, 0.38);
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.12em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.search-source-control {
+  width: 100%;
+  min-height: 42px;
+  background: rgba(10, 10, 14, 0.44);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025),
+              0 12px 30px -24px rgba(0, 0, 0, 0.9);
+}
+
+.search-source-control .seg-item.is-unavailable {
+  opacity: 0.46;
+}
+
+.search-source-control .seg-item.is-unavailable:hover {
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.search-source-dot {
+  width: 0.48rem;
+  height: 0.48rem;
+  flex: 0 0 auto;
+  border-radius: 9999px;
+  box-shadow: 0 0 12px currentColor;
+}
+
+.search-source-dot.is-soundcloud {
+  color: #ff6b1a;
+  background: currentColor;
+}
+
+.search-source-dot.is-yandex {
+  color: #ffcc00;
+  background: currentColor;
+}
+
+@media (max-width: 860px) {
+  .search-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .search-source-switch {
+    width: 100%;
+    min-width: 0;
+  }
 }
 
 /* Волна на главной, когда открыт другой раздел.
@@ -3279,6 +4802,101 @@ body[data-fx-press="off"] .seg-item:active:not(:disabled) {
 
 .artist-tabs .seg-control {
   min-width: 22rem;
+}
+
+/* ── Вкладки настроек ────────────────────────────────────────────────────────
+   Пять категорий вместо одного длинного монотонного свитка. Контрол закреплён, поэтому
+   перейти в другой раздел можно и после глубокой прокрутки внутри текущего. */
+.settings-tabs-shell {
+  position: sticky;
+  top: 3.5rem;
+  z-index: 30;
+  margin-bottom: 2.35rem;
+}
+
+.settings-tabs-control {
+  width: 100%;
+  background: rgba(12, 12, 16, 0.76);
+  backdrop-filter: blur(20px) saturate(1.15);
+  -webkit-backdrop-filter: blur(20px) saturate(1.15);
+  box-shadow: 0 20px 44px -30px rgba(0, 0, 0, 0.95),
+              inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.settings-tabs-control.is-lg .seg-item {
+  min-width: 0;
+  gap: 0.4rem;
+  padding-inline: 0.55rem;
+}
+
+.settings-tab-panels {
+  display: flex;
+  min-height: 26rem;
+  flex-direction: column;
+  gap: 3rem;
+}
+
+.settings-pane {
+  display: none;
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
+  transition: opacity 180ms var(--ease-out),
+              transform 180ms var(--ease-out);
+}
+
+.settings-tab-panels[data-settings-tab="appearance"] [data-settings-pane="appearance"],
+.settings-tab-panels[data-settings-tab="music"] [data-settings-pane="music"],
+.settings-tab-panels[data-settings-tab="lyrics"] [data-settings-pane="lyrics"],
+.settings-tab-panels[data-settings-tab="system"] [data-settings-pane="system"],
+.settings-tab-panels[data-settings-tab="data"] [data-settings-pane="data"] {
+  display: block;
+}
+
+@starting-style {
+  .settings-tab-panels[data-settings-tab="appearance"] [data-settings-pane="appearance"],
+  .settings-tab-panels[data-settings-tab="music"] [data-settings-pane="music"],
+  .settings-tab-panels[data-settings-tab="lyrics"] [data-settings-pane="lyrics"],
+  .settings-tab-panels[data-settings-tab="system"] [data-settings-pane="system"],
+  .settings-tab-panels[data-settings-tab="data"] [data-settings-pane="data"] {
+    opacity: 0;
+    transform: translate3d(0, 8px, 0);
+  }
+}
+
+@media (max-width: 640px) {
+  .settings-tabs-control.is-lg .seg-item {
+    padding-inline: 0.35rem;
+  }
+
+  .settings-tab-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-pane {
+    transform: none;
+    transition: opacity 140ms var(--ease-out);
+  }
+
+  @starting-style {
+    .settings-tab-panels[data-settings-tab="appearance"] [data-settings-pane="appearance"],
+    .settings-tab-panels[data-settings-tab="music"] [data-settings-pane="music"],
+    .settings-tab-panels[data-settings-tab="lyrics"] [data-settings-pane="lyrics"],
+    .settings-tab-panels[data-settings-tab="system"] [data-settings-pane="system"],
+    .settings-tab-panels[data-settings-tab="data"] [data-settings-pane="data"] {
+      opacity: 0.72;
+      transform: none;
+    }
+  }
 }
 
 /* Раздел страницы артиста. Собственного оформления нет намеренно: это только контейнер,
@@ -3821,32 +5439,47 @@ body[data-ui-style="style2"] .sidebar-shell {
   border-color: rgba(255, 255, 255, 0.05);
 }
 
+.sidebar-watermark {
+  position: absolute;
+  top: -42px;
+  right: -56px;
+  z-index: 0;
+  width: 224px;
+  height: 224px;
+  opacity: 0.085;
+  filter: saturate(0.78) contrast(0.98);
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, 0.92) 52%, transparent 94%);
+  mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, 0.92) 52%, transparent 94%);
+}
+
 .sidebar-brand {
   position: relative;
+  z-index: 1;
   display: grid;
-  grid-template-columns: 48px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
-  gap: 0.75rem;
-  min-height: 64px;
+  min-height: 60px;
   margin-bottom: 1.3rem;
   padding: 0.45rem 0.55rem 0.9rem;
 }
 
-.sidebar-brand-mark {
-  display: grid;
-  place-items: center;
-  width: 48px;
-  height: 48px;
-  border-radius: 15px;
-  background: color-mix(in srgb, var(--color-primary) 12%, rgba(255, 255, 255, 0.035));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
-}
-
-.sidebar-brand-mark img {
-  width: 43px;
-  height: 43px;
-  object-fit: contain;
-  filter: drop-shadow(0 8px 14px rgba(0, 0, 0, 0.38));
+.sidebar-brand::after {
+  content: "";
+  position: absolute;
+  right: 0.55rem;
+  bottom: 0;
+  left: 0.55rem;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 119, 98, 0.34),
+    rgba(255, 255, 255, 0.07) 42%,
+    transparent 92%
+  );
+  pointer-events: none;
 }
 
 .sidebar-brand-copy {
@@ -3866,8 +5499,8 @@ body[data-ui-style="style2"] .sidebar-shell {
 
 .sidebar-brand-copy strong span {
   margin-left: 0.18em;
-  color: rgba(255, 255, 255, 0.38);
-  font-weight: 600;
+  color: rgba(255, 132, 112, 0.72);
+  font-weight: 650;
 }
 
 .sidebar-brand-copy small {
@@ -3881,6 +5514,8 @@ body[data-ui-style="style2"] .sidebar-shell {
 
 .sidebar-nav,
 .sidebar-secondary {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
@@ -4087,6 +5722,322 @@ body[data-ui-style="style2"] .sidebar-shell {
    The build identity was three loose runs of text floating at the bottom of Settings.
    One capsule instead: name · version · channel, with the channel carrying the only bit
    of colour so it reads as a state, not decoration. */
+.settings-about-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: flex-start;
+  gap: 0.9rem 1rem;
+}
+
+.settings-about-icon {
+  display: grid;
+  width: 2.75rem;
+  height: 2.75rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 28%, rgba(255, 255, 255, 0.06));
+  border-radius: 0.9rem;
+  color: color-mix(in srgb, var(--color-primary) 80%, white);
+  background: color-mix(in srgb, var(--color-primary) 11%, rgba(255, 255, 255, 0.025));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.055);
+}
+
+.settings-about-copy {
+  min-width: 0;
+}
+
+.settings-version-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.9rem;
+}
+
+.settings-version-line .version-badge {
+  margin: 0;
+}
+
+.settings-app-icon-button {
+  position: relative;
+  display: grid;
+  width: 52px;
+  height: 52px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  place-items: center;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 25%, rgba(255, 255, 255, 0.07));
+  border-radius: 16px;
+  background: radial-gradient(
+    circle at 50% 44%,
+    color-mix(in srgb, var(--color-primary) 15%, rgba(255, 255, 255, 0.045)),
+    rgba(255, 255, 255, 0.025) 72%
+  );
+  box-shadow:
+    0 12px 28px -20px color-mix(in srgb, var(--color-primary) 80%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.09);
+  cursor: zoom-in;
+  transition:
+    transform 220ms var(--ease-smooth-out),
+    border-color 180ms var(--ease-out),
+    background-color 180ms var(--ease-out),
+    box-shadow 220ms var(--ease-out);
+}
+
+.settings-app-icon-button img {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+  filter: drop-shadow(0 7px 13px rgba(8, 3, 25, 0.42));
+  transition: transform 240ms var(--ease-smooth-out);
+}
+
+.settings-app-icon-button:hover {
+  border-color: color-mix(in srgb, var(--color-primary) 46%, rgba(255, 255, 255, 0.09));
+  box-shadow:
+    0 15px 32px -19px color-mix(in srgb, var(--color-primary) 92%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.13);
+  transform: translateY(-1px);
+}
+
+.settings-app-icon-button:hover img {
+  transform: scale(1.045);
+}
+
+.settings-app-icon-button:active {
+  transform: scale(0.96);
+}
+
+.settings-app-icon-button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-primary) 78%, white);
+  outline-offset: 3px;
+}
+
+.settings-app-icon-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 220;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  background: rgba(4, 2, 12, 0.84);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  animation: settings-icon-backdrop-in 180ms var(--ease-out) both;
+}
+
+.settings-app-icon-lightbox::before {
+  content: "";
+  position: absolute;
+  width: min(72vw, 680px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--color-primary) 13%, transparent),
+    transparent 68%
+  );
+  pointer-events: none;
+}
+
+.settings-app-icon-lightbox-image {
+  position: relative;
+  z-index: 1;
+  width: min(72vw, 620px);
+  max-height: 78vh;
+  object-fit: contain;
+  filter: drop-shadow(0 30px 60px rgba(0, 0, 0, 0.55));
+  animation: settings-icon-preview-in 260ms var(--ease-smooth-out) both;
+}
+
+.settings-app-icon-lightbox-close {
+  position: absolute;
+  top: 1.5rem;
+  right: 1.5rem;
+  z-index: 2;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 50%;
+  color: rgba(255, 255, 255, 0.62);
+  background: rgba(255, 255, 255, 0.055);
+  cursor: pointer;
+  transition: color 160ms var(--ease-out), background-color 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+
+.settings-app-icon-lightbox-close:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+  transform: rotate(4deg) scale(1.04);
+}
+
+.settings-app-icon-lightbox-close:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-primary) 78%, white);
+  outline-offset: 3px;
+}
+
+@keyframes settings-icon-backdrop-in {
+  from { opacity: 0; }
+}
+
+@keyframes settings-icon-preview-in {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+}
+
+.settings-about-author {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.65rem;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 12.5px;
+  transition: color 160ms var(--ease-out);
+}
+
+.settings-about-author:hover {
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.settings-about-actions {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+  margin-top: 0.35rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.065);
+}
+
+.settings-about-action {
+  display: flex;
+  min-width: 0;
+  min-height: 58px;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 0.95rem;
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.035);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  transition:
+    background-color 160ms var(--ease-out),
+    border-color 160ms var(--ease-out),
+    transform 160ms var(--ease-out);
+}
+
+.settings-about-action:hover {
+  border-color: color-mix(in srgb, var(--color-primary) 30%, rgba(255, 255, 255, 0.09));
+  background: color-mix(in srgb, var(--color-primary) 7%, rgba(255, 255, 255, 0.045));
+}
+
+.settings-about-action:active {
+  transform: scale(0.985);
+}
+
+.settings-about-action:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-primary) 78%, white);
+  outline-offset: 2px;
+}
+
+.settings-about-action-icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 0.75rem;
+  color: rgba(255, 255, 255, 0.76);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.settings-about-action.is-update .settings-about-action-icon {
+  color: color-mix(in srgb, var(--color-primary) 68%, white);
+  background: color-mix(in srgb, var(--color-primary) 9%, rgba(255, 255, 255, 0.035));
+}
+
+.settings-about-action.is-support .settings-about-action-icon {
+  color: #d7bdff;
+  background: rgba(112, 47, 244, 0.14);
+  border-color: rgba(181, 137, 255, 0.18);
+}
+
+.settings-about-action-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.12rem;
+}
+
+.settings-about-action-copy strong {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 720;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-about-action-copy span {
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.38);
+  font-size: 11.5px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-about-action-arrow {
+  flex: 0 0 auto;
+  color: rgba(255, 255, 255, 0.25);
+  transition: color 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+
+.settings-about-action:hover .settings-about-action-arrow {
+  color: rgba(255, 255, 255, 0.65);
+  transform: translate(1px, -1px);
+}
+
+@media (max-width: 640px) {
+  .settings-about-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-about-action,
+  .settings-about-action-arrow,
+  .settings-app-icon-button,
+  .settings-app-icon-button img,
+  .settings-app-icon-lightbox,
+  .settings-app-icon-lightbox-image,
+  .settings-app-icon-lightbox-close {
+    animation: none;
+    transition-property: color, background-color, border-color;
+  }
+
+  .settings-about-action:active,
+  .settings-about-action:hover .settings-about-action-arrow,
+  .settings-app-icon-button:hover,
+  .settings-app-icon-button:active,
+  .settings-app-icon-button:hover img,
+  .settings-app-icon-lightbox-close:hover {
+    transform: none;
+  }
+}
+
 .version-badge {
   display: inline-flex;
   align-items: center;

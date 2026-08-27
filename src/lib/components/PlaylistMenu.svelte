@@ -10,7 +10,9 @@
    * же стекло, что у настроек в полноэкранном режиме.
    */
   import { createEventDispatcher, onDestroy } from 'svelte';
-  import { Plus, Check, ListMusic } from 'lucide-svelte';
+  import { Plus, ListMusic } from 'lucide-svelte';
+  import { Plus as PlusIcon, Check as CheckIcon } from 'lucide';
+  import { MorphIcon } from 'morphicons/svelte';
   import { cubicOut } from 'svelte/easing';
   import { playlists, notify } from '$lib/stores';
 
@@ -125,6 +127,7 @@
 <span class="pl-menu" bind:this={root}>
   <button
     type="button"
+    data-press-late
     class="pl-menu-trigger {buttonClass}"
     class:is-open={open}
     aria-haspopup="menu"
@@ -161,11 +164,13 @@
               on:click={(e) => toggleMembership(e, pl)}
             >
               <span class="pl-menu-item-title">{pl.title}</span>
-              {#if inside}
-                <Check size={15} class="text-primary shrink-0" />
-              {:else}
-                <Plus size={15} class="pl-menu-item-add" />
-              {/if}
+              <MorphIcon
+                icon={inside ? CheckIcon : PlusIcon}
+                size={15}
+                class={inside ? 'text-primary shrink-0' : 'pl-menu-item-add'}
+                spring="snappy"
+                reducedMotion="user"
+              />
             </button>
           {/each}
         </div>

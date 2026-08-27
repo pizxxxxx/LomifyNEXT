@@ -1015,6 +1015,9 @@ export async function getLyrics(title: string, artist: string, track?: any) {
  */
 const yandexArtistCache = new Map<string, Promise<any | null>>();
 
+/** Источник каталога для страницы артиста. */
+export type ArtistSource = 'soundcloud' | 'yandex';
+
 function yandexProfileFor(artistName: string, token: string) {
   const key = normKey(artistName);
   const cached = yandexArtistCache.get(key);
@@ -1034,20 +1037,26 @@ function yandexProfileFor(artistName: string, token: string) {
  * count, bio. `/search/users` already returns the whole user object, so this costs the
  * same single request `getArtistUserId` was making anyway.
  */
-export async function getArtistProfile(artistName: string) {
+export async function getArtistProfile(artistName: string, sourceOverride?: ArtistSource) {
   // Переключение источника здесь по той же причине, что и в `performSearch`: страница
   // артиста — одна, и знать про `searchSource` должна не она, а тот, кто отдаёт данные.
   // Выбрав Яндекс, человек не должен видеть в шапке подписчиков SoundCloud.
   const current = get(settings);
-  if (current.searchSource === 'yandex' && current.yandexToken) {
+  const source = sourceOverride ?? current.searchSource;
+  if (source === 'yandex' && current.yandexToken) {
     try {
       const profile = await yandexProfileFor(artistName, current.yandexToken);
       if (profile) return profile;
+      // Явно выбранная вкладка не должна притворяться Яндекс Музыкой, показывая под ней
+      // профиль SoundCloud. Старые вызовы без override сохраняют мягкий fallback.
+      if (sourceOverride) return null;
       // Артиста в Музыке нет — SoundCloud ниже, потому что пустая шапка хуже чужой полной.
     } catch (e) {
       console.warn('[yandex] профиль артиста не получен, беру из SoundCloud', e);
+      if (sourceOverride) return null;
     }
   }
+  if (source === 'yandex' && sourceOverride) return null;
   return await soundcloudArtistProfile(artistName);
 }
 
@@ -1064,9 +1073,10 @@ export async function getArtistProfile(artistName: string) {
  * страница ищется по ИМЕНИ и на аккаунт может не попасть. Там поиск остаётся единственным
  * честным путём, поэтому развилка именно здесь, а не в компоненте.
  */
-export async function getArtistTracks(artistName: string) {
+export async function getArtistTracks(artistName: string, sourceOverride?: ArtistSource) {
   const current = get(settings);
-  if (current.searchSource === 'yandex' && current.yandexToken) {
+  const source = sourceOverride ?? current.searchSource;
+  if (source === 'yandex' && current.yandexToken) {
     try {
       const profile = await yandexProfileFor(artistName, current.yandexToken);
       if (profile?.id) {
@@ -1076,11 +1086,17 @@ export async function getArtistTracks(artistName: string) {
         // Десятка из `brief-info` уже в руках — она лучше пустой страницы.
         if (profile.popularTracks?.length) return profile.popularTracks;
       }
+      if (sourceOverride) return [];
     } catch (e) {
       console.warn('[yandex] треки артиста не пришли, отдаю поиск', e);
+      if (sourceOverride) return [];
     }
   }
-  return await performSearch(artistName);
+  if (source === 'yandex' && sourceOverride) return [];
+  // Явная вкладка SoundCloud не зависит от глобального источника поиска. Без этого при
+  // выбранном в настройках Яндексе кнопка SoundCloud снова уходила бы в Яндекс через
+  // `performSearch`, хотя визуально активна другая площадка.
+  return await searchSoundCloud(artistName, 50);
 }
 
 /**
@@ -1323,12 +1339,13 @@ export async function getUserPlaylists(userId: number) {
   return [];
 }
 
-export async function getArtistAlbums(artistName: string) {
+export async function getArtistAlbums(artistName: string, sourceOverride?: ArtistSource) {
   // Развилка по источнику: при Яндексе прежний код уходил в SoundCloud и почти всегда
   // возвращал пусто (там `/users/{id}/albums` — релизы аккаунта с тем же именем, а его
   // может и не быть). Из-за этого блок «Релизы» на странице артиста просто не появлялся.
   const current = get(settings);
-  if (current.searchSource === 'yandex' && current.yandexToken) {
+  const source = sourceOverride ?? current.searchSource;
+  if (source === 'yandex' && current.yandexToken) {
     try {
       const profile = await yandexProfileFor(artistName, current.yandexToken);
       if (profile?.id) {
@@ -1344,6 +1361,8 @@ export async function getArtistAlbums(artistName: string) {
       return [];
     }
   }
+
+  if (source === 'yandex' && sourceOverride) return [];
 
   try {
     const userId = await getArtistUserId(artistName);

@@ -1,6 +1,13 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { Volume2, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Maximize2, Minimize2, Mic2, Radio, Heart, Share2, Download, Check } from 'lucide-svelte';
+  import { Volume2, SkipBack, SkipForward, Shuffle, Repeat, Mic2, Radio, Heart, Share2, Download, Check } from 'lucide-svelte';
+  import { MorphIcon } from 'morphicons/svelte';
+  import {
+    Maximize2 as Maximize2Data,
+    Minimize2 as Minimize2Data,
+    Pause as PauseData,
+    Play as PlayData
+  } from 'lucide';
   import { currentTrack, isPlaying, progress, duration as durationStore, currentView, previousView, settings, equalizerBands, listenStats, queue, likedTracks, trackHistory, notify, playlists, globalVolume, lyricsStatus } from '$lib/stores';
   import { getAudioUrl, getTrackInfo, getLyrics } from '$lib/api';
   import { waveActive, waveRefill, waveTrackDone, stopWave } from '$lib/wave';
@@ -1069,11 +1076,13 @@
             <div class="w-full h-full bg-gradient-to-br from-neutral-700 to-neutral-900"></div>
           {/if}
           <div class="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-            {#if $currentView === 'fullscreen'}
-              <Minimize2 size={16} class="text-white" />
-            {:else}
-              <Maximize2 size={16} class="text-white" />
-            {/if}
+            <MorphIcon
+              icon={$currentView === 'fullscreen' ? Minimize2Data : Maximize2Data}
+              size={16}
+              class="text-white"
+              spring="snappy"
+              reducedMotion="user"
+            />
           </div>
         </div>
         <div class="flex flex-col min-w-0">
@@ -1141,17 +1150,23 @@
              дёргалась на каждом нажатии, а второй дизайн не мог переопределить главную
              кнопку плеера вообще. -->
         <button
-          aria-label="Play or Pause"
+          aria-label={$isPlaying ? 'Пауза' : 'Воспроизвести'}
           class="play-btn"
           on:click={() => $isPlaying = !$isPlaying}
           disabled={!$currentTrack}
         >
           <div class="play-btn-glow"></div>
-          {#if $isPlaying}
-            <Pause size={16} fill="currentColor" />
-          {:else}
-            <Play size={16} fill="currentColor" class="ml-1" />
-          {/if}
+          <!-- Один SVG остаётся на месте между состояниями. Раньше Play получал `ml-1`
+               (ровно 4px вправо), поэтому треугольник и выглядел смещённым. -->
+          <MorphIcon
+            icon={$isPlaying ? PauseData : PlayData}
+            size={16}
+            strokeWidth={2.35}
+            fill="currentColor"
+            class="play-pause-morph"
+            spring="snappy"
+            reducedMotion="user"
+          />
         </button>
 
         <!-- Обработчик через стрелку, а не `on:click={playNext}`: обработчику события Svelte

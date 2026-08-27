@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { Search as SearchIcon, Play, Loader2, Music, Heart, Plus, ListMusic, Check, Radio } from 'lucide-svelte';
+  import { Search as SearchIcon, Play, Loader2, Music, Heart, ListMusic, Radio } from 'lucide-svelte';
+  import { Plus as PlusIcon, Check as CheckIcon } from 'lucide';
+  import { MorphIcon } from 'morphicons/svelte';
   import { performSearch, getSoundCloudPlaylists } from '$lib/api';
   import { currentTrack, isPlaying, settings, searchQuery, searchResults, searchPlaylists, queue, searchHistory, likedTracks, playlists, notify } from '$lib/stores';
   import { getTracks } from '$lib/db';
@@ -23,6 +25,10 @@
   let expandedPlaylistId: string | null = null;
   let activePreviewPlaylist: any = null;
 
+  function isPlaylistSaved(playlist: any, library: any[]) {
+    return library.some(item => item.title === playlist.title || item.id === playlist.id);
+  }
+
   function startPlaylistPreview(e: Event, pl: any) {
     e.stopPropagation();
     activePreviewPlaylist = pl;
@@ -30,12 +36,16 @@
 
   onMount(() => {
     if ($searchQuery.trim() !== '' && $searchResults.length === 0) {
-      handleSearch({ target: { value: $searchQuery } } as any);
+      scheduleSearch($searchQuery, 0);
     }
   });
 
   function handleSearch(e: Event) {
     const val = (e.target as HTMLInputElement).value;
+    scheduleSearch(val);
+  }
+
+  function scheduleSearch(val: string, delay = 380) {
     searchQuery.set(val);
     clearTimeout(timeout);
     // Anything still in flight is stale from here on.
@@ -94,7 +104,21 @@
         console.error('[Search] запрос не удался', err);
         if (generation === searchGeneration) isLoading = false;
       }
-    }, 380);
+    }, delay);
+  }
+
+  function setSearchSource(source: 'soundcloud' | 'yandex') {
+    if (source === $settings.searchSource) return;
+    if (source === 'yandex' && !$settings.yandexToken) {
+      notify('Сначала подключи Яндекс Музыку в настройках', 'info');
+      return;
+    }
+
+    $settings.searchSource = source;
+    expandedPlaylistId = null;
+    searchResults.set([]);
+    searchPlaylists.set([]);
+    if ($searchQuery.trim()) scheduleSearch($searchQuery, 0);
   }
 
   /**
@@ -142,17 +166,58 @@
 </script>
 
 <div class="max-w-6xl mx-auto py-8 px-4 w-full flex flex-col">
-  <div class="relative group mb-8 flex-shrink-0">
-    <div class="absolute inset-y-0 left-4 flex items-center pointer-events-none text-neutral-400 group-focus-within:text-primary transition-colors z-10">
-      <SearchIcon size={24} />
+  <div class="search-toolbar">
+    <div class="search-field group">
+      <div class="absolute inset-y-0 left-4 flex items-center pointer-events-none text-neutral-400 group-focus-within:text-primary transition-colors z-10">
+        <SearchIcon size={24} />
+      </div>
+      <input
+        type="text"
+        placeholder="Что будем слушать?"
+        class="w-full h-16 surface !rounded-2xl pl-14 pr-6 text-xl font-normal tracking-[-0.01em] text-white placeholder-neutral-500 outline-none ring-0 focus:outline-none focus:ring-0"
+        bind:value={$searchQuery}
+        on:input={handleSearch}
+      />
     </div>
-    <input 
-      type="text" 
-      placeholder="Что будем слушать?" 
-      class="w-full h-16 surface !rounded-2xl pl-14 pr-6 text-xl font-normal tracking-[-0.01em] text-white placeholder-neutral-500 outline-none ring-0 focus:outline-none focus:ring-0 transition-all"
-      bind:value={$searchQuery}
-      on:input={handleSearch}
-    />
+
+    <div class="search-source-switch">
+      <span class="search-source-label">Искать в</span>
+      <div
+        class="seg-control search-source-control"
+        style="--seg-count: 2; --seg-index: {$settings.searchSource === 'yandex' ? 1 : 0}"
+        role="tablist"
+        aria-label="Источник поиска"
+        aria-busy={isLoading}
+      >
+        <span class="seg-pill" aria-hidden="true"></span>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={$settings.searchSource === 'soundcloud'}
+          class="seg-item"
+          class:is-active={$settings.searchSource === 'soundcloud'}
+          on:click={() => setSearchSource('soundcloud')}
+          title="Искать в SoundCloud"
+        >
+          <span class="search-source-dot is-soundcloud" aria-hidden="true"></span>
+          SoundCloud
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={$settings.searchSource === 'yandex'}
+          aria-disabled={!$settings.yandexToken}
+          class="seg-item"
+          class:is-active={$settings.searchSource === 'yandex'}
+          class:is-unavailable={!$settings.yandexToken}
+          on:click={() => setSearchSource('yandex')}
+          title={$settings.yandexToken ? 'Искать в Яндекс Музыке' : 'Сначала подключи Яндекс Музыку в настройках'}
+        >
+          <span class="search-source-dot is-yandex" aria-hidden="true"></span>
+          Яндекс
+        </button>
+      </div>
+    </div>
   </div>
 
   <div class="flex-1 min-h-0">
@@ -256,21 +321,17 @@
                           <Radio size={20} />
                           Трейлер
                         </button>
-                        {#if $playlists.some(p => p.title === pl.title || p.id === pl.id)}
-                          <button 
-                            class="bg-green-500/20 border border-green-500/30 text-green-400 px-6 py-3 rounded-full font-bold transition-all flex items-center gap-2 transform hover:scale-105"
-                            on:click|stopPropagation={() => {
+                        <button
+                          class={isPlaylistSaved(pl, $playlists)
+                            ? 'bg-green-500/20 border border-green-500/30 text-green-400 px-6 py-3 rounded-full font-bold transition-colors flex items-center gap-2'
+                            : 'bg-white/10 hover:bg-white/20 text-white px-6 py-3 rounded-full font-bold transition-colors flex items-center gap-2'}
+                          aria-pressed={isPlaylistSaved(pl, $playlists)}
+                          aria-label={isPlaylistSaved(pl, $playlists) ? `Убрать «${pl.title}» из медиатеки` : `Добавить «${pl.title}» в медиатеку`}
+                          on:click|stopPropagation={() => {
+                            if (isPlaylistSaved(pl, $playlists)) {
                               playlists.update(p => p.filter(x => x.title !== pl.title && x.id !== pl.id));
                               notify(`Убрал «${pl.title}» из медиатеки`, 'info');
-                            }}
-                          >
-                            <Check size={20} />
-                            В медиатеке
-                          </button>
-                        {:else}
-                          <button 
-                            class="bg-white/10 hover:bg-white/20 text-white px-6 py-3 rounded-full font-bold transition-all flex items-center gap-2 transform hover:scale-105"
-                            on:click|stopPropagation={() => {
+                            } else {
                               playlists.update(p => [...p, {
                                 id: pl.id || Date.now().toString(),
                                 title: pl.title,
@@ -278,12 +339,17 @@
                                 coverUrl: pl.coverUrl || (pl.tracks && pl.tracks[0]?.coverUrl) || ''
                               }]);
                               notify(`«${pl.title}» теперь в медиатеке`, 'success');
-                            }}
-                          >
-                            <Plus size={20} />
-                            Добавить
-                          </button>
-                        {/if}
+                            }
+                          }}
+                        >
+                          <MorphIcon
+                            icon={isPlaylistSaved(pl, $playlists) ? CheckIcon : PlusIcon}
+                            size={20}
+                            spring="snappy"
+                            reducedMotion="user"
+                          />
+                          {isPlaylistSaved(pl, $playlists) ? 'В медиатеке' : 'Добавить'}
+                        </button>
                         <div class="text-white/40 text-sm ml-auto font-medium bg-black/20 px-4 py-2 rounded-xl">
                           {withCount(pl.tracks?.length || 0, 'трек', 'трека', 'треков')}
                         </div>

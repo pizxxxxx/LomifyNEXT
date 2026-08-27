@@ -399,6 +399,13 @@ body[data-design="aurora"] .setting-row:hover {
   border-bottom-color: var(--aurora-edge-hi);
 }
 
+body[data-design="aurora"] .support-plate {
+  background:
+    radial-gradient(circle at 8% 0%, color-mix(in srgb, var(--color-primary) 16%, transparent), transparent 44%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.042), rgba(255, 255, 255, 0.012));
+  border-color: color-mix(in srgb, var(--color-primary) 28%, var(--aurora-edge));
+}
+
 body[data-design="aurora"] .theme-swatch {
   border-radius: 0.7rem;
   background: var(--aurora-fill);
@@ -678,23 +685,14 @@ html body[data-design="aurora"] .sidebar-shell {
      стоит он ПОЗЖЕ (аврорный файл подключается в шапке app.css). При равном весе победил бы
      он, и в стиле «style2» панель осталась бы базовой. `html` добавляет ровно тот один вес,
      которого не хватает. */
-  border-radius: var(--aurora-r-panel);
-  /* Три остановки, а не плоская заливка: панель высотой во весь экран с постоянной
-     прозрачностью читается как наклейка. Верх светлее — там панель ловит свет, низ уходит
-     в тень, и вертикаль сама показывает, что это объём. */
-  background: linear-gradient(
-    180deg,
-    rgba(23, 23, 34, 0.74) 0%,
-    rgba(12, 12, 19, 0.82) 46%,
-    rgba(7, 7, 12, 0.88) 100%
-  );
-  border-color: var(--aurora-edge);
-  /* `lg` — ступень, ради которой этот токен и вводился: «панель во всю колонку». На базовых
-     12px самая большая поверхность приложения читалась тоньше всплывающего меню (22px),
-     которое лежит ПОВЕРХ неё, — крупное стекло обязано быть толще мелкого. */
-  backdrop-filter: blur(var(--aurora-blur-lg)) saturate(1.4);
-  -webkit-backdrop-filter: blur(var(--aurora-blur-lg)) saturate(1.4);
-  box-shadow: var(--aurora-lift), inset 0 1px 0 rgba(255, 255, 255, 0.075);
+  /* Тот же материал, что у нижнего плеера в светлом стиле: прежний угольно-фиолетовый
+     градиент делал две постоянные панели похожими на части разных приложений. */
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
   /* Контекст наложения задан явно, а не получен как побочный эффект `backdrop-filter`:
      подсветка логотипа ниже уходит на отрицательный слой, и предел, до которого она
      проваливается, не должен зависеть от того, применено ли размытие (а ниже, при
@@ -705,25 +703,26 @@ html body[data-design="aurora"] .sidebar-shell {
      панели под нажатием. */
 }
 
-/* Логотип: свечение сзади отключено — на реальном акценте с обложки оно читалось как
-   тёмная клякса вокруг иконки и белое пятно под подписью, а не как «свет». Логотип
-   сам по себе контрастен к угольной панели. */
+/* Нижний плеер в тёмном стиле использует `bg-black/40 border-white/10`; боковая панель
+   повторяет эту пару, а не остаётся материалом от светлого варианта. */
+html body[data-design="aurora"][data-ui-style="style2"] .sidebar-shell {
+  background: rgba(0, 0, 0, 0.4);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+/* Знак остаётся частью материала панели: он чуть тише в Aurora, где обложка уже даёт
+   достаточно цвета и глубины. */
 body[data-design="aurora"] .sidebar-brand::before {
   display: none;
 }
 
 body[data-design="aurora"] .sidebar-brand {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+  border-bottom: 0;
 }
 
-body[data-design="aurora"] .sidebar-brand-mark {
-  background: linear-gradient(
-    145deg,
-    color-mix(in srgb, var(--color-primary) 18%, rgba(255, 255, 255, 0.055)),
-    rgba(255, 255, 255, 0.018)
-  );
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12),
-    0 12px 24px -18px color-mix(in srgb, var(--color-primary) 72%, transparent);
+body[data-design="aurora"] .sidebar-watermark {
+  opacity: 0.07;
+  filter: saturate(0.72) contrast(1);
 }
 
 body[data-design="aurora"] .sidebar-section-label {
@@ -917,6 +916,23 @@ body[data-design="aurora"] .tile-title {
   color: rgba(255, 255, 255, 0.95);
 }
 
+body[data-design="aurora"] .library-track-tile {
+  border-color: rgba(255, 255, 255, 0.055);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(7, 7, 11, 0.28));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045), 0 18px 36px -28px rgba(0, 0, 0, 0.98);
+}
+
+body[data-design="aurora"] .library-track-tile.is-active {
+  border-color: color-mix(in srgb, var(--color-primary) 42%, rgba(255, 255, 255, 0.06));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--color-primary) 10%, rgba(255, 255, 255, 0.025)), rgba(7, 7, 11, 0.3));
+}
+
+body[data-design="aurora"] .library-view-toggle,
+body[data-design="aurora"] .library-tile-actions {
+  border-color: var(--aurora-edge);
+  background-color: rgba(8, 8, 12, 0.66);
+}
+
 body[data-design="aurora"] .tile-sub {
   font-size: 11.5px;
   font-weight: 500;
@@ -1085,6 +1101,20 @@ body[data-design="aurora"] .artist-hero {
   --mask-side-r: 8%;
   --mask-core: 58%;
   --mask-core-y: 0%;
+}
+
+/* В Aurora верх hero уходит под системную полосу окна, поэтому контрол опускается вместе с
+   остальным содержимым. Стеклянную поверхность оставляет общий `.seg-control`; здесь нужна
+   только привязка к безопасной области баннера. */
+body[data-design="aurora"] .artist-source-switch {
+  top: 5rem;
+  right: 3rem;
+}
+
+body[data-design="aurora"] .artist-source-control {
+  background: rgba(0, 0, 0, 0.38);
+  backdrop-filter: blur(22px) saturate(1.25);
+  -webkit-backdrop-filter: blur(22px) saturate(1.25);
 }
 
 /* Баннер здесь не декоративная подложка сбоку, а сам фон блока: он занимает всю шапку,
@@ -1377,19 +1407,16 @@ body[data-design="aurora"] .design-card.is-active {
     -webkit-backdrop-filter: none;
   }
 
-  /* Боковая панель — самая большая полупрозрачная поверхность приложения, и сквозь неё
-     проезжает фон с обложкой, то есть подложка под каждой подписью раздела меняется от
-     трека к треку. Плотный цвет здесь нужен раньше, чем где-либо ещё.
-
-     #0a0a11 — не из ряда «плита/панель», и намеренно: те слои лежат ПОВЕРХ страницы и
-     потому светлее её, а панель — структурная область, она обязана оставаться темнее того,
-     что на ней лежит. Отсюда значение между страницей (#05050a) и плитой (#0d0d15):
-     порядок «панель темнее содержимого» сохраняется и без прозрачности. Градиент оставляю —
-     он даёт объём, ничего не просвечивая; убирается ровно размытие. */
+  /* При явном запросе на непрозрачность совпадение с нижним стеклом уступает контрасту:
+     обе версии панели становятся плотными, а размытие полностью исчезает. */
   html body[data-design="aurora"] .sidebar-shell {
-    background: linear-gradient(180deg, #0d0d16 0%, #0a0a11 46%, #07070c 100%);
+    background: #12121b;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
+  }
+
+  html body[data-design="aurora"][data-ui-style="style2"] .sidebar-shell {
+    background: #09090f;
   }
 
   /* Заливка выбранного раздела перестаёт подмешивать прозрачное белое и кладётся прямо на
@@ -1546,13 +1573,12 @@ body[data-design="aurora"] .design-card.is-active {
 body[data-design="aurora"][data-perf="light"] .sidebar-shell {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
-  background: linear-gradient(
-    180deg,
-    rgba(18, 18, 26, 0.92) 0%,
-    rgba(12, 12, 18, 0.95) 46%,
-    rgba(8, 8, 13, 0.97) 100%
-  );
-  box-shadow: var(--aurora-lift), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  background-image: var(--perf-glass);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+}
+
+body[data-design="aurora"][data-perf="light"][data-ui-style="style2"] .sidebar-shell {
+  background-image: var(--perf-deep);
 }
 
 body[data-design="aurora"][data-perf="light"] .tile-art,

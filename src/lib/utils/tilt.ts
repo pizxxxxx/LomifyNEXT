@@ -116,6 +116,16 @@ const SPEC_SWING = 26;
 /** Где блик стоит до входа курсора: за ближней кромкой, целиком вне плитки. */
 const SPEC_ENTRY = -35;
 
+/**
+ * Мягкая доля отражения теперь имеет собственную точку на плоскости обложки. Полоса и
+ * пятно остаются одним источником света: первое даёт яркое ядро, второе — объём вокруг
+ * него. Стартовая точка лежит за кромкой вдоль той же оси, что и диагональная полоса.
+ */
+const SPEC_SPOT_SWING = 30;
+const SPEC_SPOT_ENTRY_DISTANCE = 112;
+const SPEC_ENTRY_X = 50 - AXIS_X * SPEC_SPOT_ENTRY_DISTANCE;
+const SPEC_ENTRY_Y = 50 - AXIS_Y * SPEC_SPOT_ENTRY_DISTANCE;
+
 /* Жёсткость и затухание. ζ = c / (2√k): наклон 22/(2·13.04) ≈ 0.84 — догон с еле
    заметным перелётом; блик жёстче, он должен отставать лишь чуть-чуть, иначе «плавает»
    отдельно от курсора; яркость — почти без перелёта, мигание на входе не нужно. */
@@ -141,6 +151,8 @@ const VARS = [
   '--mouse-y',
   '--glare',
   '--spec-pos',
+  '--spec-x',
+  '--spec-y',
   '--spec-a',
   '--tilt-rx',
   '--tilt-ry',
@@ -245,7 +257,20 @@ function paint(card: Card) {
   const target = 50 + swing;
   // Вбегание: тот же конверт, что ведёт подъём карточки, поэтому вход — один жест.
   const pos = SPEC_ENTRY + card.env.x * (target - SPEC_ENTRY);
+
+  // Пространственная доля блика не приклеена к курсору. Она следует нормали повернутой
+  // плоскости, поэтому при движении по диагонали свет действительно описывает поверхность,
+  // а не выглядит белым кружком поверх изображения.
+  const normalX = fxTilt ? card.ry.x / MAX_TILT : 0;
+  const normalY = fxTilt ? -card.rx.x / MAX_TILT : 0;
+  const targetX = 50 + normalX * SPEC_SPOT_SWING;
+  const targetY = 50 + normalY * SPEC_SPOT_SWING;
+  const spotX = SPEC_ENTRY_X + card.env.x * (targetX - SPEC_ENTRY_X);
+  const spotY = SPEC_ENTRY_Y + card.env.x * (targetY - SPEC_ENTRY_Y);
+
   style.setProperty('--spec-pos', `${pos.toFixed(2)}%`);
+  style.setProperty('--spec-x', `${spotX.toFixed(2)}%`);
+  style.setProperty('--spec-y', `${spotY.toFixed(2)}%`);
   style.setProperty('--spec-a', card.env.x.toFixed(3));
 }
 

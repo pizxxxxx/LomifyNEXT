@@ -45,10 +45,8 @@
      только пункты под курсором, поэтому переход между разделами не сбрасывает положение
      всей колонки и не пересобирает размытие фона под ней. -->
 <aside class="sidebar-shell">
+  <img class="sidebar-watermark" src="/app-icon.png?v=2" alt="" aria-hidden="true" />
   <div class="sidebar-brand">
-    <span class="sidebar-brand-mark">
-      <img src="/lomimi.png?v=2" alt="" aria-hidden="true" />
-    </span>
     <span class="sidebar-brand-copy">
       <strong>Lomify<span>NEXT</span></strong>
       <small>Твоя музыка, без лишнего</small>

@@ -4,13 +4,18 @@
   import { cubicOut } from 'svelte/easing';
   import { Play, Loader2, User, Info, Disc, X, ListMusic, ChevronLeft, Music2 } from 'lucide-svelte';
   import { currentArtist, currentTrack, isPlaying, queue, settings, globalVolume, notify, pageAtmosphere, type PageAtmosphere } from '$lib/stores';
-  import { getArtistTracks, getAudioUrl, getArtistAlbums, getArtistProfile, getAlbumTracks, trackByArtist } from '$lib/api';
+  import { getArtistTracks, getAudioUrl, getArtistAlbums, getArtistProfile, getAlbumTracks, trackByArtist, type ArtistSource } from '$lib/api';
   import ArtistTag from './ArtistTag.svelte';
   import TrackStatus from './TrackStatus.svelte';
   import { withCount, plural } from '$lib/utils/plural';
 
   let tracks: any[] = [];
   let isLoading = true;
+  // Площадка страницы — локальный выбор. Переключение профиля не должно заодно менять
+  // источник поиска, главной ленты и рекомендаций во всём приложении.
+  let artistSource: ArtistSource = $settings.searchSource === 'yandex' && $settings.yandexToken
+    ? 'yandex'
+    : 'soundcloud';
   // Two sources for the same slot: the SoundCloud profile picture (right, when we're sure
   // it's the same account) and the artwork of the first track (always available). Keeping
   // them apart means whichever resolves second can't blank out the other.
@@ -86,6 +91,23 @@
    * раскрывается на месте сетки, а не под ней.
    */
   let activeTab: 'tracks' | 'albums' = 'tracks';
+  let openInfoRow = -1;
+
+  function toggleTrackInfo(event: MouseEvent, row: number) {
+    event.preventDefault();
+    event.stopPropagation();
+    openInfoRow = openInfoRow === row ? -1 : row;
+  }
+
+  function onArtistInfoPointerDown(event: PointerEvent) {
+    if (openInfoRow < 0) return;
+    const owner = (event.target as HTMLElement | null)?.closest?.('[data-artist-info-row]') as HTMLElement | null;
+    if (owner?.dataset.artistInfoRow !== String(openInfoRow)) openInfoRow = -1;
+  }
+
+  function onArtistInfoKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape') openInfoRow = -1;
+  }
 
   /**
    * Направление последнего перехода: +1 — вперёд (вправо), -1 — назад (влево). Нужно только
@@ -100,6 +122,7 @@
     // Уходя с релизов, закрываем раскрытый: вернувшись на вкладку, ждёшь список всего, а не
     // то, что открывал до этого.
     expandedAlbum = null;
+    openInfoRow = -1;
     activeTab = tab;
   }
   
@@ -137,6 +160,8 @@
 
   onMount(() => {
     previewAudio = new Audio();
+    window.addEventListener('pointerdown', onArtistInfoPointerDown, true);
+    window.addEventListener('keydown', onArtistInfoKeydown);
   });
 
   onDestroy(() => {
@@ -144,6 +169,8 @@
       previewAudio.pause();
       previewAudio.src = '';
     }
+    window.removeEventListener('pointerdown', onArtistInfoPointerDown, true);
+    window.removeEventListener('keydown', onArtistInfoKeydown);
     // Гасим подложку только если она всё ещё наша: порядок «создать новую страницу →
     // уничтожить старую» Svelte не обещает, и слепой сброс погасил бы подложку, которую
     // только что поставил следующий раздел.
@@ -180,9 +207,10 @@
     }
   }
 
-  // React to artist changes
+  // React to artist and source changes. Явный source не даёт API тихо подменить выбранную
+  // площадку fallback-данными другой площадки.
   $: if ($currentArtist) {
-    loadArtist($currentArtist);
+    loadArtist($currentArtist, artistSource);
   }
 
   // Switching artists while a request is still in flight used to let the slower response
@@ -190,7 +218,7 @@
   // takes a generation number and only the newest one may write to the view.
   let loadGeneration = 0;
 
-  async function loadArtist(artistName: string) {
+  async function loadArtist(artistName: string, source: ArtistSource) {
     const generation = ++loadGeneration;
     isLoading = true;
     tracks = [];
@@ -204,13 +232,14 @@
     artistFollowers = 0;
     artistListeners = 0;
     artistLikes = 0;
+    totalPlaybackCount = 0;
     catalogTrackCount = 0;
     catalogAlbumCount = 0;
     lightboxUrl = '';
 
     // The profile (avatar, header banner, followers) comes from a different endpoint than
     // the tracks, so let it land on its own instead of holding up the whole page.
-    getArtistProfile(artistName).then(profile => {
+    getArtistProfile(artistName, source).then(profile => {
       if (generation !== loadGeneration || !profile) return;
       artistBannerUrl = profile.bannerUrl;
       artistFollowers = profile.followersCount;
@@ -224,7 +253,7 @@
     }).catch(e => console.error("Artist profile fetch failed", e));
 
     try {
-      const results = await getArtistTracks(artistName);
+      const results = await getArtistTracks(artistName, source);
       if (generation !== loadGeneration) return;
 
       // Сверка по списку исполнителей трека, а не по склеенной подписи: у совместной вещи в
@@ -245,7 +274,7 @@
         trackAvatarUrl = '';
       }
 
-      getArtistAlbums(artistName).then(res => {
+      getArtistAlbums(artistName, source).then(res => {
         if (generation === loadGeneration) albums = res;
       }).catch(e => console.error("Albums fetch failed", e));
 
@@ -253,6 +282,16 @@
       console.error(err);
     }
     if (generation === loadGeneration) isLoading = false;
+  }
+
+  function setArtistSource(source: ArtistSource) {
+    if (source === artistSource) return;
+    if (source === 'yandex' && !$settings.yandexToken) {
+      notify('Сначала подключи Яндекс Музыку в настройках', 'info');
+      return;
+    }
+    openInfoRow = -1;
+    artistSource = source;
   }
 
   /**
@@ -374,6 +413,43 @@
       <div class="artist-hero-fade"></div>
     {/if}
     <div class="artist-hero-tint"></div>
+    <div class="artist-source-switch">
+      <div
+        class="seg-control artist-source-control"
+        style="--seg-count: 2; --seg-index: {artistSource === 'yandex' ? 1 : 0}"
+        role="tablist"
+        aria-label="Площадка артиста"
+        aria-busy={isLoading}
+      >
+        <span class="seg-pill" aria-hidden="true"></span>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={artistSource === 'soundcloud'}
+          class="seg-item"
+          class:is-active={artistSource === 'soundcloud'}
+          on:click={() => setArtistSource('soundcloud')}
+          title="Показать артиста в SoundCloud"
+        >
+          <span class="artist-source-dot is-soundcloud" aria-hidden="true"></span>
+          SoundCloud
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={artistSource === 'yandex'}
+          aria-disabled={!$settings.yandexToken}
+          class="seg-item"
+          class:is-active={artistSource === 'yandex'}
+          class:is-unavailable={!$settings.yandexToken}
+          on:click={() => setArtistSource('yandex')}
+          title={$settings.yandexToken ? 'Показать артиста в Яндекс Музыке' : 'Сначала подключи Яндекс Музыку в настройках'}
+        >
+          <span class="artist-source-dot is-yandex" aria-hidden="true"></span>
+          Яндекс Музыка
+        </button>
+      </div>
+    </div>
     <!-- Кружок с аватаром: кнопка, а не картинка, когда её есть смысл открыть. Без аватара
          (буква-заглушка) остаётся обычным блоком — нажимать не на что, и `<button>` там
          только обманывал бы указатель и клавиатуру. -->
@@ -417,7 +493,7 @@
           • {totalPlaybackCount.toLocaleString('ru-RU')} прослушиваний
         {/if}
         <!-- Слушатели — из Яндекса, подписчики — из SoundCloud. Оба сразу не бывают: профиль
-             приходит от одного источника, того, который выбран в настройках. -->
+             приходит от площадки, выбранной переключателем в этой шапке. -->
         {#if artistListeners > 0}
           • {artistListeners.toLocaleString('ru-RU')} {plural(artistListeners, 'слушатель', 'слушателя', 'слушателей')} за месяц
         {/if}
@@ -475,8 +551,8 @@
   {:else if tracks.length === 0}
     <div class="flex-1 flex flex-col items-start justify-center px-10">
       <User size={26} class="mb-5 text-white/20" />
-      <p class="display-title">У этого артиста тут пусто</p>
-      <p class="empty-hint">Ни одного трека не нашлось — возможно, имя написано немного иначе.</p>
+      <p class="display-title">На {artistSource === 'yandex' ? 'Яндекс Музыке' : 'SoundCloud'} тут пусто</p>
+      <p class="empty-hint">Ни одного трека не нашлось. Можно проверить вторую площадку переключателем в шапке.</p>
     </div>
   {:else}
     
@@ -622,7 +698,7 @@
           {:else if !al.tracks?.length}
             <p class="empty-hint">Треки этого релиза не пришли — источник их не отдал.</p>
           {:else}
-            <div class="flex flex-col gap-2">
+            <div class="track-row-list is-compact">
               {#each al.tracks as track, i}
                 {@const isActive = $currentTrack?.title === track.title && $currentTrack?.artist === track.artist}
                 <!-- svelte-ignore a11y-click-events-have-key-events -->
@@ -633,13 +709,13 @@
                      которого тень заранее отрисована на псевдоэлементе и проявляется
                      прозрачностью, а переход остаётся только на цвете фона. -->
                 <div
-                  class="relative hover:z-50 flex items-center gap-4 group/track rounded-xl p-2 transition-colors w-full cursor-pointer interactive-item {isActive ? 'bg-primary/10 border border-primary/20' : 'hover:bg-white/5'} {track.isBanned ? 'opacity-60' : ''}"
+                  class="track-row-card is-plain group/track interactive-item {isActive ? 'is-active' : ''} {track.isBanned ? 'is-banned' : ''}"
                   on:click={() => playTrack(track, al.tracks)}
                 >
                   <TrackStatus index={i} {isActive} playing={$isPlaying} banned={track.isBanned} />
-                  <div class="flex flex-col flex-1 min-w-0 pr-4">
-                    <span class="font-bold text-[14px] truncate {isActive ? 'text-primary' : 'text-white'}">{track.title}</span>
-                    <span class="text-neutral-400 text-[12px] mt-0.5 min-w-0">
+                  <div class="track-row-copy">
+                    <span class="track-row-title">{track.title}</span>
+                    <span class="track-row-artist">
                       <ArtistTag artist={track.artist} artists={track.artists} />
                     </span>
                   </div>
@@ -653,7 +729,7 @@
 
     {#if activeTab === 'tracks'}
     <div class="artist-pane" in:fly={{ x: 34 * navDir, duration: 340, easing: cubicOut }}>
-    <div class="track-collection grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2 p-2">
+    <div class="track-collection track-row-grid" class:has-open-track-menu={openInfoRow >= 0}>
       {#each tracks as track, i}
         {@const isActive = $currentTrack?.title === track.title && $currentTrack?.artist === track.artist}
         <!-- svelte-ignore a11y-click-events-have-key-events -->
@@ -663,20 +739,22 @@
              `box-shadow`, которое перерисовывается каждый кадр). Два подъёма складывались
              в 8px и заметно дёргались. -->
         <div
-          class="relative hover:z-50 flex items-center gap-4 group rounded-xl p-2 transition-colors w-full cursor-pointer interactive-item {isActive ? 'bg-primary/10 border border-primary/20' : 'hover:bg-white/5'} {track.isBanned ? 'opacity-60' : ''}"
+          data-artist-info-row={i}
+          class="track-row-card group interactive-item {isActive ? 'is-active' : ''} {track.isBanned ? 'is-banned' : ''}"
+          class:has-open-menu={openInfoRow === i}
           on:click={() => playTrack(track)}
         >
           <TrackStatus index={i} {isActive} playing={$isPlaying} banned={track.isBanned} />
-          <div class="relative w-12 h-12 min-w-[3rem] min-h-[3rem] aspect-square shadow-sm rounded-lg overflow-hidden shrink-0 bg-neutral-800"
+          <div class="track-row-art"
                on:mouseenter={() => handleMouseEnter(track)}
                on:mouseleave={handleMouseLeave}>
             {#if track.coverUrl}
               <!-- `lazy` — потому что список перестал быть короткой выдачей поиска: у артиста
                    с большой дискографией здесь сотни строк, и без этого браузер полез бы за
                    всеми обложками сразу, включая те, до которых никто не докрутит. -->
-              <img src={track.coverUrl} alt="Cover" loading="lazy" class="w-full h-full object-cover" />
+              <img src={track.coverUrl} alt="" loading="lazy" />
             {:else}
-              <div class="w-full h-full flex items-center justify-center text-neutral-500">
+              <div class="track-row-art-empty">
                 <Play size={20} />
               </div>
             {/if}
@@ -686,19 +764,31 @@
               </div>
             {/if}
           </div>
-          <div class="flex flex-col flex-1 min-w-0 pr-1">
-            <span class="font-bold text-[14px] truncate {isActive ? 'text-primary' : 'text-white'}">{track.title}</span>
-            <div class="text-neutral-400 text-[12px] mt-0.5 min-w-0">
+          <div class="track-row-copy">
+            <span class="track-row-title">{track.title}</span>
+            <div class="track-row-artist">
               <ArtistTag artist={track.artist} artists={track.artists} />
             </div>
           </div>
-          <!-- Dropdown for Info -->
-          <div class="relative group/info mr-2">
-            <button class="opacity-0 group-hover:opacity-100 p-2 text-neutral-400 hover:text-white rounded-full transition-all" aria-label="Информация" on:click|stopPropagation>
-              <Info size={18} />
-            </button>
-            <div class="absolute right-0 {i >= tracks.length - 2 ? 'bottom-full mb-1' : 'top-full pt-1'} w-56 hidden group-hover/info:block z-50">
-              <div class="bg-neutral-900 border border-white/10 rounded-xl shadow-xl p-3 text-xs text-neutral-300 pointer-events-none">
+          <div class="track-row-actions">
+            <div class="track-row-menu-slot" data-artist-info-row={i}>
+              <button
+                data-press-late
+                class="track-row-action"
+                class:is-open={openInfoRow === i}
+                aria-label="Информация"
+                aria-haspopup="dialog"
+                aria-expanded={openInfoRow === i}
+                on:click={(event) => toggleTrackInfo(event, i)}
+              >
+                <Info size={18} />
+              </button>
+            </div>
+          </div>
+
+          {#if openInfoRow === i}
+            <div class="track-row-info-pop {i >= tracks.length - 2 ? 'is-top' : 'is-bottom'}" role="dialog" aria-label="Информация о треке" tabindex="-1" on:click|stopPropagation>
+              <div class="track-row-popover">
                 <p class="mb-1"><strong class="text-white">Автор:</strong> {track.artist}</p>
                 {#if track.playbackCount != null}
                   <p class="mb-1"><strong class="text-white">Прослушиваний SC:</strong> {track.playbackCount.toLocaleString('ru-RU')}</p>
@@ -711,7 +801,7 @@
                 {/if}
               </div>
             </div>
-          </div>
+          {/if}
         </div>
       {/each}
     </div>

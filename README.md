@@ -1,7 +1,8 @@
 # LomifyNEXT
 
-[![Release](https://img.shields.io/github/v/release/FnaferGou777/LomifyNEXT?color=ff5500)](https://github.com/FnaferGou777/LomifyNEXT/releases)
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/pizxxxxx/LomifyNEXT?color=ff5500)](https://github.com/pizxxxxx/LomifyNEXT/releases)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0%2B-blue.svg)](LICENSE)
+[![Поддержать через ЮMoney](https://img.shields.io/badge/ЮMoney-поддержать-8b3ffd)](https://yoomoney.ru/to/4100116984624656)
 
 <p align="center">
   <img src="static/lomifystart.png" alt="LomifyNEXT Logo" width="160" />
@@ -48,7 +49,7 @@
 
 ```bash
 # 1. Клонирование репозитория
-git clone [https://github.com/FnaferGou777/LomifyNEXT.git](https://github.com/FnaferGou777/LomifyNEXT.git)
+git clone https://github.com/pizxxxxx/LomifyNEXT.git
 cd LomifyNEXT
 
 # 2. Установка зависимостей
@@ -59,3 +60,16 @@ npm run tauri dev
 
 # 4. Сборка релизной версии
 npm run tauri build
+```
+
+---
+
+## Поддержать проект
+
+LomifyNEXT остаётся бесплатным приложением с открытым исходным кодом. Если проект оказался полезен, его разработку можно [поддержать через ЮMoney](https://yoomoney.ru/to/4100116984624656).
+
+---
+
+## Лицензия
+
+Copyright © 2026 FnaferGou777. Проект распространяется по лицензии [GNU GPL версии 3 или любой более поздней версии](LICENSE) (`GPL-3.0-or-later`).

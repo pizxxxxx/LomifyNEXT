@@ -3,7 +3,9 @@
   import { fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { currentTrack, isPlaying, queue, globalVolume, likedTracks, settings, playlists, notify } from '$lib/stores';
-  import { Play, Info, ListMusic, Radio, Heart, Plus, Check } from 'lucide-svelte';
+  import { Play, Pause, Info, ListMusic, Radio, Heart } from 'lucide-svelte';
+  import { Plus as PlusIcon, Check as CheckIcon } from 'lucide';
+  import { MorphIcon } from 'morphicons/svelte';
   import ArtistTag from './ArtistTag.svelte';
   import PlaylistTrailer from './PlaylistTrailer.svelte';
   import { getAudioUrl } from '$lib/api';
@@ -21,6 +23,10 @@
   let previewAudio: HTMLAudioElement | null = null;
   let hoverTimer: any = null;
   let hoveredTrack: any = null;
+
+  function isPlaylistSaved(playlist: any, library: any[]) {
+    return library.some(item => item.title === playlist.title || item.id === playlist.id);
+  }
 
   onMount(() => {
     previewAudio = new Audio();
@@ -217,21 +223,17 @@
                     <Radio size={20} />
                     Трейлер
                   </button>
-                  {#if $playlists.some(p => p.title === track.title || p.id === track.id)}
-                    <button
-                      class="bg-green-500/20 border border-green-500/30 text-green-400 px-6 py-3 rounded-full font-bold transition-all flex items-center gap-2 transform hover:scale-105"
-                      on:click|stopPropagation={() => {
+                  <button
+                    class={isPlaylistSaved(track, $playlists)
+                      ? 'bg-green-500/20 border border-green-500/30 text-green-400 px-6 py-3 rounded-full font-bold transition-colors flex items-center gap-2'
+                      : 'bg-white/10 hover:bg-white/20 text-white px-6 py-3 rounded-full font-bold transition-colors flex items-center gap-2'}
+                    aria-pressed={isPlaylistSaved(track, $playlists)}
+                    aria-label={isPlaylistSaved(track, $playlists) ? `Убрать «${track.title}» из медиатеки` : `Добавить «${track.title}» в медиатеку`}
+                    on:click|stopPropagation={() => {
+                      if (isPlaylistSaved(track, $playlists)) {
                         playlists.update(p => p.filter(pl => pl.title !== track.title && pl.id !== track.id));
                         notify(`Убрал «${track.title}» из медиатеки`, 'info');
-                      }}
-                    >
-                      <Check size={20} />
-                      В медиатеке
-                    </button>
-                  {:else}
-                    <button
-                      class="bg-white/10 hover:bg-white/20 text-white px-6 py-3 rounded-full font-bold transition-all flex items-center gap-2 transform hover:scale-105"
-                      on:click|stopPropagation={() => {
+                      } else {
                         playlists.update(p => [...p, {
                           id: track.id || Date.now().toString(),
                           title: track.title,
@@ -239,12 +241,17 @@
                           coverUrl: track.coverUrl || (track.tracks && track.tracks[0]?.coverUrl) || ''
                         }]);
                         notify(`«${track.title}» теперь в медиатеке`, 'success');
-                      }}
-                    >
-                      <Plus size={20} />
-                      Добавить
-                    </button>
-                  {/if}
+                      }
+                    }}
+                  >
+                    <MorphIcon
+                      icon={isPlaylistSaved(track, $playlists) ? CheckIcon : PlusIcon}
+                      size={20}
+                      spring="snappy"
+                      reducedMotion="user"
+                    />
+                    {isPlaylistSaved(track, $playlists) ? 'В медиатеке' : 'Добавить'}
+                  </button>
                   <div class="text-white/40 text-sm ml-auto font-medium bg-black/20 px-4 py-2 rounded-xl">
                     {withCount(track.tracks?.length || 0, 'трек', 'трека', 'треков')}
                   </div>
@@ -299,7 +306,9 @@
           <!-- Normal Track Tile -->
           <!-- svelte-ignore a11y-click-events-have-key-events -->
           <!-- svelte-ignore a11y-no-static-element-interactions -->
-          <div class="w-full group interactive-item cursor-pointer {track.isBanned ? 'opacity-60' : ''}"
+          <div
+               class="track-tile w-full group interactive-item cursor-pointer rounded-[1.25rem] {track.isBanned ? 'opacity-60' : ''}"
+               class:is-active={$currentTrack?.title === track.title}
                on:click={() => playTrack(track, index)}>
             
             <!-- Cover. `spec-art` — глянцевая поверхность: по ней ходит отражение света,
@@ -309,28 +318,42 @@
             <div class="tile-art spec-art" class:is-active={$currentTrack?.title === track.title}
                  on:mouseenter={() => handleMouseEnter(track)}
                  on:mouseleave={handleMouseLeave}>
-              <img src={track.coverUrl || 'lomimi.png'} alt={track.title} class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
+              <img src={track.coverUrl || 'lomimi.png'} alt={track.title} class="tile-cover-image" />
               
               <!-- Hover Play Overlay -->
-              <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                <button class="{track.isBanned ? 'bg-primary/40 text-white' : 'bg-primary text-white'} rounded-full p-3 shadow-xl transform translate-y-4 group-hover:translate-y-0 transition-all duration-300">
-                  <Play fill="currentColor" size={20} />
+              <div class="tile-cover-overlay">
+                <button
+                  type="button"
+                  class="tile-play-button {track.isBanned ? 'is-muted' : ''}"
+                  aria-label={$currentTrack?.title === track.title && $isPlaying ? `Поставить «${track.title}» на паузу` : `Воспроизвести «${track.title}»`}
+                >
+                  {#if $currentTrack?.title === track.title && $isPlaying}
+                    <Pause fill="currentColor" size={20} />
+                  {:else}
+                    <Play fill="currentColor" size={20} />
+                  {/if}
                 </button>
                 <button 
-                  class="absolute top-2 right-2 p-1.5 rounded-full bg-black/40 hover:bg-black/60 text-white/80 hover:text-white transition-all transform opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 duration-300 delay-75 z-10"
+                  type="button"
+                  class="tile-like-button"
+                  class:is-liked={isTrackLiked($likedTracks, track)}
                   on:click={(e) => toggleLike(e, track)}
                   title="Мне нравится"
+                  aria-label={`Отметить «${track.title}» как понравившийся`}
                 >
                   {#if isTrackLiked($likedTracks, track)}
-                    <Heart size={16} fill="#00e5ff" class="text-[#00e5ff]" />
+                    <Heart size={16} fill="currentColor" />
                   {:else}
                     <Heart size={16} />
                   {/if}
                 </button>
                 <!-- Hover Progress Bar -->
                 {#if $settings.enableHoverPreview}
-                  <div class="absolute bottom-0 left-0 h-[4px] bg-primary shadow-[0_0_8px_#00e5ff]"
-                       style="width: {hoveredTrack?.title === track.title ? '100%' : '0%'}; transition: width {$settings.hoverPreviewDelay}ms linear;">
+                  <div
+                    class="tile-preview-progress"
+                    class:is-previewing={hoveredTrack?.title === track.title}
+                    style={`--preview-duration: ${$settings.hoverPreviewDelay}ms`}
+                  >
                   </div>
                 {/if}
               </div>

@@ -3,6 +3,8 @@
   import { fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { Play, FolderOpen, Heart, User, Music, Trash2, ListMusic, Plus, ExternalLink, Check, Download, Info, Radio, X, Loader2 } from 'lucide-svelte';
+  import { LayoutGrid as LayoutGridIcon, List as ListIcon, Pause as PauseIcon, Play as PlayIcon } from 'lucide';
+  import { MorphIcon } from 'morphicons/svelte';
   import ArtistTag from './ArtistTag.svelte';
   import PlaylistMenu from './PlaylistMenu.svelte';
   import TrackStatus from './TrackStatus.svelte';
@@ -31,6 +33,18 @@
   let expandedPlaylist: string | null = null;
   let activePreviewPlaylist: any = null;
 
+  type LikedView = 'list' | 'grid';
+  const LIKED_VIEW_KEY = 'lomify-library-liked-view';
+  let likedView: LikedView = 'list';
+
+  function toggleLikedView() {
+    likedView = likedView === 'list' ? 'grid' : 'list';
+    activeTrackMenu = null;
+    try {
+      localStorage.setItem(LIKED_VIEW_KEY, likedView);
+    } catch (e) {}
+  }
+
   /**
    * Сколько строк рисуем сразу. Раньше медиатека строила ВСЕ строки в один кадр, и на
    * нескольких сотнях лайков это был один синхронный проход на полсекунды: клик по
@@ -43,31 +57,44 @@
   let rowBudget = ROWS_FIRST_PAINT;
   let growHandle = 0;
 
-  /**
-   * Строка под курсором. Нужна не для оформления (его делает `group-hover` в CSS), а чтобы
-   * не держать в DOM то, что видно только по наведению: у каждой строки лайков есть панель
-   * «Информация» и список плейлистов, и последний перебирает ВСЕ плейлисты. Триста лайков и
-   * десять плейлистов — это три тысячи скрытых кнопок в разметке, которые никто никогда не
-   * увидит одновременно. Кнопки-открывашки остаются на месте, содержимое появляется на
-   * наведении.
-   */
-  let hoveredRow = -1;
+  /** Оба всплывающих слоя строки принадлежат одному состоянию: это не даёт информации и
+      плейлистам открыться одновременно и держит тяжёлую разметку только у одной строки. */
+  type TrackMenuKind = 'info' | 'playlist';
+  let activeTrackMenu: { row: number; kind: TrackMenuKind } | null = null;
 
-  function onRowHover(e: Event) {
-    // Один слушатель на список вместо двух на каждую строку: `pointerover` всплывает, а
-    // `mouseenter` — нет. И это `pointerover`, а не `mouseover`, чтобы не тянуть за собой
-    // требование парного `on:focus` из a11y-проверки: клавиатуре эти панели не нужны,
-    // у них есть свои кнопки.
-    const row = (e.target as HTMLElement | null)?.closest?.('[data-row]') as HTMLElement | null;
-    const idx = row ? Number(row.dataset.row) : -1;
-    if (idx !== hoveredRow) hoveredRow = idx;
+  function isTrackMenuOpen(row: number, kind?: TrackMenuKind) {
+    return activeTrackMenu?.row === row && (!kind || activeTrackMenu.kind === kind);
+  }
+
+  function toggleInfoMenu(event: MouseEvent, row: number) {
+    event.preventDefault();
+    event.stopPropagation();
+    activeTrackMenu = isTrackMenuOpen(row, 'info') ? null : { row, kind: 'info' };
+  }
+
+  function handlePlaylistMenuToggle(row: number, event: CustomEvent<boolean>) {
+    if (event.detail) {
+      activeTrackMenu = { row, kind: 'playlist' };
+    } else if (isTrackMenuOpen(row, 'playlist')) {
+      activeTrackMenu = null;
+    }
+  }
+
+  function onTrackMenuPointerDown(event: PointerEvent) {
+    if (!activeTrackMenu) return;
+    const owner = (event.target as HTMLElement | null)?.closest?.('[data-track-menu-owner]') as HTMLElement | null;
+    if (owner?.dataset.trackMenuOwner !== String(activeTrackMenu.row)) activeTrackMenu = null;
+  }
+
+  function onTrackMenuKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape') activeTrackMenu = null;
   }
 
   function setTab(tab: LibraryTab) {
     if (tab === activeTab) return;
     navDir = TAB_ORDER.indexOf(tab) > tabIndex ? 1 : -1;
     expandedPlaylist = null;
-    hoveredRow = -1;
+    activeTrackMenu = null;
     activeTab = tab;
     // Бюджет строк сбрасывается вместе с вкладкой: иначе переход на «Локальные» с уже
     // раскрученного «Любимого» снова строил бы сотни строк в том же кадре, в котором
@@ -139,6 +166,11 @@
   }
 
   onMount(() => {
+    try {
+      const savedView = localStorage.getItem(LIKED_VIEW_KEY);
+      if (savedView === 'list' || savedView === 'grid') likedView = savedView;
+    } catch (e) {}
+
     (async () => {
       localTracks = await getTracks();
       growRows();
@@ -154,7 +186,13 @@
       cachedUrns = cachedUrns;
     };
     window.addEventListener('cacheCleared', handleCacheCleared);
-    return () => window.removeEventListener('cacheCleared', handleCacheCleared);
+    window.addEventListener('pointerdown', onTrackMenuPointerDown, true);
+    window.addEventListener('keydown', onTrackMenuKeydown);
+    return () => {
+      window.removeEventListener('cacheCleared', handleCacheCleared);
+      window.removeEventListener('pointerdown', onTrackMenuPointerDown, true);
+      window.removeEventListener('keydown', onTrackMenuKeydown);
+    };
   });
 
   onDestroy(() => {
@@ -266,6 +304,16 @@
     }
     currentTrack.set(track);
     isPlaying.set(true);
+  }
+
+  function toggleTrackPlayback(e: Event, track: any, list: any[]) {
+    e.stopPropagation();
+    const isCurrent = $currentTrack?.title === track.title && $currentTrack?.artist === track.artist;
+    if (isCurrent) {
+      isPlaying.update(value => !value);
+      return;
+    }
+    playTrackList(track, list);
   }
 
   function removeLikedTrack(e: Event, track: any) {
@@ -518,38 +566,60 @@
           <p class="empty-hint">Жми на сердечко у трека — он окажется здесь и останется доступным даже без сети.</p>
         </div>
       {:else}
-        <div class="flex items-center justify-between mb-4 px-2 mt-2">
+        <div class="library-liked-toolbar">
           <div class="text-sm text-neutral-400">{withCount($likedTracks.length, 'трек', 'трека', 'треков')}</div>
-          <button 
-            class="glass-button transition-all px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm shadow-md {isDownloadingAll ? 'hover:bg-red-500 hover:text-white group' : 'hover:bg-primary hover:text-black'} disabled:opacity-50"
-            on:click={() => {
-              if (isDownloadingAll) {
-                cancelDownloadAll = true;
-              } else {
-                downloadAllTracks($likedTracks);
-              }
-            }}
-            disabled={isAllLikedCached && !isDownloadingAll}
-          >
-            {#if isDownloadingAll}
-              <div class="group-hover:hidden flex items-center gap-2">
-                <svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg> Загрузка...
-              </div>
-              <div class="hidden group-hover:flex items-center gap-2">
-                <X size={16} /> Отменить
-              </div>
-            {:else if isAllLikedCached}
-              <Check size={16} class="text-green-400" /> Скачано
-            {:else}
-              <Download size={16} /> Скачать всё
-            {/if}
-          </button>
+          <div class="library-liked-tools">
+            <button
+              type="button"
+              data-press-late
+              class="library-view-toggle"
+              aria-label={likedView === 'list' ? 'Показать треки плиткой' : 'Показать треки списком'}
+              title={likedView === 'list' ? 'Показать плиткой' : 'Показать списком'}
+              on:click={toggleLikedView}
+            >
+              <MorphIcon
+                icon={likedView === 'list' ? LayoutGridIcon : ListIcon}
+                size={17}
+                spring="snappy"
+                reducedMotion="user"
+              />
+              <span>{likedView === 'list' ? 'Плиткой' : 'Списком'}</span>
+            </button>
+            <button
+              class="glass-button transition-all px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm shadow-md {isDownloadingAll ? 'hover:bg-red-500 hover:text-white group' : 'hover:bg-primary hover:text-black'} disabled:opacity-50"
+              on:click={() => {
+                if (isDownloadingAll) {
+                  cancelDownloadAll = true;
+                } else {
+                  downloadAllTracks($likedTracks);
+                }
+              }}
+              disabled={isAllLikedCached && !isDownloadingAll}
+            >
+              {#if isDownloadingAll}
+                <div class="group-hover:hidden flex items-center gap-2">
+                  <svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg> Загрузка...
+                </div>
+                <div class="hidden group-hover:flex items-center gap-2">
+                  <X size={16} /> Отменить
+                </div>
+              {:else if isAllLikedCached}
+                <Check size={16} class="text-green-400" /> Скачано
+              {:else}
+                <Download size={16} /> Скачать всё
+              {/if}
+            </button>
+          </div>
         </div>
+        {#if likedView === 'list'}
         <!-- svelte-ignore a11y-no-static-element-interactions -->
-        <div class="flex flex-col gap-3 p-2" on:pointerover={onRowHover} on:pointerleave={() => hoveredRow = -1}>
+        <div
+          class="track-row-list"
+          class:has-open-track-menu={activeTrackMenu !== null}
+        >
           {#each visibleLiked as track, i}
             {@const isActive = $currentTrack?.title === track.title && $currentTrack?.artist === track.artist}
             {@const cached = isTrackCached(track, cachedUrns)}
@@ -557,52 +627,222 @@
             <!-- svelte-ignore a11y-no-static-element-interactions -->
             <div
               data-row={i}
-              class="relative hover:z-50 flex items-center gap-4 group rounded-xl p-2 transition-colors w-full cursor-pointer interactive-item {isActive ? 'bg-primary/10 border border-primary/20' : 'hover:bg-white/5'} {track.isBanned ? 'opacity-60' : ''}"
+              data-track-menu-owner={i}
+              class="track-row-card group interactive-item {isActive ? 'is-active' : ''} {track.isBanned ? 'is-banned' : ''}"
+              class:has-open-menu={activeTrackMenu?.row === i}
               on:click={() => playTrackList(track, $likedTracks)}
             >
               <TrackStatus index={i} {isActive} playing={$isPlaying} banned={track.isBanned} />
-              <div class="relative w-12 h-12 min-w-[3rem] min-h-[3rem] aspect-square shadow-sm rounded-lg overflow-hidden shrink-0 bg-neutral-800">
+              <div class="track-row-art">
                 {#if track.coverUrl}
-                  <img src={track.coverUrl} alt="Cover" class="w-full h-full object-cover" loading="lazy" decoding="async" />
+                  <img src={track.coverUrl} alt="" loading="lazy" decoding="async" />
                 {:else}
-                  <div class="w-full h-full flex items-center justify-center text-neutral-500">
+                  <div class="track-row-art-empty">
                     <Music size={20} />
                   </div>
                 {/if}
               </div>
-              <div class="flex flex-col flex-1 min-w-0 pr-4">
+              <div class="track-row-copy">
                 <div class="flex items-center gap-2">
-                  <span class="font-bold text-[14px] truncate {isActive ? 'text-primary' : 'text-white'}">{track.title}</span>
+                  <span class="track-row-title">{track.title}</span>
                   {#if cached}
-                    <div title="Скачан" class="flex"><Check size={14} class="text-primary shrink-0" /></div>
+                    <span title="Скачан" class="track-row-saved"><Check size={13} /></span>
                   {/if}
                 </div>
-                <span class="text-neutral-400 text-[12px] mt-0.5 min-w-0"><ArtistTag artist={track.artist} artists={track.artists} /></span>
+                <span class="track-row-artist"><ArtistTag artist={track.artist} artists={track.artists} /></span>
               </div>
-              {#if !cached}
+              <div class="track-row-actions">
+                {#if !cached}
+                  <button
+                    class="track-row-action"
+                    on:click|stopPropagation={(e) => downloadTrack(e, track)}
+                    aria-label="Скачать"
+                  >
+                    <Download size={18} />
+                  </button>
+                {:else}
+                  <div class="track-row-action is-saved" title="Скачан">
+                    <Check size={18} />
+                  </div>
+                {/if}
+
+                <!-- Информация и плейлисты управляются одним состоянием. Поэтому открытие
+                     одного меню всегда закрывает соседнее и меню другой строки. -->
+                <div class="track-row-menu-slot" data-track-menu-owner={i}>
+                  <button
+                    data-press-late
+                    class="track-row-action"
+                    class:is-open={activeTrackMenu?.row === i && activeTrackMenu?.kind === 'info'}
+                    aria-label="Информация"
+                    aria-haspopup="dialog"
+                    aria-expanded={activeTrackMenu?.row === i && activeTrackMenu?.kind === 'info'}
+                    on:click={(event) => toggleInfoMenu(event, i)}
+                  >
+                    <Info size={18} />
+                  </button>
+                </div>
+
+                <span class="track-row-menu-slot" data-track-menu-owner={i}>
+                  <PlaylistMenu
+                    {track}
+                    placement={i >= visibleLiked.length - 2 ? 'top' : 'bottom'}
+                    align="right"
+                    buttonClass="track-row-action"
+                    open={activeTrackMenu?.row === i && activeTrackMenu?.kind === 'playlist'}
+                    on:toggle={(event) => handlePlaylistMenuToggle(i, event)}
+                  />
+                </span>
+
                 <button
-                  class="opacity-0 group-hover:opacity-100 p-2 text-neutral-400 hover:text-white rounded-full transition-all mr-1"
-                  on:click|stopPropagation={(e) => downloadTrack(e, track)}
-                  aria-label="Скачать"
+                  class="track-row-action is-danger is-liked"
+                  on:click|stopPropagation={(e) => removeLikedTrack(e, track)}
+                  aria-label="Убрать из любимых"
                 >
-                  <Download size={18} />
+                  <Heart size={18} fill="currentColor" />
                 </button>
-              {:else}
-                <div class="opacity-0 group-hover:opacity-100 p-2 text-primary rounded-full transition-all mr-1 flex items-center justify-center cursor-default" title="Скачан">
-                  <Check size={18} />
+              </div>
+
+              <!-- Панель принадлежит строке, а не узкому слоту иконки. Иначе абсолютный
+                   слой оказывался в локальном контексте кнопки: состояние открывалось,
+                   но сама панель могла остаться под соседними строками. -->
+              {#if activeTrackMenu?.row === i && activeTrackMenu?.kind === 'info'}
+                <div class="track-row-info-pop {i >= visibleLiked.length - 2 ? 'is-top' : 'is-bottom'}" role="dialog" aria-label="Информация о треке" tabindex="-1" on:click|stopPropagation>
+                  <div class="track-row-popover">
+                    <p class="mb-1"><strong class="text-white">Автор:</strong> {track.artist}</p>
+                    {#if track.playbackCount != null}
+                      <p class="mb-1"><strong class="text-white">Прослушиваний SC:</strong> {track.playbackCount.toLocaleString('ru-RU')}</p>
+                    {/if}
+                    {#if track.releaseDate}
+                      <p class="mb-1"><strong class="text-white">Выпущен:</strong> {new Date(track.releaseDate).toLocaleDateString('ru-RU')}</p>
+                    {/if}
+                    {#if track.genre}
+                      <p><strong class="text-white">Жанр:</strong> {track.genre}</p>
+                    {/if}
+                  </div>
                 </div>
               {/if}
+            </div>
+          {/each}
+        </div>
+        {:else}
+          <!-- Плитка сохраняет все действия строки, но переносит их на саму обложку. Меню
+               информации и плейлистов по-прежнему делят одно состояние, поэтому слои не
+               могут открыться одновременно и соседние карточки не накрывают их кнопками. -->
+          <!-- svelte-ignore a11y-no-static-element-interactions -->
+          <div
+            class="library-track-grid"
+            class:has-open-track-menu={activeTrackMenu !== null}
+          >
+            {#each visibleLiked as track, i}
+              {@const isActive = $currentTrack?.title === track.title && $currentTrack?.artist === track.artist}
+              {@const cached = isTrackCached(track, cachedUrns)}
+              <!-- svelte-ignore a11y-click-events-have-key-events -->
+              <!-- svelte-ignore a11y-no-static-element-interactions -->
+              <div
+                data-track-menu-owner={i}
+                class="track-tile library-track-tile group interactive-item {isActive ? 'is-active' : ''} {track.isBanned ? 'is-banned' : ''}"
+                class:has-open-menu={activeTrackMenu?.row === i}
+                on:click={() => playTrackList(track, $likedTracks)}
+              >
+                <div class="tile-art" class:is-active={isActive}>
+                  <div class="library-tile-art-clip spec-art">
+                    {#if track.coverUrl}
+                      <img src={track.coverUrl} alt="" class="tile-cover-image" loading="lazy" decoding="async" />
+                    {:else}
+                      <div class="library-tile-art-empty"><Music size={34} /></div>
+                    {/if}
 
-              <!-- Dropdown for Info. Содержимое — только у строки под курсором (см.
-                   `hoveredRow`): показывается оно всё равно по одному, а строиться успевало
-                   для всех сразу. -->
-              <div class="relative group/info mr-1">
-                <button class="opacity-0 group-hover:opacity-100 p-2 text-neutral-400 hover:text-white rounded-full transition-all" aria-label="Информация">
-                  <Info size={18} />
-                </button>
-                {#if hoveredRow === i}
-                  <div class="absolute right-0 top-full pt-1 w-56 hidden group-hover/info:block z-50">
-                    <div class="bg-neutral-900 border border-white/10 rounded-xl shadow-xl p-3 text-xs text-neutral-300 pointer-events-none">
+                    <div class="tile-cover-overlay">
+                      <button
+                        type="button"
+                        class="tile-play-button {track.isBanned ? 'is-muted' : ''}"
+                        aria-label={isActive && $isPlaying ? `Поставить «${track.title}» на паузу` : `Воспроизвести «${track.title}»`}
+                        on:click={(e) => toggleTrackPlayback(e, track, $likedTracks)}
+                      >
+                        <MorphIcon
+                          icon={isActive && $isPlaying ? PauseIcon : PlayIcon}
+                          size={20}
+                          strokeWidth={2.3}
+                          fill="currentColor"
+                          class="play-pause-morph"
+                          spring="snappy"
+                          reducedMotion="user"
+                        />
+                      </button>
+                    </div>
+                  </div>
+
+                  {#if cached}
+                    <span class="library-tile-cached" title="Скачан" aria-label="Скачан">
+                      <Check size={13} />
+                    </span>
+                  {/if}
+
+                  <div class="library-tile-actions">
+                    {#if !cached}
+                      <button
+                        type="button"
+                        class="library-tile-action"
+                        aria-label="Скачать"
+                        title="Скачать"
+                        on:click|stopPropagation={(e) => downloadTrack(e, track)}
+                      >
+                        <Download size={16} />
+                      </button>
+                    {:else}
+                      <span class="library-tile-action is-saved" title="Скачан">
+                        <Check size={16} />
+                      </span>
+                    {/if}
+
+                    <button
+                      type="button"
+                      data-press-late
+                      class="library-tile-action"
+                      class:is-open={activeTrackMenu?.row === i && activeTrackMenu?.kind === 'info'}
+                      aria-label="Информация"
+                      aria-haspopup="dialog"
+                      aria-expanded={activeTrackMenu?.row === i && activeTrackMenu?.kind === 'info'}
+                      on:click={(event) => toggleInfoMenu(event, i)}
+                    >
+                      <Info size={16} />
+                    </button>
+
+                    <PlaylistMenu
+                      {track}
+                      placement={i >= visibleLiked.length - 5 ? 'top' : 'bottom'}
+                      align="right"
+                      iconSize={16}
+                      buttonClass="library-tile-action"
+                      open={activeTrackMenu?.row === i && activeTrackMenu?.kind === 'playlist'}
+                      on:toggle={(event) => handlePlaylistMenuToggle(i, event)}
+                    />
+
+                    <button
+                      type="button"
+                      class="library-tile-action is-liked"
+                      aria-label="Убрать из любимых"
+                      title="Убрать из любимых"
+                      on:click|stopPropagation={(e) => removeLikedTrack(e, track)}
+                    >
+                      <Heart size={16} fill="currentColor" />
+                    </button>
+                  </div>
+                </div>
+
+                <div class="tile-meta library-tile-meta">
+                  <h3 class="tile-title" class:is-active={isActive} title={track.title}>{track.title}</h3>
+                  <div class="library-tile-caption">
+                    <span class="tile-sub"><ArtistTag artist={track.artist} artists={track.artists} /></span>
+                    <span class="library-tile-source" class:is-yandex={track.source === 'yandex'}>
+                      {track.source === 'yandex' ? 'Я.Музыка' : 'SoundCloud'}
+                    </span>
+                  </div>
+                </div>
+
+                {#if activeTrackMenu?.row === i && activeTrackMenu?.kind === 'info'}
+                  <div class="track-row-info-pop {i >= visibleLiked.length - 5 ? 'is-top' : 'is-bottom'}" role="dialog" aria-label="Информация о треке" tabindex="-1" on:click|stopPropagation>
+                    <div class="track-row-popover">
                       <p class="mb-1"><strong class="text-white">Автор:</strong> {track.artist}</p>
                       {#if track.playbackCount != null}
                         <p class="mb-1"><strong class="text-white">Прослушиваний SC:</strong> {track.playbackCount.toLocaleString('ru-RU')}</p>
@@ -617,27 +857,9 @@
                   </div>
                 {/if}
               </div>
-
-              <!-- Меню «в плейлист». Скрытой разметки на строку больше нет: список плейлистов
-                   собирается только у открытого меню, поэтому и гасить его по `hoveredRow`
-                   незачем — на строку остаётся одна кнопка. -->
-              <PlaylistMenu
-                {track}
-                placement="bottom"
-                align="right"
-                buttonClass="opacity-0 group-hover:opacity-100 p-2 text-neutral-400 hover:text-white rounded-full transition-all mr-2"
-              />
-
-              <button 
-                class="opacity-0 group-hover:opacity-100 p-3 hover:bg-red-500/20 hover:text-red-400 text-neutral-500 rounded-full transition-all mr-2"
-                on:click|stopPropagation={(e) => removeLikedTrack(e, track)}
-                aria-label="Убрать из любимых"
-              >
-                <Heart size={20} fill="currentColor" />
-              </button>
-            </div>
-          {/each}
-        </div>
+            {/each}
+          </div>
+        {/if}
       {/if}
       
     {:else if activeTab === 'artists'}

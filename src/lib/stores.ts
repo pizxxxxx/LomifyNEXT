@@ -49,6 +49,10 @@ const defaultSettings = {
   lyricsAlignment: 'right', // 'left' | 'right' | 'fullscreen'
   lyricsOffset: 0, // ms offset for synced lyrics
   uiStyle: 'style1', // 'style1' | 'style2'
+  // Гарнитура только для текста песен. Шрифты поставляются локально через Fontsource и
+  // содержат кириллицу; старое имя поля оставлено, чтобы не сбрасывать выбор при обновлении.
+  // Неизвестное значение безопасно откатывается к Inter через `--font-lyrics`.
+  fontFamily: 'inter', // 'inter' | 'manrope' | 'onest' | 'golos' | 'playfair' | 'unbounded'
   // Глобальный дизайн: 'classic' — исходное оформление, 'aurora' — контрастная
   // альтернатива (см. src/design-aurora.css). Живёт отдельно от uiStyle, который
   // отвечает только за плотность стекла, чтобы обе настройки не перебивали друг друга.

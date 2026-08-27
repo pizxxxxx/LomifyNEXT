@@ -30,14 +30,17 @@
     Check,
     Info,
     Loader2,
-    Maximize2,
-    Minimize2,
-    Pause,
-    Play,
     Radio,
     RefreshCw,
     SlidersHorizontal
   } from 'lucide-svelte';
+  import { MorphIcon } from 'morphicons/svelte';
+  import {
+    Maximize2 as Maximize2Data,
+    Minimize2 as Minimize2Data,
+    Pause as PauseData,
+    Play as PlayData
+  } from 'lucide';
   import {
     currentTrack,
     isPlaying,
@@ -92,7 +95,6 @@
   let tuneTop = 16;
   let expanded = false;
   let overlayActive = false;
-  let overlayVisible = false;
   let slotEl: HTMLElement;
   let expandTrigger: HTMLButtonElement;
   let expandAnimation: Animation | null = null;
@@ -185,10 +187,6 @@
     document.body.classList.toggle('wave-overlay-open', locked);
   }
 
-  function waitForMotion(duration: number) {
-    return new Promise<void>((resolve) => window.setTimeout(resolve, duration));
-  }
-
   async function playExpansion(from: DOMRect, to: DOMRect, opening: boolean, revision: number) {
     if (!hostEl || reduceMotion || typeof hostEl.animate !== 'function') return;
     // При открытии элемент уже лежит в большой геометрии и визуально стартует из карточки.
@@ -204,16 +202,16 @@
     const transformed = `translate3d(${x}px, ${y}px, 0) scale(${sx}, ${sy})`;
     const frames = opening
       ? [
-          { transform: transformed, opacity: 0.78 },
-          { transform: 'translate3d(0, 0, 0) scale(1)', opacity: 1 }
+          { transform: transformed },
+          { transform: 'translate3d(0, 0, 0) scale(1)' }
         ]
       : [
-          { transform: 'translate3d(0, 0, 0) scale(1)', opacity: 1 },
-          { transform: transformed, opacity: 0.96 }
+          { transform: 'translate3d(0, 0, 0) scale(1)' },
+          { transform: transformed }
         ];
 
     expandAnimation = hostEl.animate(frames, {
-      duration: opening ? 290 : 220,
+      duration: opening ? 240 : 200,
       easing: 'cubic-bezier(0.23, 1, 0.32, 1)',
       fill: 'both'
     });
@@ -236,29 +234,17 @@
     if (next) {
       const from = hostEl?.getBoundingClientRect();
       overlayActive = true;
-      overlayVisible = false;
       setPageScrollLocked(true);
       expanded = true;
       attachExpandedListeners();
       await tick();
-      // Отдельный кадр нужен, чтобы браузер сначала зафиксировал opacity: 0 у новой
-      // подложки, а затем действительно проиграл переход к opacity: 1.
-      requestAnimationFrame(() => {
-        if (revision === expansionRevision && expanded) overlayVisible = true;
-      });
       resize();
       const to = hostEl?.getBoundingClientRect();
       if (!instant && from && to) await playExpansion(from, to, true, revision);
     } else {
       const from = hostEl?.getBoundingClientRect();
       const to = slotEl?.getBoundingClientRect();
-      overlayVisible = false;
-      if (!instant) {
-        await Promise.all([
-          from && to ? playExpansion(from, to, false, revision) : Promise.resolve(),
-          waitForMotion(reduceMotion ? 180 : 220)
-        ]);
-      }
+      if (!instant && from && to) await playExpansion(from, to, false, revision);
       if (revision !== expansionRevision) return;
       expanded = false;
       overlayActive = false;
@@ -940,7 +926,6 @@
     type="button"
     class="wave-expand-backdrop"
     class:is-active={overlayActive}
-    class:is-visible={overlayVisible}
     on:click={() => setExpanded(false)}
     aria-label="Закрыть развёрнутую волну"
     tabindex="-1"
@@ -963,9 +948,6 @@
     <span class="wave-blob wave-blob-a"></span>
     <span class="wave-blob wave-blob-b"></span>
     <span class="wave-blob wave-blob-c"></span>
-    <span class="wave-stage-ring wave-stage-ring-a"></span>
-    <span class="wave-stage-ring wave-stage-ring-b"></span>
-    <span class="wave-stage-grid"></span>
     <div class="wave-hero-veil"></div>
   </div>
 
@@ -1032,11 +1014,15 @@
         aria-label={expanded ? 'Свернуть Мою волну' : 'Развернуть Мою волну'}
         title={expanded ? 'Свернуть' : 'Развернуть'}
       >
+        <MorphIcon
+          icon={expanded ? Minimize2Data : Maximize2Data}
+          size={17}
+          spring="snappy"
+          reducedMotion="user"
+        />
         {#if expanded}
-          <Minimize2 size={17} aria-hidden="true" />
           <span>Свернуть</span>
         {:else}
-          <Maximize2 size={17} aria-hidden="true" />
           <span>Развернуть</span>
         {/if}
       </button>
@@ -1068,10 +1054,16 @@
       >
         {#if busy}
           <Loader2 size={28} class="animate-spin" />
-        {:else if active && $isPlaying}
-          <Pause size={28} fill="currentColor" />
         {:else}
-          <Play size={28} fill="currentColor" />
+          <MorphIcon
+            icon={active && $isPlaying ? PauseData : PlayData}
+            size={28}
+            strokeWidth={2.25}
+            fill="currentColor"
+            class="play-pause-morph"
+            spring="snappy"
+            reducedMotion="user"
+          />
         {/if}
       </button>
 
@@ -1234,34 +1226,18 @@
     pointer-events: none;
     touch-action: none;
     overscroll-behavior: contain;
-    opacity: 0;
-    /* This is only a scrim behind the expanded card. It must not become a second opaque
-       black page: the previous .992 alpha hid the sidebar and made the close target look
-       like a giant black rectangle. */
-    background:
-      radial-gradient(
-        70% 80% at 62% 34%,
-        color-mix(in srgb, var(--color-primary) 5%, rgba(7, 7, 11, 0.2)),
-        rgba(5, 5, 9, 0.34) 76%
-      );
-    backdrop-filter: blur(8px) saturate(90%);
-    -webkit-backdrop-filter: blur(8px) saturate(90%);
+    /* Невидимая зона закрытия. Отдельный полупрозрачный scrim выглядел как ещё одна
+       кривая карточка под волной, особенно во время FLIP-масштабирования. */
+    background: transparent;
     cursor: default;
-    transition: opacity 220ms var(--ease-out, cubic-bezier(0.23, 1, 0.32, 1));
   }
 
   .wave-expand-backdrop.is-active {
     pointer-events: auto;
   }
 
-  .wave-expand-backdrop.is-visible {
-    opacity: 1;
-  }
-
   :global(body[data-perf="light"]) .wave-expand-backdrop {
-    background: rgba(5, 5, 9, 0.38);
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
+    background: transparent;
   }
 
   .wave-hero {
@@ -1283,12 +1259,15 @@
 
   .wave-hero.is-expanded {
     position: fixed;
-    inset: 52px 24px 112px 304px;
+    /* Оверлей перекрывает всё приложение, значит и центр у него должен быть центром окна,
+       а не правой колонки после сайдбара. Ограничение ширины не даёт сцене растянуться на
+       ультрашироком мониторе, симметричная формула сохраняет точный центр. */
+    inset: 52px max(24px, calc((100vw - 1180px) / 2)) 112px;
     width: auto;
     z-index: 120;
     min-height: 0;
     border-radius: 32px;
-    background: rgba(7, 7, 11, 0.96);
+    background: #07070b;
     /* `contain: paint` on the compact card made the fixed FLIP frame clip its own
        canvas during expansion, which showed up as black strips along the edges. */
     contain: none;
@@ -1297,8 +1276,7 @@
     border-color: transparent;
     box-shadow:
       0 42px 110px -34px rgba(0, 0, 0, 0.92),
-      0 0 80px -46px color-mix(in srgb, var(--color-primary) 74%, transparent),
-      inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      0 0 80px -46px color-mix(in srgb, var(--color-primary) 74%, transparent);
     transform-origin: top left;
   }
 
@@ -1382,50 +1360,6 @@
     animation: wave-drift-c 29s ease-in-out infinite;
   }
 
-  .wave-stage-ring,
-  .wave-stage-grid {
-    position: absolute;
-    opacity: 0;
-    transition: opacity 220ms var(--ease-out, ease-out);
-  }
-
-  .wave-stage-ring {
-    width: min(62vw, 780px);
-    aspect-ratio: 1;
-    border-radius: 50%;
-    border: 1px solid color-mix(in srgb, var(--color-primary) 20%, rgba(255, 255, 255, 0.05));
-    box-shadow: inset 0 0 70px color-mix(in srgb, var(--color-primary) 8%, transparent);
-  }
-
-  .wave-stage-ring-a {
-    top: -43%;
-    right: -10%;
-  }
-
-  .wave-stage-ring-b {
-    right: 15%;
-    bottom: -72%;
-    transform: scale(0.72);
-  }
-
-  .wave-stage-grid {
-    inset: 0;
-    background-image:
-      linear-gradient(rgba(255, 255, 255, 0.022) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px);
-    background-size: 46px 46px;
-    mask-image: linear-gradient(to right, transparent 8%, black 52%, transparent 100%);
-    -webkit-mask-image: linear-gradient(to right, transparent 8%, black 52%, transparent 100%);
-  }
-
-  .wave-hero.is-expanded .wave-stage-ring {
-    opacity: 0.62;
-  }
-
-  .wave-hero.is-expanded .wave-stage-grid {
-    opacity: 1;
-  }
-
   @keyframes wave-drift-a {
     0%,
     100% {
@@ -1496,14 +1430,16 @@
 
   .wave-hero.is-expanded .wave-hero-body {
     min-height: 100%;
-    padding: clamp(36px, 5vw, 72px);
-    padding-right: min(44vw, 520px);
-    gap: 36px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    padding: clamp(40px, 5vw, 64px);
+    gap: clamp(28px, 4vw, 56px);
   }
 
   .wave-hero.is-expanded .wave-hero-text {
-    flex-basis: min(680px, 62%);
-    max-width: 760px;
+    width: 100%;
+    max-width: 680px;
   }
 
   .wave-hero-text {
@@ -1529,11 +1465,11 @@
   }
 
   .wave-hero.is-expanded .wave-hero-title {
-    max-width: 8ch;
+    max-width: none;
     font-size: clamp(58px, 6.6vw, 104px);
     font-weight: 350;
     letter-spacing: -0.055em;
-    text-wrap: balance;
+    white-space: nowrap;
     text-shadow: 0 18px 60px rgba(0, 0, 0, 0.42);
   }
 
@@ -1654,18 +1590,15 @@
   }
 
   .wave-hero.is-expanded .wave-hero-actions {
-    position: absolute;
-    right: clamp(28px, 4vw, 56px);
-    bottom: clamp(28px, 4vw, 52px);
+    position: relative;
     z-index: 4;
     gap: 10px;
-    padding: 10px;
-    border-radius: 999px;
-    background: rgba(8, 8, 12, 0.48);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    box-shadow: 0 18px 60px -28px rgba(0, 0, 0, 0.9);
-    backdrop-filter: blur(18px) saturate(130%);
-    -webkit-backdrop-filter: blur(18px) saturate(130%);
+    padding: 0;
+    background: none;
+    border: 0;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 
   .wave-expand {
@@ -1704,10 +1637,21 @@
     opacity: 0.72;
   }
 
-  .wave-hero.is-expanded .wave-expand {
-    background: rgba(8, 8, 12, 0.58);
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
+  .wave-hero.is-expanded .wave-expand,
+  .wave-hero.is-expanded .wave-tune-trigger,
+  .wave-hero.is-expanded .wave-recollect {
+    background: rgba(255, 255, 255, 0.065);
+    border-color: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .wave-hero.is-expanded .wave-expand:hover,
+  .wave-hero.is-expanded .wave-tune-trigger:hover,
+  .wave-hero.is-expanded .wave-tune-trigger.is-open,
+  .wave-hero.is-expanded .wave-recollect:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.11);
+    border-color: transparent;
   }
 
   .wave-tune-trigger {
@@ -2096,18 +2040,18 @@
       inset: 36px 0 92px;
     }
     .wave-hero.is-expanded .wave-hero-body {
-      padding: 72px 20px 116px;
+      grid-template-columns: minmax(0, 1fr);
+      padding: 56px 20px 24px;
       align-content: flex-end;
+      gap: 28px;
     }
     .wave-hero.is-expanded .wave-hero-title {
       font-size: clamp(48px, 16vw, 72px);
     }
     .wave-hero.is-expanded .wave-hero-actions {
-      right: 16px;
-      bottom: 16px;
-      width: calc(100% - 32px);
-      justify-content: center;
-      padding: 8px;
+      width: 100%;
+      justify-content: flex-start;
+      padding: 0;
     }
   }
 
@@ -2129,13 +2073,6 @@
     .wave-expand:active,
     .wave-tune-pop {
       transform: none;
-    }
-    .wave-stage-ring,
-    .wave-stage-grid {
-      transition: none;
-    }
-    .wave-expand-backdrop {
-      transition-duration: 180ms;
     }
   }
 </style>
