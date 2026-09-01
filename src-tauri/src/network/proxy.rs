@@ -225,6 +225,17 @@ pub fn cache_control_for(status: u16) -> &'static str {
 pub async fn handle_uri(request: http::Request<Vec<u8>>) -> http::Response<Vec<u8>> {
     let path = request.uri().path();
 
+    if let Some(encoded) = path.strip_prefix("/downloaded-cover/") {
+        let result = crate::network::image_cache::handle_downloaded(encoded).await;
+        return http::Response::builder()
+            .status(result.status)
+            .header("content-type", &result.content_type)
+            .header("cache-control", cache_control_for(result.status))
+            .header("access-control-allow-origin", "*")
+            .body(result.data)
+            .unwrap();
+    }
+
     if let Some(encoded) = path.strip_prefix("/img/") {
         let result = crate::network::image_cache::handle(encoded).await;
         return http::Response::builder()

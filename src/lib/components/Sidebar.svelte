@@ -3,18 +3,24 @@
   import { ChevronRight, Home, Search, Library, Settings, Sliders } from '@lucide/svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { currentView, settings } from '$lib/stores';
+  import { LASTFM_TASTE_UPDATED_EVENT, getLastFmSession, type LastFmSession } from '$lib/lastfm';
 
   let osUsername = 'User';
+  let lastFmSession: LastFmSession | null = null;
   $: scUsername = $settings.scUser?.username || '';
 
   // Личность профиля — та же, что на самой странице профиля: сначала SoundCloud, затем
-  // Яндекс, и только потом своё имя. Правило продублировано, а не вынесено: это две строки,
+  // Яндекс, Last.fm и только потом своё имя. Правило продублировано, а не вынесено: это две строки,
   // и общая функция ради них связала бы панель со страницей крепче, чем они связаны сейчас.
   // Аватар — обязательно того же аккаунта, чьё имя показано (разбор в Profile.svelte).
   $: yandexUser = $settings.yandexUser;
   $: displayUsername =
-    scUsername || yandexUser?.displayName || $settings.customProfileName || osUsername;
-  $: avatarUrl = scUsername ? $settings.scUser?.avatarUrl || '' : yandexUser?.avatarUrl || '';
+    scUsername || yandexUser?.displayName || lastFmSession?.username || $settings.customProfileName || osUsername;
+  $: avatarUrl = scUsername
+    ? $settings.scUser?.avatarUrl || ''
+    : yandexUser
+      ? yandexUser.avatarUrl || ''
+      : lastFmSession?.avatarUrl || '';
 
   // Порядок пунктов = порядок в разметке. Раньше каждая кнопка была отдельным блоком с
   // одной и той же строкой утилит и одним и тем же маркером внутри — пять копий, которые
@@ -30,14 +36,22 @@
     { view: 'settings', label: 'Настройки', icon: Settings }
   ] as const;
 
-  onMount(async () => {
-    try {
-      if (window && '__TAURI_INTERNALS__' in window) {
-        osUsername = await invoke('get_os_username');
+  onMount(() => {
+    lastFmSession = getLastFmSession();
+    const syncLastFmIdentity = () => lastFmSession = getLastFmSession();
+    window.addEventListener(LASTFM_TASTE_UPDATED_EVENT, syncLastFmIdentity);
+
+    void (async () => {
+      try {
+        if (window && '__TAURI_INTERNALS__' in window) {
+          osUsername = await invoke('get_os_username');
+        }
+      } catch (e) {
+        console.error(e);
       }
-    } catch (e) {
-      console.error(e);
-    }
+    })();
+
+    return () => window.removeEventListener(LASTFM_TASTE_UPDATED_EVENT, syncLastFmIdentity);
   });
 </script>
 

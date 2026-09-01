@@ -1,14 +1,16 @@
 use tauri::State;
 
 use crate::track_cache::state::{
-    CacheInventoryEntry, CacheRequest, LikeCacheEntry, TrackCacheEntry, TrackCacheState,
-    TranscodeStatus,
+    CacheCleanupReport, CacheInventoryEntry, CacheRequest, LikeCacheEntry, SmartCleanupRequest,
+    TrackCacheEntry, TrackCacheState, TranscodeStatus,
 };
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnsureCachedRequest {
     pub urn: String,
+    #[serde(default)]
+    pub cover_url: Option<String>,
     #[serde(default)]
     pub url: Option<String>,
     #[serde(default)]
@@ -41,6 +43,8 @@ impl EnsureCachedRequest {
 #[serde(rename_all = "camelCase")]
 pub struct PreloadEntry {
     pub urn: String,
+    #[serde(default)]
+    pub cover_url: Option<String>,
     pub url: Option<String>,
     pub urls: Option<Vec<String>>,
     #[serde(default)]
@@ -58,12 +62,14 @@ pub async fn track_ensure_cached(
     request: EnsureCachedRequest,
     state: State<'_, TrackCacheState>,
 ) -> Result<TrackCacheEntry, String> {
+    let cover_url = request.cover_url.clone();
+    let urn = request.urn.clone();
     let fallback_urls = request
         .fallback_urls()
         .ok_or_else(|| "no stream URL provided".to_string())?;
     let storage_urls = request.storage_urls.unwrap_or_default();
     let download_urls = request.download_urls.unwrap_or_default();
-    state
+    let entry = state
         .ensure_cached(CacheRequest {
             urn: &request.urn,
             urls: &fallback_urls,
@@ -74,7 +80,19 @@ pub async fn track_ensure_cached(
             liked: false,
             expected_duration_ms: request.duration_ms,
         })
-        .await
+        .await?;
+    if let Some(url) = cover_url.filter(|url| !url.trim().is_empty()) {
+        // Artwork must never hold up playback of an audio file that is already
+        // available. The local cover endpoint can serve it as soon as this task lands.
+        tokio::spawn(async move {
+            if let Err(err) =
+                crate::network::image_cache::cache_downloaded_cover(&urn, &url).await
+            {
+                eprintln!("[TrackCache] cover cache failed for {urn}: {err}");
+            }
+        });
+    }
+    Ok(entry)
 }
 
 /// Download-to-file. Pulls from the clean m4a cache, transcoding raw bytes or
@@ -150,6 +168,7 @@ pub async fn track_preload(
         queued += 1;
         let state = state.inner().clone();
         let urn = entry.urn;
+        let cover_url = entry.cover_url;
         let fallback_urls: Vec<String> = match (entry.urls, entry.url) {
             (Some(u), _) if !u.is_empty() => u,
             (_, Some(u)) => vec![u],
@@ -178,6 +197,12 @@ pub async fn track_preload(
                 .await
             {
                 eprintln!("[TrackCache] preload {urn}: {err}");
+            } else if let Some(url) = cover_url.filter(|url| !url.trim().is_empty()) {
+                if let Err(err) =
+                    crate::network::image_cache::cache_downloaded_cover(&urn, &url).await
+                {
+                    eprintln!("[TrackCache] preload cover {urn}: {err}");
+                }
             }
         });
     }
@@ -200,16 +225,22 @@ pub fn track_liked_cache_size(state: State<'_, TrackCacheState>) -> u64 {
 #[tauri::command]
 pub fn track_clear_cache(state: State<'_, TrackCacheState>) {
     state.clear_cache();
+    crate::network::image_cache::prune_downloaded_covers(&state.list_cached_urns());
 }
 
 #[tauri::command]
 pub fn track_remove_cached(urn: String, state: State<'_, TrackCacheState>) -> bool {
-    state.remove_cached(&urn)
+    let removed = state.remove_cached(&urn);
+    if !state.is_cached(&urn) {
+        crate::network::image_cache::remove_downloaded_cover(&urn);
+    }
+    removed
 }
 
 #[tauri::command]
 pub fn track_clear_liked_cache(state: State<'_, TrackCacheState>) {
     state.clear_liked_cache();
+    crate::network::image_cache::prune_downloaded_covers(&state.list_cached_urns());
 }
 
 #[tauri::command]
@@ -225,6 +256,22 @@ pub fn track_cache_inventory(state: State<'_, TrackCacheState>) -> Vec<CacheInve
 #[tauri::command]
 pub fn track_enforce_cache_limit(limit_mb: u64, state: State<'_, TrackCacheState>) {
     state.enforce_limit(limit_mb);
+    crate::network::image_cache::prune_downloaded_covers(&state.list_cached_urns());
+}
+
+#[tauri::command]
+pub async fn track_smart_cleanup(
+    request: SmartCleanupRequest,
+    state: State<'_, TrackCacheState>,
+) -> Result<CacheCleanupReport, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let report = state.smart_cleanup(request);
+        crate::network::image_cache::prune_downloaded_covers(&state.list_cached_urns());
+        report
+    })
+        .await
+        .map_err(|err| format!("cache cleanup task failed: {err}"))
 }
 
 #[tauri::command]

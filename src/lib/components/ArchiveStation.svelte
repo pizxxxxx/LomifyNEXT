@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onDestroy } from 'svelte';
   import { fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { currentTrack, isPlaying, queue, globalVolume, likedTracks, settings, playlists, notify } from '$lib/stores';
@@ -9,7 +9,7 @@
   import ArtistTag from './ArtistTag.svelte';
   import PlaylistTrailer from './PlaylistTrailer.svelte';
   import { getAudioUrl } from '$lib/api';
-  import { isTrackLiked, toggleTrackLike } from '$lib/likes';
+  import { toggleTrackLike } from '$lib/likes';
   import { withCount } from '$lib/utils/plural';
 
   export let title: string = "Полка";
@@ -23,31 +23,58 @@
   let previewAudio: HTMLAudioElement | null = null;
   let hoverTimer: any = null;
   let hoveredTrack: any = null;
+  let previewGeneration = 0;
+
+  function trackKey(track: any, index = 0) {
+    if (track?.id != null && `${track.id}` !== '') return `${track.source || 'track'}:${track.id}:${index}`;
+    return `${track?.title || 'track'}\u0000${track?.artist || ''}\u0000${index}`;
+  }
+
+  function likedKey(track: any) {
+    return `${track?.title || ''}\u0000${track?.artist || ''}`;
+  }
+
+  // isTrackLiked делает линейный проход. На полке это было по два прохода на каждую
+  // карточку при любом обновлении стора; Set оставляет ту же семантику, но O(1) на плитку.
+  $: likedKeys = new Set(($likedTracks || []).map(likedKey));
+  function isLiked(track: any) {
+    return likedKeys.has(likedKey(track));
+  }
+
+  /**
+   * Карточке шириной ~200px не всегда нужна 500px-текстура. SoundCloud и Яндекс умеют
+   * отдавать один и тот же арт в нескольких размерах; srcset разрешает WebView выбрать
+   * меньший на обычном DPI, не ухудшая резкость на плотном экране.
+   */
+  function coverSrcSet(url: string | undefined) {
+    if (!url) return '';
+    const small = url
+      .replace(/t500x500|t400x400/g, 't300x300')
+      .replace(/([/_-])400x400(?=\b|[./_-])/g, '$1' + '300x300');
+    return small === url ? '' : `${small} 300w, ${url} 500w`;
+  }
 
   function isPlaylistSaved(playlist: any, library: any[]) {
     return library.some(item => item.title === playlist.title || item.id === playlist.id);
   }
 
-  onMount(() => {
-    previewAudio = new Audio();
-  });
-
   onDestroy(() => {
-    if (previewAudio) {
-      previewAudio.pause();
-      previewAudio.src = '';
-    }
+    stopHoverPreview();
   });
 
   async function handleMouseEnter(track: any) {
-    if (!$settings.enableHoverPreview) return;
+    // Performance mode must not quietly keep a second decoder/network stream alive just
+    // because the pointer rested on an artwork.
+    if ($settings.perfMode || !$settings.enableHoverPreview) return;
     if (hoverTimer) clearTimeout(hoverTimer);
     hoveredTrack = track;
+    const generation = ++previewGeneration;
     hoverTimer = setTimeout(async () => {
-      if (!previewAudio) return;
       try {
         const url = await getAudioUrl(track, { silent: true });
-        if (url && previewAudio) {
+        if (generation !== previewGeneration || hoveredTrack !== track || !url || $settings.perfMode) return;
+        if (!previewAudio) previewAudio = new Audio();
+        if (previewAudio) {
           previewAudio.src = url;
           previewAudio.volume = Math.pow($globalVolume, 3);
           const durSecs = (track.duration || 0) / 1000;
@@ -60,14 +87,22 @@
     }, $settings.hoverPreviewDelay);
   }
 
-  function handleMouseLeave() {
+  function stopHoverPreview() {
+    previewGeneration += 1;
     if (hoverTimer) clearTimeout(hoverTimer);
+    hoverTimer = null;
     hoveredTrack = null;
     if (previewAudio) {
       previewAudio.pause();
       previewAudio.src = '';
     }
   }
+
+  function handleMouseLeave() {
+    stopHoverPreview();
+  }
+
+  $: if ($settings.perfMode) stopHoverPreview();
 
   $: if (previewAudio) {
     previewAudio.volume = Math.pow($globalVolume, 3);
@@ -86,7 +121,7 @@
       return;
     }
     if (track.isBanned) {
-      notify('Источник считал трек недоступным. Пробую ещё раз', 'info');
+      notify('Этот источник недавно не отвечал. Пробую запустить трек ещё раз.', 'info');
     }
 
     // Set queue to the remaining tracks in this shelf
@@ -122,7 +157,7 @@
 
     <!-- Grid Track List -->
     <div class="track-collection grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 pb-4 pt-4 px-2" style="grid-auto-flow: dense;">
-      {#each tracks as track, index}
+      {#each tracks as track, index (trackKey(track, index))}
         {#if track.tracks}
           {@const isOpen = expandedPlaylistId === track.id}
           <!-- Playlist Tile -->
@@ -145,9 +180,13 @@
               {#if track.tracks && track.tracks.length > 0 && track.tracks[0].coverUrl}
                 <img
                   src={track.tracks[0].coverUrl}
+                  srcset={coverSrcSet(track.tracks[0].coverUrl)}
+                  sizes="(min-width: 1280px) 220px, (min-width: 768px) 25vw, 50vw"
                   alt="Cover"
                   loading="lazy"
                   decoding="async"
+                  width="500"
+                  height="500"
                   class="w-full h-full object-cover {isOpen ? '' : 'transition-transform duration-500 group-hover:scale-105'}"
                 />
               {:else}
@@ -232,7 +271,7 @@
                     on:click|stopPropagation={() => {
                       if (isPlaylistSaved(track, $playlists)) {
                         playlists.update(p => p.filter(pl => pl.title !== track.title && pl.id !== track.id));
-                        notify(`Убрал «${track.title}» из медиатеки`, 'info');
+                        notify(`Трек «${track.title}» убран из медиатеки.`, 'info');
                       } else {
                         playlists.update(p => [...p, {
                           id: track.id || Date.now().toString(),
@@ -240,7 +279,7 @@
                           tracks: track.tracks || [],
                           coverUrl: track.coverUrl || (track.tracks && track.tracks[0]?.coverUrl) || ''
                         }]);
-                        notify(`«${track.title}» теперь в медиатеке`, 'success');
+                        notify(`Трек «${track.title}» добавлен в медиатеку.`, 'success');
                       }
                     }}
                   >
@@ -258,7 +297,7 @@
                 </div>
 
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-[350px] overflow-y-auto custom-scrollbar pr-2">
-                  {#each track.tracks as pt, i}
+                  {#each track.tracks as pt, i (trackKey(pt, i))}
                     <!-- svelte-ignore a11y-click-events-have-key-events -->
                     <!-- svelte-ignore a11y-no-static-element-interactions -->
                     <!-- `pl-open-track` (app.css) снимает с невидимых строк отрисовку: в
@@ -270,7 +309,17 @@
                             isPlaying.set(true);
                          }}>
                       <div class="w-10 h-10 rounded-md overflow-hidden bg-transparent shrink-0 relative shadow-md">
-                        <img src={pt.coverUrl || 'lomimi.png'} alt="Cover" loading="lazy" decoding="async" class="w-full h-full object-cover" />
+                        <img
+                          src={pt.coverUrl || 'lomimi.png'}
+                          srcset={coverSrcSet(pt.coverUrl)}
+                          sizes="40px"
+                          alt="Cover"
+                          loading="lazy"
+                          decoding="async"
+                          width="40"
+                          height="40"
+                          class="w-full h-full object-cover"
+                        />
                         <div class="absolute inset-0 bg-black/40 opacity-0 group-hover/ptrack:opacity-100 flex items-center justify-center transition-opacity">
                           <Play fill="currentColor" size={16} class="text-white" />
                         </div>
@@ -286,7 +335,7 @@
                           class="p-1.5 rounded-full hover:bg-white/10 text-white/60 hover:text-white transition-all"
                           on:click|stopPropagation={(e) => toggleLike(e, pt)}
                         >
-                          {#if isTrackLiked($likedTracks, pt)}
+                          {#if isLiked(pt)}
                             <Heart size={14} fill="#00e5ff" class="text-[#00e5ff]" />
                           {:else}
                             <Heart size={14} />
@@ -318,7 +367,17 @@
             <div class="tile-art spec-art" class:is-active={$currentTrack?.title === track.title}
                  on:mouseenter={() => handleMouseEnter(track)}
                  on:mouseleave={handleMouseLeave}>
-              <img src={track.coverUrl || 'lomimi.png'} alt={track.title} class="tile-cover-image" />
+              <img
+                src={track.coverUrl || 'lomimi.png'}
+                srcset={coverSrcSet(track.coverUrl)}
+                sizes="(min-width: 1280px) 220px, (min-width: 768px) 25vw, 50vw"
+                alt={track.title}
+                loading="lazy"
+                decoding="async"
+                width="500"
+                height="500"
+                class="tile-cover-image"
+              />
               
               <!-- Hover Play Overlay -->
               <div class="tile-cover-overlay">
@@ -336,19 +395,19 @@
                 <button 
                   type="button"
                   class="tile-like-button"
-                  class:is-liked={isTrackLiked($likedTracks, track)}
+                  class:is-liked={isLiked(track)}
                   on:click={(e) => toggleLike(e, track)}
                   title="Мне нравится"
                   aria-label={`Отметить «${track.title}» как понравившийся`}
                 >
-                  {#if isTrackLiked($likedTracks, track)}
+                  {#if isLiked(track)}
                     <Heart size={16} fill="currentColor" />
                   {:else}
                     <Heart size={16} />
                   {/if}
                 </button>
                 <!-- Hover Progress Bar -->
-                {#if $settings.enableHoverPreview}
+                {#if $settings.enableHoverPreview && !$settings.perfMode}
                   <div
                     class="tile-preview-progress"
                     class:is-previewing={hoveredTrack?.title === track.title}

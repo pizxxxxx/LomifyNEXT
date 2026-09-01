@@ -16,7 +16,9 @@
   import WaveHero from '$lib/components/WaveHero.svelte';
   import { currentView, previousView, currentTrack, isPlaying, queue, likedTracks, listenStats, searchHistory, playlists, navHistory, navFuture, isHistoryNavigation, currentArtist, searchQuery as searchQueryStore, settings, notify, pageAtmosphere } from '$lib/stores';
   import { getTrendingTracks } from '$lib/api';
+  import { LASTFM_TASTE_UPDATED_EVENT } from '$lib/lastfm';
   import { getTracks } from '$lib/db';
+  import { coverUrlForTrack, downloadedCoverCache } from '$lib/offlineCovers';
 
   import { gibberish } from '$lib/actions/gibberish';
 
@@ -28,8 +30,22 @@
   let isLoadingHome = true;
   let isLoadingMore = false;
   let homeError: string | null = null;
+  let fullscreenOverlaySettled = false;
+
+  // Сотни карточек с обложками не должны одновременно жить в DOM. Сам список рекомендаций
+  // остаётся в памяти (его использует очередь и «Моя тусня»), а сетка раскрывается порциями.
+  // 96 видимых позиций — уже шестнадцать рядов на широком экране; дальше полезнее обновить
+  // рекомендации, чем держать декодированные текстуры далеко за пределами окна.
+  const HOME_INITIAL_TRACKS = 36;
+  const HOME_TRACK_BATCH = 24;
+  const HOME_RENDER_LIMIT = 96;
+  let visibleHomeCount = HOME_INITIAL_TRACKS;
+  $: visibleTrendingTracks = trendingTracks.slice(0, Math.min(visibleHomeCount, HOME_RENDER_LIMIT));
+  $: canLoadMoreTracks = visibleTrendingTracks.length < HOME_RENDER_LIMIT;
 
   $: displayView = $currentView === 'fullscreen' ? ($previousView || 'home') : $currentView;
+  $: if ($currentView !== 'fullscreen') fullscreenOverlaySettled = false;
+  $: currentDisplayCover = coverUrlForTrack($currentTrack, $downloadedCoverCache);
 
   /**
    * Сеть не обязана падать — она может просто замолчать: отвалившийся VPN, DNS в
@@ -54,58 +70,29 @@
       : 'Не получилось загрузить рекомендации. Проверь соединение и попробуй ещё раз.';
   }
 
-  async function mixPlaylists(tracks: any[], existingPlaylists?: any[]) {
-    try {
-      // Полки-плейлисты в ленте умеет отдавать только SoundCloud — у Музыки нет поиска по
-      // плейлистам. Подмешивать чужой сервис в ленту выбранного нельзя (именно по этим
-      // ссылкам и видно «не тот» источник), поэтому при Яндексе в ленту идут только
-      // собственные плейлисты пользователя.
-      const yandexIsHost = $settings.searchSource === 'yandex' && Boolean($settings.yandexToken);
-
-      let scPlaylists: any[] = [];
-      if (!yandexIsHost) {
-        const queries = ['phonk playlist', 'trap mix', 'gym hardstyle', 'chill lofi', 'русский рэп 2024', 'rap hits', 'bass boosted', 'хиты 2024', 'топ чарт россии', 'популярная музыка', 'vk hits', 'кальянный рэп', 'русская попса'];
-        const randomQueries = queries.sort(() => 0.5 - Math.random()).slice(0, 6);
-
-        const { getSoundCloudPlaylists } = await import('$lib/api');
-        const settled = await Promise.allSettled(
-          randomQueries.map((q) => getSoundCloudPlaylists(q, 5))
-        );
-        for (const result of settled) {
-          if (result.status === 'fulfilled' && result.value) scPlaylists.push(...result.value);
-        }
-      }
-
-      const allPlaylists = [...(existingPlaylists || []), ...scPlaylists];
-      allPlaylists.sort(() => 0.5 - Math.random());
-      
-      let resultTracks = [];
-      let plIndex = 0;
-      for (let i = 0; i < tracks.length; i++) {
-        resultTracks.push(tracks[i]);
-        if ((i + 1) % 8 === 0) {
-          const numPlaylistsToInsert = Math.floor(Math.random() * 2) + 2; // 2 or 3
-          for (let j = 0; j < numPlaylistsToInsert && plIndex < allPlaylists.length; j++) {
-            resultTracks.push(allPlaylists[plIndex++]);
-          }
-        }
-      }
-      return resultTracks;
-    } catch (e) {
-      console.error('Failed to mix playlists', e);
-      return tracks;
-    }
+  function trackSignature(track: any) {
+    return `${track?.title || ''}\u0000${track?.artist || ''}`.toLocaleLowerCase('ru-RU');
   }
 
   async function loadMoreTracks() {
+    // Сначала показываем уже загруженную порцию. Повторный сетевой запрос и перестройка всей
+    // сетки ради карточек, которые и так лежат в памяти, только давали задержку на кнопке.
+    const revealTo = Math.min(HOME_RENDER_LIMIT, trendingTracks.length, visibleHomeCount + HOME_TRACK_BATCH);
+    if (revealTo > visibleHomeCount) {
+      visibleHomeCount = revealTo;
+      return;
+    }
+
     isLoadingMore = true;
     try {
       const moreTracks = await withTimeout(getTrendingTracks($likedTracks, $listenStats, $searchHistory, $playlists));
-      const mixedMoreTracks = await mixPlaylists(moreTracks);
-      // Filter out duplicates
-      const existingIds = new Set(trendingTracks.map(t => t.id));
-      const newTracks = mixedMoreTracks.filter(t => !existingIds.has(t.id));
+      // Плейлисты участвуют в профиле вкуса внутри getTrendingTracks, но объект плейлиста
+      // никогда не должен снова попасть в домашнюю сетку. Сигнатура убирает и дубли одного
+      // трека, приехавшие по нескольким поисковым запросам.
+      const existing = new Set(trendingTracks.map(trackSignature));
+      const newTracks = moreTracks.filter((t) => !Array.isArray(t?.tracks) && !existing.has(trackSignature(t)));
       trendingTracks = [...trendingTracks, ...newTracks];
+      visibleHomeCount = Math.min(HOME_RENDER_LIMIT, visibleHomeCount + HOME_TRACK_BATCH, trendingTracks.length);
     } catch (err) {
       console.error("Failed to load more tracks", err);
       // Лента уже на экране — рушить её ради неудачной догрузки незачем, достаточно
@@ -125,7 +112,10 @@
     homeError = null;
     try {
       const tracks = await withTimeout(getTrendingTracks($likedTracks, $listenStats, $searchHistory, $playlists));
-      trendingTracks = await mixPlaylists(tracks, $playlists);
+      // Свои плейлисты — сильный сигнал вкуса, а не содержимое главной. В API их треки уже
+      // исключены из результата; эта проверка дополнительно не пропустит контейнер-плейлист.
+      trendingTracks = tracks.filter((t) => !Array.isArray(t?.tracks));
+      visibleHomeCount = HOME_INITIAL_TRACKS;
       // `getTrendingTracks` внутри гасит отказы через Promise.allSettled и на мёртвой
       // сети возвращает пустой массив, а не ошибку. Формально это успех, по факту —
       // тихий провал: без этой проверки пользователь получил бы пустую страницу без
@@ -216,13 +206,20 @@
     // приходит синхронно с текущим значением и только запоминает его: перезагружать нечего,
     // `loadFeed` выше уже идёт.
     let feedSource: string | null = null;
-    return settings.subscribe((s) => {
+    const unsubscribeSettings = settings.subscribe((s) => {
       const key = `${s.searchSource}:${s.yandexToken ? 'auth' : 'anon'}`;
       if (feedSource === null || feedSource === key) { feedSource = key; return; }
       feedSource = key;
       loadFeed();
       loadNewReleases();
     });
+    const refreshLastFmTaste = () => void loadFeed();
+    window.addEventListener(LASTFM_TASTE_UPDATED_EVENT, refreshLastFmTaste);
+
+    return () => {
+      unsubscribeSettings();
+      window.removeEventListener(LASTFM_TASTE_UPDATED_EVENT, refreshLastFmTaste);
+    };
   });
 
   function playTrack(track: any) {
@@ -346,8 +343,12 @@
     
     <!-- Background -->
     <div class="absolute inset-0 pointer-events-none bg-[var(--color-dark)] overflow-hidden transition-colors duration-[1500ms]">
-      {#if $currentTrack?.coverUrl}
-        <div class="absolute inset-0 opacity-[0.15] blur-[100px] transition-all duration-1000" style="background-image: url('{$currentTrack.coverUrl}'); background-size: cover; background-position: center; transform: scale(1.2);"></div>
+      <!-- During the fullscreen intro this remains behind the translucent overlay, preserving
+           the existing visual hand-off. Once the opaque overlay has settled, its own backdrop
+           is the only visible one, so retaining this second full-window blur only wastes a GPU
+           surface. It is mounted again before the outro begins. -->
+      {#if currentDisplayCover && ($currentView !== 'fullscreen' || !fullscreenOverlaySettled)}
+        <div class="app-track-backdrop absolute inset-0 opacity-[0.15] blur-[100px] transition-all duration-1000" style="background-image: url('{currentDisplayCover}'); background-size: cover; background-position: center; transform: scale(1.2);"></div>
       {/if}
       <div class="absolute inset-0 bg-gradient-to-b from-[var(--color-dark-gradient)]/50 to-[var(--color-dark)] transition-colors duration-[1500ms]"></div>
 
@@ -433,6 +434,7 @@
         username={osUsername}
         sourceTracks={trendingTracks}
         onPage={$currentView === 'home'}
+        motionEnabled={!$settings.perfMode}
       />
     </div>
 
@@ -471,22 +473,24 @@
             {/if}
 
             {#await import('$lib/components/ArchiveStation.svelte') then ArchiveStation}
-              {#if trendingTracks.length > 0}
-                <svelte:component this={ArchiveStation.default} title="Главная" tracks={trendingTracks} />
+              {#if visibleTrendingTracks.length > 0}
+                <svelte:component this={ArchiveStation.default} title="Главная" tracks={visibleTrendingTracks} />
               {/if}
 
               <div class="w-full flex justify-center gap-4 mt-6 mb-4">
-                <button
-                  class="glass-button px-8 py-3 rounded-2xl font-bold flex items-center gap-2 hover:bg-primary hover:text-black transition-all shadow-md"
-                  on:click={loadMoreTracks}
-                  disabled={isLoadingMore}
-                >
-                  {#if isLoadingMore}
-                    <Loader2 class="animate-spin" size={18} /> Загрузка...
-                  {:else}
-                    Загрузить ещё треки
-                  {/if}
-                </button>
+                {#if canLoadMoreTracks}
+                  <button
+                    class="glass-button px-8 py-3 rounded-2xl font-bold flex items-center gap-2 hover:bg-primary hover:text-black transition-all shadow-md"
+                    on:click={loadMoreTracks}
+                    disabled={isLoadingMore}
+                  >
+                    {#if isLoadingMore}
+                      <Loader2 class="animate-spin" size={18} /> Загрузка...
+                    {:else}
+                      Загрузить ещё треки
+                    {/if}
+                  </button>
+                {/if}
 
                 <button
                   class="glass-button px-8 py-3 rounded-2xl font-bold flex items-center gap-2 hover:bg-orange-500 hover:text-white transition-all shadow-md"
@@ -516,7 +520,13 @@
     {:else if displayView === 'search'}
       <Search />
     {:else if displayView === 'lyrics'}
-      <Lyrics />
+      <!-- Fullscreen owns its own lyrics layout. Keeping this copy mounted underneath the
+           opaque overlay doubled every character node and animation loop on exactly the
+           route where long lyrics are most expensive. Other previous views remain mounted
+           so the fullscreen transition and navigation state are unchanged. -->
+      {#if $currentView !== 'fullscreen'}
+        <Lyrics />
+      {/if}
     {:else if displayView === 'library'}
       <Library />
     {:else if displayView === 'settings'}
@@ -535,7 +545,11 @@
 
     <!-- Fullscreen Overlay at Root level inside the Main Area container, positioned fixed inset-0 -->
     {#if $currentView === 'fullscreen'}
-      <div transition:fullscreenTransition class="fixed inset-0 z-[100] w-screen h-screen overflow-hidden pointer-events-auto bg-[#0a0a0c]">
+      <div
+        transition:fullscreenTransition
+        on:introend={() => fullscreenOverlaySettled = true}
+        class="fixed inset-0 z-[100] w-screen h-screen overflow-hidden pointer-events-auto bg-[#0a0a0c]"
+      >
         <Fullscreen />
       </div>
     {/if}

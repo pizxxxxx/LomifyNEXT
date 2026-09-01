@@ -10,14 +10,80 @@
   import { trackSheen } from '$lib/utils/sheen';
   import { trackTilt } from '$lib/utils/tilt';
   import { trackPress } from '$lib/utils/press';
+  import {
+    coverUrlForTrack,
+    downloadedCoverCache,
+    initDownloadedCoverCache
+  } from '$lib/offlineCovers';
 
   let showStartupWarning = false;
 
   /** Отложенная сверка лайков. Держим ссылку, чтобы снять её, если окно закрыли раньше. */
   let likesSyncTask: ReturnType<typeof setTimeout> | null = null;
   let likesSyncInterval: ReturnType<typeof setInterval> | null = null;
+  let cacheCleanupTask: ReturnType<typeof setTimeout> | null = null;
   let lastLikesSyncAt = 0;
   let lastLikesSyncToken = '';
+  let logicalViewportWidth = 1920;
+  let logicalViewportHeight = 1080;
+  let appliedInterfaceScale = 0;
+  let interfaceScaleRequest = 0;
+
+  const UI_REFERENCE_WIDTH = 1920;
+  const UI_REFERENCE_HEIGHT = 1080;
+
+  /**
+   * Окно 1920×1080 остаётся эталоном и выглядит пиксель-в-пиксель как раньше. На более
+   * просторном окне поднимаем масштаб по меньшей стороне: так 2K получает 133%, 4K —
+   * 200%, а ультраширокий монитор не обрезает интерфейс по высоте. Ниже 100% автоматика
+   * не опускается — компактные окна уже обслуживают адаптивные правила компонентов.
+   */
+  function resolveInterfaceScale(
+    mode: string | undefined,
+    viewportWidth: number,
+    viewportHeight: number
+  ) {
+    if (mode && mode !== 'auto') {
+      const percent = Number.parseInt(mode, 10);
+      if (Number.isFinite(percent)) return Math.min(2, Math.max(1, percent / 100));
+    }
+
+    const fit = Math.min(
+      viewportWidth / UI_REFERENCE_WIDTH,
+      viewportHeight / UI_REFERENCE_HEIGHT
+    );
+    return Math.min(2, Math.max(1, Math.round(fit * 100) / 100));
+  }
+
+  /**
+   * Нативный zoom WebView меняет layout viewport и заново растеризует текст/иконки — в
+   * отличие от CSS transform ничего не мылится, а `100vw`, fixed-окна и порталы продолжают
+   * совпадать с краями приложения. В обычном браузерном dev-режиме масштаб не подменяем:
+   * CSS zoom нарушил бы размеры `w-screen`/`h-screen`; выбранное значение применит Tauri.
+   */
+  async function applyInterfaceScale(
+    mode: string | undefined,
+    viewportWidth: number,
+    viewportHeight: number
+  ) {
+    if (typeof document === 'undefined') return;
+    const scale = resolveInterfaceScale(mode, viewportWidth, viewportHeight);
+    const request = ++interfaceScaleRequest;
+
+    document.body.setAttribute('data-ui-scale', String(Math.round(scale * 100)));
+    if (!('__TAURI_INTERNALS__' in window) || Math.abs(scale - appliedInterfaceScale) < 0.001) {
+      return;
+    }
+
+    try {
+      const { getCurrentWebview } = await import('@tauri-apps/api/webview');
+      if (request !== interfaceScaleRequest) return;
+      await getCurrentWebview().setZoom(scale);
+      if (request === interfaceScaleRequest) appliedInterfaceScale = scale;
+    } catch (e) {
+      console.warn('[ui-scale] не удалось применить масштаб интерфейса', e);
+    }
+  }
 
   function refreshYandexLikes() {
     const token = $settings.yandexToken || '';
@@ -73,6 +139,15 @@
 
   onMount(() => {
     initStore();
+    let downloadedCoversDisposed = false;
+    let releaseDownloadedCovers: (() => void) | null = null;
+    void initDownloadedCoverCache().then((release) => {
+      if (downloadedCoversDisposed) release();
+      else releaseDownloadedCovers = release;
+    });
+    // Apple Music больше не поддерживается. Стираем оставшиеся от прежней карточки
+    // пользовательский и developer token, чтобы закрытые учётные данные не лежали в WebView.
+    localStorage.removeItem('lomifynext_apple_music_session');
     // No inspector, no view-source, no reload in a shipped build (no-op during dev).
     const releaseDevLock = lockDevTools();    // Один делегированный слушатель на всё приложение: он запускает блик по карточкам и
     // даёт ему дожить до конца, даже если курсор уже ушёл.
@@ -87,6 +162,42 @@
     const releasePress = trackPress();
 
     if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+      // Размер окна Tauri приходит в физических пикселях и, в отличие от innerWidth,
+      // не меняется вслед за zoom самой страницы. Делим его на системный scaleFactor:
+      // так Windows 150/200% не складывается с нашей автоматикой второй раз.
+      let nativeScaleFactor = 1;
+      let releaseResize: (() => void) | null = null;
+      let releaseScaleChanged: (() => void) | null = null;
+      let windowMetricsDisposed = false;
+
+      import('@tauri-apps/api/window').then(async ({ getCurrentWindow }) => {
+        const appWindow = getCurrentWindow();
+        const [size, scaleFactor] = await Promise.all([
+          appWindow.innerSize(),
+          appWindow.scaleFactor()
+        ]);
+        if (windowMetricsDisposed) return;
+
+        nativeScaleFactor = scaleFactor || 1;
+        logicalViewportWidth = size.width / nativeScaleFactor;
+        logicalViewportHeight = size.height / nativeScaleFactor;
+
+        releaseResize = await appWindow.onResized(({ payload }) => {
+          logicalViewportWidth = payload.width / nativeScaleFactor;
+          logicalViewportHeight = payload.height / nativeScaleFactor;
+        });
+        releaseScaleChanged = await appWindow.onScaleChanged(({ payload }) => {
+          nativeScaleFactor = payload.scaleFactor || 1;
+          logicalViewportWidth = payload.size.width / nativeScaleFactor;
+          logicalViewportHeight = payload.size.height / nativeScaleFactor;
+        });
+
+        if (windowMetricsDisposed) {
+          releaseResize();
+          releaseScaleChanged();
+        }
+      }).catch((e) => console.warn('[ui-scale] не удалось прочитать размер окна', e));
+
       import('@tauri-apps/api/core').then(({ invoke }) => {
         invoke('discord_connect').catch(console.error);
       });
@@ -113,6 +224,16 @@
         syncAllLikesAtStartup();
       }, 500);
 
+      // Обход диска не конкурирует с первым кадром, загрузкой главной и сверкой лайков.
+      // Сам модуль дополнительно не запускает очистку чаще раза в сутки.
+      cacheCleanupTask = setTimeout(() => {
+        import('$lib/cacheMaintenance').then(({ runSmartCacheCleanup }) => {
+          runSmartCacheCleanup().catch((e) =>
+            console.warn('[cache] фоновая очистка не удалась', e)
+          );
+        });
+      }, 6000);
+
       // Яндекс не присылает push-событие о лайке, поставленном на другом устройстве, поэтому
       // держим лёгкую фоновую сверку. Она не чаще раза в минуту, не работает без токена и
       // дополнительно срабатывает при возврате фокуса в окно.
@@ -124,19 +245,33 @@
       if (!hasSeenWarning) {
         showStartupWarning = true;
       }
+
+      // Ссылки живут в блоке Tauri выше, а общий cleanup возвращается из onMount ниже.
+      // Функция на свойстве позволяет не расширять область всех остальных задач запуска.
+      releaseWindowMetrics = () => {
+        windowMetricsDisposed = true;
+        releaseResize?.();
+        releaseScaleChanged?.();
+      };
     }
 
     return () => {
+      downloadedCoversDisposed = true;
+      releaseDownloadedCovers?.();
       releaseDevLock();
       releaseSheen();
       releaseTilt();
       releasePress();
+      releaseWindowMetrics?.();
       if (likesSyncTask !== null) clearTimeout(likesSyncTask);
       if (likesSyncInterval !== null) clearInterval(likesSyncInterval);
+      if (cacheCleanupTask !== null) clearTimeout(cacheCleanupTask);
       window.removeEventListener('focus', refreshYandexLikes);
       document.removeEventListener('visibilitychange', refreshYandexLikes);
     };
   });
+
+  let releaseWindowMetrics: (() => void) | null = null;
 
   $: {
     if (typeof document !== 'undefined' && $settings) {
@@ -147,6 +282,13 @@
         document.body.setAttribute('data-theme', $settings.theme);
       }
       document.body.setAttribute('data-ui-style', $settings.uiStyle || 'style1');
+      // Размеры передаются явно: Svelte видит обе зависимости и пересчитывает автоматику
+      // не только при смене пункта настройки, но и при переносе окна на другой монитор.
+      void applyInterfaceScale(
+        $settings.uiScale || 'auto',
+        logicalViewportWidth,
+        logicalViewportHeight
+      );
       // Пользовательская гарнитура относится только к словам песни. Интерфейс остаётся
       // стабильным по метрикам: переключение текста не двигает меню, кнопки и карточки.
       document.body.setAttribute('data-lyrics-font', $settings.fontFamily || 'inter');
@@ -186,7 +328,8 @@
   // usable colour in it (monochrome sleeve, missing art, unreadable canvas).
   // `@property --color-primary` in app.css is what makes the change ease rather
   // than snap; the accent is registered as a real <color>.
-  $: applyCoverAccent($currentTrack?.coverUrl, $settings?.accentFromCover !== false);
+  $: currentDisplayCover = coverUrlForTrack($currentTrack, $downloadedCoverCache);
+  $: applyCoverAccent(currentDisplayCover, $settings?.accentFromCover !== false);
 
   let appliedAccentFor: string | null = null;
   async function applyCoverAccent(coverUrl: string | undefined, enabled: boolean) {

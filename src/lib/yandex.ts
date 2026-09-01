@@ -566,6 +566,8 @@ export function mapYandexTrack(raw: any): any | null {
     artists,
     coverUrl: ymCover(t.coverUri || t.ogImage || album?.coverUri),
     artistAvatarUrl: ymCover(t.artists?.[0]?.cover?.uri, '200x200'),
+    albumId: album?.id ? `${album.id}` : '',
+    albumTitle: `${album?.title ?? ''}`.trim(),
     permalinkUrl: album?.id
       ? `https://music.yandex.ru/album/${album.id}/track/${id}`
       : `https://music.yandex.ru/track/${id}`,

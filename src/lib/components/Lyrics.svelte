@@ -266,8 +266,12 @@
       rafId = 0;
       return;
     }
-    let lastTickTs = 0;
-    const FRAME_BUDGET_MS = 33;
+    let lastFrameTs = 0;
+    // The old loop deliberately skipped every second display refresh (33 ms), so even a
+    // healthy 60 Hz screen could only show ~30 lyric frames. Keep the exact same smoothing
+    // speed in wall-clock time, but feed it from every rAF: the animation stays visually the
+    // same while short lines can now move at the display refresh rate.
+    const LEGACY_FRAME_MS = 33;
 
     const tickFrame = (ts: number) => {
       if (document.visibilityState === 'hidden') {
@@ -275,8 +279,9 @@
         return;
       }
       rafId = requestAnimationFrame(tickFrame);
-      if (ts - lastTickTs < FRAME_BUDGET_MS) return;
-      lastTickTs = ts;
+      const frameMs = lastFrameTs === 0 ? 1000 / 60 : Math.min(100, Math.max(1, ts - lastFrameTs));
+      lastFrameTs = ts;
+      if (!get(isPlaying)) return;
 
       const idx = activeIndex;
       if (idx < 0 || idx >= displayLines.length) return;
@@ -295,7 +300,9 @@
 
       const prev = lineProgress;
       const diff = target - prev;
-      const smoothed = diff < 0 ? target : prev + diff * (diff > 0.18 || target > 0.92 ? 0.7 : 0.32);
+      const legacyAlpha = diff > 0.18 || target > 0.92 ? 0.7 : 0.32;
+      const frameAlpha = 1 - Math.pow(1 - legacyAlpha, frameMs / LEGACY_FRAME_MS);
+      const smoothed = diff < 0 ? target : prev + diff * frameAlpha;
       lineProgress = smoothed;
       writeLineProgress(idx, smoothed);
     };
@@ -472,7 +479,11 @@
     </div>
   {:else if hasTimedLyrics}
     {#key letterSync}
-      <div class="selectable flex flex-col gap-2" class:lyrics-line-sync={!letterSync}>
+      <div
+        class="selectable flex flex-col gap-2"
+        class:lyrics-line-sync={!letterSync}
+        class:lyrics-letter-sync={letterSync}
+      >
         {#each displayLines as line, i}
           {#if line.pause}
             <div
@@ -493,7 +504,11 @@
               class="lyric-line"
               on:click={() => handleSeek(line.time)}
             >
-              {#if letterSync}
+              <!-- Keep this condition inline: Svelte then tracks `activeIndex` as a template
+                   dependency and swaps the three character-based lines at the exact line
+                   change. Hiding that dependency inside a helper can leave the fragment
+                   static in legacy reactivity mode. -->
+              {#if letterSync && activeIndex >= 0 && Math.abs(i - activeIndex) <= 1}
                 {@const cells = splitChars(line.text)}
                 {@const groups = splitWordsForChars(cells)}
                 <span class="lyric-fill">
@@ -510,7 +525,7 @@
                   {/each}
                 </span>
               {:else}
-                <span class="lyric-line-text">{line.text}</span>
+                <span class="lyric-line-text" class:lyric-line-static={letterSync}>{line.text}</span>
               {/if}
             </div>
           {/if}

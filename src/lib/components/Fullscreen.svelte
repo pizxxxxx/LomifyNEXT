@@ -9,6 +9,7 @@
   import Lyrics from './Lyrics.svelte';
   import ArtistTag from './ArtistTag.svelte';
   import { FFT_BINS, readFftInto } from '$lib/fft';
+  import { coverUrlForTrack, downloadedCoverCache } from '$lib/offlineCovers';
 
   let canvas: HTMLCanvasElement;
   let unlistenFft: UnlistenFn;
@@ -32,6 +33,7 @@
    */
   $: visualizerOn = $settings.fullscreenVisualizer !== false;
   $: fullscreenLyricsSync = $settings.fullscreenLyricsSync !== false;
+  $: currentDisplayCover = coverUrlForTrack($currentTrack, $downloadedCoverCache);
 
   /**
    * Иммерсивная раскладка: с включённым текстом обложка вместе с названием уезжает вверх за
@@ -184,8 +186,8 @@
 
 <div class="relative w-full h-full flex items-center justify-center">
   {#if $currentTrack}
-    <div class="absolute inset-0 z-0 pointer-events-none overflow-hidden">
-      <img src={$currentTrack.coverUrl} alt="bg" class="w-full h-full object-cover blur-[100px] scale-150 opacity-40 transition-transform duration-1000" />
+    <div class="fs-backdrop-layer absolute inset-0 z-0 pointer-events-none overflow-hidden">
+      <img src={currentDisplayCover} alt="bg" class="fs-cover-backdrop w-full h-full object-cover blur-[100px] scale-150 opacity-40 transition-transform duration-1000" />
       <div class="absolute inset-0 bg-gradient-to-b from-black/20 via-black/40 to-[var(--color-dark)]"></div>
       {#if visualizerOn}
         <canvas bind:this={canvas} class="absolute inset-0 w-full h-full opacity-60"></canvas>
@@ -388,7 +390,7 @@
       <!-- Обложка с подписью. В «Погружении» с включённым текстом уезжает вверх за край. -->
       <div class="fs-cover-side">
         <div class="fs-cover group">
-          <img src={$currentTrack.coverUrl} alt="Cover" class="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
+          <img src={currentDisplayCover} alt="Cover" class="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
 
           <!-- svelte-ignore a11y-click-events-have-key-events -->
           <!-- svelte-ignore a11y-no-static-element-interactions -->

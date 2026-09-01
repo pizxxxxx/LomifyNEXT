@@ -54,6 +54,7 @@
   } from '$lib/stores';
   import { startWave, waveActive, waveAvailable } from '$lib/wave';
   import { FFT_BINS, readFftInto } from '$lib/fft';
+  import { coverUrlForTrack, downloadedCoverCache } from '$lib/offlineCovers';
   import {
     describeWaveFilters,
     trackMatchesWaveGenre,
@@ -89,6 +90,13 @@
    */
   export let onPage: boolean = true;
 
+  /**
+   * Performance mode keeps the same finished canvas frame, but stops both its render loop
+   * and the three blurred background animations. This is separate from `onPage`: switching
+   * the mode must not pretend that the user left Home or close an open tuning panel.
+   */
+  export let motionEnabled: boolean = true;
+
   let busy = false;
   let tuneOpen = false;
   let tuneTrigger: HTMLButtonElement;
@@ -115,7 +123,7 @@
   $: localActive = Boolean($currentTrack && stationIds.has(`${$currentTrack.id}`));
   $: active = $waveActive || localActive;
   $: sourceLabel = yandexWave ? 'Яндекс Музыка' : 'по вашей библиотеке';
-  $: cover = active ? $currentTrack?.coverUrl || '' : '';
+  $: cover = active ? coverUrlForTrack($currentTrack, $downloadedCoverCache) : '';
   $: waveFilterLabel = describeWaveFilters($settings);
   $: selectedGenre = waveGenreLabel($settings.waveGenre) || 'Любой жанр';
   $: selectedLanguage = waveLanguageLabel($settings.waveLanguage);
@@ -367,8 +375,8 @@
       const filter = describeWaveFilters($settings);
       notify(
         filter
-          ? `Для волны не нашлось треков по условию «${filter}»`
-          : 'Волна не собралась: не из чего. Проверь соединение или послушай что-нибудь',
+          ? `Для «Моей тусни» не нашлось треков по условию «${filter}». Попробуй изменить фильтр.`
+          : 'Не удалось собрать «Мою тусню». Проверь подключение или послушай несколько треков, чтобы появились рекомендации.',
         'error'
       );
       return false;
@@ -399,7 +407,7 @@
       }
     } catch (e) {
       console.error('[волна] не собралась', e);
-      notify('Не получилось собрать волну. Проверь соединение', 'error');
+      notify('Не удалось обновить «Мою тусню». Проверь подключение к интернету.', 'error');
     } finally {
       busy = false;
     }
@@ -597,7 +605,7 @@
     ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
     // Полотно поменяло ширину — прежние градиенты растянуты не по нему.
     gradKey = '';
-    if (reduceMotion) frame(performance.now());
+    if (reduceMotion || !motionEnabled) frame(performance.now(), true);
   }
 
   /** Градиенты по ширине полотна и цвету темы. Пересобираются только когда что-то из этого изменилось. */
@@ -656,10 +664,10 @@
     return a + (b - a) * f;
   }
 
-  function frame(now: number) {
+  function frame(now: number, single = false) {
     // Заявку на следующий кадр отдаём сразу: дальше идут выходы по «нечего рисовать» и по
     // ограничителю частоты, и после каждого из них цикл обязан продолжиться.
-    if (!reduceMotion) raf = requestAnimationFrame(frame);
+    if (!reduceMotion && !single) raf = requestAnimationFrame(frame);
 
     if (!ctx || cssWidth === 0 || cssHeight === 0) return;
 
@@ -669,7 +677,7 @@
     // Минус 4 мс: кадры приходят не ровно по расписанию, и строгое сравнение выбрасывало бы
     // каждый второй кадр, опоздавший на миллисекунду, — вместо 30 в секунду выходило бы 20.
     const budget = live ? FRAME_MS_LIVE : FRAME_MS_IDLE;
-    if (!reduceMotion && now - lastDrawAt < budget - 4) return;
+    if (!reduceMotion && !single && now - lastDrawAt < budget - 4) return;
     lastDrawAt = now;
 
     if (now < accentWatchUntil && now - accentReadAt > 180) {
@@ -837,7 +845,7 @@
    */
   function syncAwake() {
     if (typeof document === 'undefined') return;
-    awake = onPage && document.visibilityState !== 'hidden' && document.hasFocus();
+    awake = onPage && motionEnabled && document.visibilityState !== 'hidden' && document.hasFocus();
     if (awake && onScreen) startLoop();
     else stopLoop();
   }
@@ -849,7 +857,11 @@
   let mounted = false;
   $: if (mounted) {
     void onPage;
+    void motionEnabled;
     syncAwake();
+    // При включении экономного режима оставляем полноценный, но неподвижный кадр. Поэтому
+    // режим выглядит как та же «Моя тусня», а не как выключенный/сломанный canvas.
+    if (onPage && !motionEnabled) frame(performance.now(), true);
   }
 
   onMount(() => {
@@ -868,7 +880,7 @@
     if (reduceMotion) {
       // Уважаем системную настройку: один кадр вместо непрерывного движения. Спектр тогда
       // тоже не слушаем — иначе «уменьшить анимацию» ничего бы не уменьшило.
-      frame(performance.now());
+      frame(performance.now(), true);
       return;
     }
 

@@ -287,7 +287,7 @@
   function setArtistSource(source: ArtistSource) {
     if (source === artistSource) return;
     if (source === 'yandex' && !$settings.yandexToken) {
-      notify('Сначала подключи Яндекс Музыку в настройках', 'info');
+      notify('Сначала подключи Яндекс Музыку в настройках.', 'info');
       return;
     }
     openInfoRow = -1;
@@ -332,7 +332,7 @@
     const fetched = await ensureAlbumTracks(album);
     // Пока шёл запрос, могли закрыть релиз или открыть другой — тогда сообщать не о чем.
     if (expandedAlbum === opened && fetched.length === 0) {
-      notify('В этом релизе не оказалось треков, которые можно включить', 'info');
+      notify('В этом релизе нет треков, доступных для воспроизведения.', 'info');
     }
   }
 
@@ -366,7 +366,7 @@
   function playTrack(track: any, list: any[] = tracks) {
     if (!track) return;
     if (track.isBanned) {
-      notify('Источник считал трек недоступным. Пробую ещё раз', 'info');
+      notify('Этот источник недавно не отвечал. Пробую запустить трек ещё раз.', 'info');
     }
     const source = Array.isArray(list) ? list : [];
     const idx = source.findIndex(t => t.title === track.title && t.artist === track.artist);
@@ -382,7 +382,7 @@
     // сначала их дозапрашивает. Раньше она на таком альбоме просто ничего не делала.
     const list = await ensureAlbumTracks(album);
     if (list.length === 0) {
-      notify('Не удалось получить треки этого релиза', 'error');
+      notify('Не удалось загрузить треки этого релиза. Попробуй ещё раз.', 'error');
       return;
     }
     queue.set(list.slice(1));

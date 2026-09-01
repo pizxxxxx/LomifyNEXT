@@ -337,6 +337,27 @@ pub struct CacheInventoryEntry {
     pub modified_at: Option<u64>,
 }
 
+/// Rules supplied by the frontend for a conservative cache sweep. Liked and
+/// recently played URNs are explicit because filesystem access timestamps are
+/// not reliable on every Windows installation.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SmartCleanupRequest {
+    #[serde(default)]
+    pub liked_urns: Vec<String>,
+    #[serde(default)]
+    pub protected_urns: Vec<String>,
+    pub max_age_days: u64,
+    pub limit_mb: u64,
+}
+
+#[derive(Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CacheCleanupReport {
+    pub removed_files: u32,
+    pub freed_bytes: u64,
+}
+
 /// Live snapshot of the А→Б transcode pipeline for the Settings UI.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -368,6 +389,8 @@ struct DownloadResult {
 #[serde(rename_all = "camelCase")]
 pub struct LikeCacheEntry {
     pub urn: String,
+    #[serde(default)]
+    pub cover_url: Option<String>,
     pub urls: Vec<String>,
     #[serde(default)]
     pub download_urls: Vec<String>,
@@ -2179,6 +2202,7 @@ impl TrackCacheState {
                 }
                 let LikeCacheEntry {
                     urn,
+                    cover_url,
                     urls,
                     download_urls,
                     storage_urls,
@@ -2202,6 +2226,13 @@ impl TrackCacheState {
                     failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 } else {
                     skipped.fetch_add(0, std::sync::atomic::Ordering::Relaxed);
+                    if let Some(url) = cover_url.filter(|url| !url.trim().is_empty()) {
+                        if let Err(err) =
+                            crate::network::image_cache::cache_downloaded_cover(&urn, &url).await
+                        {
+                            eprintln!("[TrackCache] liked cover {urn}: {err}");
+                        }
+                    }
                 }
                 done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 state.emit_likes_progress(
@@ -2366,6 +2397,105 @@ impl TrackCacheState {
             }
         }
         out
+    }
+
+    /// Remove stale, unprotected audio and then keep the ordinary cache under
+    /// its configured quota. The dedicated liked cache is never quota-evicted;
+    /// an entry there is eligible only after the user removed the like and the
+    /// file also became old.
+    pub fn smart_cleanup(&self, request: SmartCleanupRequest) -> CacheCleanupReport {
+        let liked: HashSet<String> = request.liked_urns.into_iter().collect();
+        let protected: HashSet<String> = request.protected_urns.into_iter().collect();
+        let cutoff = SystemTime::now()
+            .checked_sub(Duration::from_secs(
+                request.max_age_days.saturating_mul(24 * 60 * 60),
+            ))
+            .unwrap_or(UNIX_EPOCH);
+        let limit_bytes = request.limit_mb.saturating_mul(1024 * 1024);
+        let in_flight = self
+            .transcoding
+            .lock()
+            .ok()
+            .map(|set| set.clone())
+            .unwrap_or_default();
+
+        let mut report = CacheCleanupReport::default();
+        let mut ordinary_total = 0u64;
+        let mut quota_candidates: Vec<(PathBuf, u64, SystemTime)> = Vec::new();
+
+        for (dir, in_liked_dir) in [
+            (&self.liked_dir, true),
+            (&self.audio_dir, false),
+            (&self.incoming_dir, false),
+        ] {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                continue;
+            };
+
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !is_audio_cache_file(&path) {
+                    continue;
+                }
+                let Some(urn) = filename_to_urn(&entry.file_name().to_string_lossy()) else {
+                    continue;
+                };
+                let Ok(metadata) = entry.metadata() else {
+                    continue;
+                };
+                if !metadata.is_file() {
+                    continue;
+                }
+
+                let size = metadata.len();
+                let last_used = metadata
+                    .accessed()
+                    .or_else(|_| metadata.modified())
+                    .unwrap_or(UNIX_EPOCH);
+                let is_protected = liked.contains(&urn)
+                    || protected.contains(&urn)
+                    || in_flight.contains(&urn);
+                let stale = request.max_age_days > 0 && last_used < cutoff;
+
+                if stale && !is_protected {
+                    if std::fs::remove_file(&path).is_ok() {
+                        remove_cache_metadata(&path);
+                        report.removed_files = report.removed_files.saturating_add(1);
+                        report.freed_bytes = report.freed_bytes.saturating_add(size);
+                    }
+                    continue;
+                }
+
+                if !in_liked_dir {
+                    ordinary_total = ordinary_total.saturating_add(size);
+                    if !is_protected {
+                        quota_candidates.push((path, size, last_used));
+                    }
+                }
+            }
+        }
+
+        if limit_bytes > 0 && ordinary_total > limit_bytes {
+            quota_candidates.sort_by_key(|entry| entry.2);
+            for (path, size, _) in quota_candidates {
+                if ordinary_total <= limit_bytes {
+                    break;
+                }
+                if std::fs::remove_file(&path).is_ok() {
+                    remove_cache_metadata(&path);
+                    ordinary_total = ordinary_total.saturating_sub(size);
+                    report.removed_files = report.removed_files.saturating_add(1);
+                    report.freed_bytes = report.freed_bytes.saturating_add(size);
+                }
+            }
+        }
+
+        println!(
+            "[TrackCache] smart cleanup removed {} files, freed {} MB",
+            report.removed_files,
+            report.freed_bytes / (1024 * 1024)
+        );
+        report
     }
 
     pub fn enforce_limit(&self, limit_mb: u64) {

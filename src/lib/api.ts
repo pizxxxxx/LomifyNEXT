@@ -12,6 +12,11 @@ import {
   yandexAlbumTracks,
   getYandexLyrics
 } from './yandex';
+import {
+  getCachedLastFmDiscoveryArtists,
+  getCachedLastFmKnownTracks,
+  getCachedLastFmTasteArtists
+} from './lastfm';
 
 export async function safeFetch(url: string, options?: any) {
   try {
@@ -137,7 +142,7 @@ export function findBestTranscoding(media: any) {
   return ranked[0] || null;
 }
 
-export async function searchSoundCloud(query: string, limit: number = 15) {
+export async function searchSoundCloud(query: string, limit: number = 15, strict = false) {
   try {
     const clientId = await getSoundCloudClientId();
     const url = `https://api-v2.soundcloud.com/search/tracks?q=${encodeURIComponent(query)}&client_id=${clientId}&limit=${limit}`;
@@ -156,6 +161,7 @@ export async function searchSoundCloud(query: string, limit: number = 15) {
           coverUrl: cover,
           artistAvatarUrl: avatar,
           permalinkUrl: t.permalink_url || '',
+          albumTitle: t.publisher_metadata?.album_title || '',
           genre: t.genre || '',
           playbackCount: t.playback_count || 0,
           likesCount: t.likes_count || 0,
@@ -169,6 +175,7 @@ export async function searchSoundCloud(query: string, limit: number = 15) {
       }).filter((t: any) => t.title);
   } catch (err) {
     console.error("SoundCloud search error:", err);
+    if (strict) throw err;
     return [];
   }
 }
@@ -254,7 +261,7 @@ export async function getTrackInfo(trackId: string | number) {
   return null;
 }
 
-export async function getSoundCloudPlaylists(query: string = 'phonk', limit: number = 3) {
+export async function getSoundCloudPlaylists(query: string = 'phonk', limit: number = 3, strict = false) {
   try {
     const clientId = await getSoundCloudClientId();
     const url = `https://api-v2.soundcloud.com/search/playlists_without_albums?q=${encodeURIComponent(query)}&client_id=${clientId}&limit=${limit}&representation=full`;
@@ -317,6 +324,7 @@ export async function getSoundCloudPlaylists(query: string = 'phonk', limit: num
     }
   } catch (e) {
     console.error("Failed to fetch SC playlists:", e);
+    if (strict) throw e;
   }
   return [];
 }
@@ -393,21 +401,44 @@ function buildTasteProfile(likedTracks: any[], listenStats: any, playlists: any[
   };
 
   for (const t of likedTracks || []) {
-    bump(artists, t?.artist, 3);
-    bump(genres, t?.genre, 2);
+    // Лайк — самый явный сигнал: он должен перевешивать случайный единичный запуск и
+    // присутствие трека в большой подборке.
+    bump(artists, t?.artist, 5);
+    bump(genres, t?.genre, 2.5);
     seed(t);
   }
 
   const history = listenStats?.history ? (Object.values(listenStats.history) as any[]) : [];
   for (const h of history) {
-    bump(artists, h?.artist, Math.min(4, 1 + (h?.count || 0) * 0.4));
-    bump(genres, h?.genre, Math.min(2, (h?.count || 0) * 0.2));
+    // Логарифм отличает «послушал один раз» от «возвращаюсь постоянно», но сотое
+    // прослушивание не способно навсегда запереть ленту на одном исполнителе.
+    const repeats = Math.max(1, Number(h?.count) || 1);
+    bump(artists, h?.artist, Math.min(5, 1 + Math.log2(repeats + 1) * 1.25));
+    bump(genres, h?.genre, Math.min(2, Math.log2(repeats + 1) * 0.45));
   }
 
+  // Last.fm уже объединяет прослушивания из разных плееров. Берём только сохранённый
+  // месячный топ: сеть здесь не трогаем, а его вес держим ниже явного лайка в Lomify.
+  // Так связь полезна для главной, но не может перетянуть рекомендации на себя.
+  const lastFmArtists = getCachedLastFmTasteArtists();
+  for (const [index, artist] of lastFmArtists.entries()) {
+    const recencyWeight = Math.max(1.4, 3.2 - index * 0.38);
+    const repeatWeight = Math.min(1.2, Math.log2(Math.max(1, artist.playcount) + 1) * 0.18);
+    bump(artists, artist.name, recencyWeight + repeatWeight);
+  }
+  const lastFmDiscovery = getCachedLastFmDiscoveryArtists();
+  for (const artist of lastFmDiscovery) {
+    // Похожесть — исследовательский сигнал: он помогает открыть нового автора, но не
+    // должен конкурировать с лайком или реально прослушанным исполнителем.
+    bump(artists, artist.name, 0.55 + artist.match * 0.7);
+  }
+
+  let playlistTrackCount = 0;
   for (const pl of playlists || []) {
     for (const t of pl?.tracks || []) {
-      bump(artists, t?.artist, 1);
-      bump(genres, t?.genre, 0.5);
+      playlistTrackCount += 1;
+      bump(artists, t?.artist, 0.85);
+      bump(genres, t?.genre, 0.4);
       seed(t);
     }
   }
@@ -418,7 +449,13 @@ function buildTasteProfile(likedTracks: any[], listenStats: any, playlists: any[
     displayNames,
     seedIds,
     yandexSeedIds,
-    strength: (likedTracks?.length || 0) + history.length,
+    // Плейлист тоже выводит из cold start, но его размер учитывается с сильным насыщением:
+    // подборка на 500 треков не должна затоптать лайки и историю.
+    strength: (likedTracks?.length || 0) * 2
+      + history.length
+      + Math.min(12, playlistTrackCount * 0.25)
+      + Math.min(8, lastFmArtists.length * 1.25)
+      + Math.min(3, lastFmDiscovery.length * 0.25),
   };
 }
 
@@ -448,6 +485,11 @@ export async function getTrendingTracks(likedTracks: any[] = [], listenStats: an
   const taste = buildTasteProfile(likedTracks, listenStats, playlists);
   const favArtists = topKeys(taste.artists, 12);
   const favGenres = topKeys(taste.genres, 6);
+  const recentSearches = (searchHistory || [])
+    .map(normKey)
+    .filter(Boolean)
+    .slice(0, 3);
+  const lastFmDiscovery = getCachedLastFmDiscoveryArtists();
 
   const current = get(settings);
   const yandexToken = current.yandexToken;
@@ -462,12 +504,14 @@ export async function getTrendingTracks(likedTracks: any[] = [], listenStats: an
   const primarySeeds = seedsFor(primaryHost);
 
   const queries = new Set<string>();
-  pickRandom(favArtists, favArtists.length >= 4 ? 3 : favArtists.length)
+  // Два главных исполнителя присутствуют всегда — раньше чистый random мог выкинуть обоих
+  // и «персональная» выдача после обновления внезапно меняла жанр. Ещё два слота остаются
+  // исследовательскими, чтобы лента не превращалась в повтор одной библиотеки.
+  [...favArtists.slice(0, 2), ...pickRandom(favArtists.slice(2), 2)]
     .forEach(a => queries.add(taste.displayNames.get(a) || a));
-  pickRandom(favGenres, 2).forEach(g => queries.add(g));
-  if (searchHistory && searchHistory.length > 0) {
-    pickRandom(searchHistory.slice(0, 12), 1).forEach(q => { if (q && q.trim()) queries.add(q.trim()); });
-  }
+  [...favGenres.slice(0, 1), ...pickRandom(favGenres.slice(1), 1)].forEach(g => queries.add(g));
+  pickRandom(lastFmDiscovery, 2).forEach((artist) => queries.add(artist.name));
+  if (searchHistory?.[0]?.trim()) queries.add(searchHistory[0].trim());
 
   // Cold start: nothing to personalise on, so show something good rather than nothing.
   if (primarySeeds.length === 0 && queries.size < 3) {
@@ -514,10 +558,14 @@ export async function getTrendingTracks(likedTracks: any[] = [], listenStats: an
   const fromRelated = gathered.fromRelated;
   let sc: any[] = gathered.tracks;
 
-  // Remove exact duplicates from multiple searches
-  const uniqueSc = new Map();
+  // Remove exact duplicates from multiple searches. У одного и того же трека может быть
+  // разный id в двух ответах/обёртках, поэтому одной проверки id недостаточно.
+  const uniqueSc = new Map<string, any>();
   for (const track of sc) {
-    if (!uniqueSc.has(track.id)) uniqueSc.set(track.id, track);
+    const signature = track?.title && track?.artist
+      ? `${normKey(track.title)}\u0000${normKey(track.artist)}`
+      : `${track?.source || primaryHost}:${track?.id || ''}`;
+    if (!uniqueSc.has(signature)) uniqueSc.set(signature, track);
   }
   sc = Array.from(uniqueSc.values());
   if (sc.length === 0) return [];
@@ -538,52 +586,79 @@ export async function getTrendingTracks(likedTracks: any[] = [], listenStats: an
   (likedTracks || []).forEach(addKnown);
   if (listenStats?.history) Object.values(listenStats.history).forEach(addKnown);
   (playlists || []).forEach(pl => (pl?.tracks || []).forEach(addKnown));
+  getCachedLastFmKnownTracks().forEach(addKnown);
 
   filtered = filtered.filter((t: any) => !knownSignatures.has(`${normKey(t.title)}-${normKey(t.artist)}`));
-  if (filtered.length === 0) return sc;
+  // Не возвращаем исходный пул как запасной вариант: в нём как раз лежат уже известные
+  // треки, включая содержимое собственных плейлистов. Пустая честная выдача лучше, чем
+  // снова показать то, что пользователь попросил убрать с главной.
+  if (filtered.length === 0) return [];
 
   // --- Ranking -------------------------------------------------------------------
   // Taste first, popularity as a gentle tiebreak: `log10` stops a 20M-play track from
   // outranking a 50k-play one by six orders of magnitude. The difference between
   // "popular" and "very popular" should not decide what a personal feed looks like.
   const maxArtistWeight = Math.max(1, ...taste.artists.values());
+  const genreAffinity = new Set<string>();
+  for (const genre of favGenres) {
+    genreAffinity.add(genre);
+    genre.split(/[\s,;/|&()+_-]+/).filter((part) => part.length > 2).forEach((part) => genreAffinity.add(part));
+  }
+
   const scoreOf = (t: any) => {
     let s = 0;
     const aw = taste.artists.get(normKey(t.artist));
-    if (aw) s += 2.2 + 1.8 * (aw / maxArtistWeight);      // your own artist: strongest signal
+    if (aw) s += 2.8 + 2.4 * (aw / maxArtistWeight);      // your own artist: strongest signal
     const gk = normKey(t.genre);
-    if (gk && taste.genres.has(gk)) s += 1.1;
-    if (fromRelated.has(t.id)) s += 1.6;                  // SoundCloud says it's similar
+    if (gk && taste.genres.has(gk)) {
+      s += 1.5;
+    } else if (gk) {
+      const parts = gk.split(/[\s,;/|&()+_-]+/).filter((part) => part.length > 2);
+      if (parts.some((part) => genreAffinity.has(part))) s += 0.8;
+    }
+    if (fromRelated.has(t.id)) s += 2.2;                  // host service says it's similar
+
+    // Недавний точный поиск — полезный, но краткосрочный сигнал. Он слабее лайка/повторов,
+    // зато поднимает конкретно найденный звук, а не случайную популярность по тому же слову.
+    const text = `${normKey(t.artist)} ${normKey(t.title)}`;
+    const searchIndex = recentSearches.findIndex((q) => q.length > 2 && text.includes(q));
+    if (searchIndex >= 0) s += 1.1 / (searchIndex + 1);
+
     s += Math.log10((t.playbackCount || 0) + 10) / 8;     // ≈0.13 … 0.95
-    s += Math.random() * 0.55;                            // keeps «обновить» meaningful
+    s += Math.random() * 0.35;                            // keeps «обновить» meaningful
     return s;
   };
 
-  filtered = filtered
+  const ranked = filtered
     .map((t: any) => ({ t, s: scoreOf(t) }))
     .sort((a, b) => b.s - a.s)
-    .slice(0, 200)
+    .slice(0, 180)
     .map(x => x.t);
 
-  // Space out tracks by the same artist so they don't appear consecutively
+  // Не больше четырёх треков одного автора за выдачу. Прежнее правило лишь раздвигало их,
+  // поэтому запрос по любимому артисту мог незаметно занять половину всей главной.
+  const FEED_LIMIT = 72;
+  const MAX_PER_ARTIST = 4;
   const spaced: any[] = [];
-  const remaining = [...filtered];
-  while (remaining.length > 0) {
-    let found = false;
-    for (let i = 0; i < remaining.length; i++) {
-      if (spaced.length === 0 || spaced[spaced.length - 1].artist !== remaining[i].artist) {
-        spaced.push(remaining[i]);
-        remaining.splice(i, 1);
-        found = true;
-        break;
-      }
+  const perArtist = new Map<string, number>();
+  const remaining = [...ranked];
+  while (remaining.length > 0 && spaced.length < FEED_LIMIT) {
+    const lastArtist = normKey(spaced[spaced.length - 1]?.artist);
+    let index = remaining.findIndex((track) => {
+      const artist = normKey(track.artist);
+      return artist !== lastArtist && (perArtist.get(artist) || 0) < MAX_PER_ARTIST;
+    });
+    if (index < 0) {
+      index = remaining.findIndex((track) => (perArtist.get(normKey(track.artist)) || 0) < MAX_PER_ARTIST);
     }
-    if (!found) {
-      spaced.push(remaining.shift());
-    }
+    if (index < 0) break;
+    const [track] = remaining.splice(index, 1);
+    const artist = normKey(track.artist);
+    perArtist.set(artist, (perArtist.get(artist) || 0) + 1);
+    spaced.push(track);
   }
 
-  return spaced.length > 0 ? spaced : sc;
+  return spaced;
 }
 
 /**
@@ -594,16 +669,44 @@ export async function getTrendingTracks(likedTracks: any[] = [], listenStats: an
  * выбрал его руками, значит врать про то, что играет. А вот сорвавшийся запрос (истёк
  * токен, нет сети) — не повод оставлять человека вообще без результатов.
  */
-export async function performSearch(query: string) {
+export interface SearchResponse {
+  tracks: any[];
+  /** Фактический источник результата: при недоступном Яндексе им может стать SoundCloud. */
+  source: 'soundcloud' | 'yandex';
+  fallbackUsed: boolean;
+}
+
+/**
+ * Версия поиска со статусом источника для экрана выдачи. Старый `performSearch` ниже
+ * оставлен как компактный API для мест, которым нужны только треки.
+ */
+export async function performSearchDetailed(query: string): Promise<SearchResponse> {
   const current = get(settings);
   if (current.searchSource === 'yandex' && current.yandexToken) {
     try {
-      return await searchYandex(current.yandexToken, query, 50);
+      return {
+        tracks: await searchYandex(current.yandexToken, query, 50),
+        source: 'yandex',
+        fallbackUsed: false
+      };
     } catch (e) {
       console.error('[yandex] поиск не удался, отдаём SoundCloud', e);
+      return {
+        tracks: await searchSoundCloud(query, 50, true),
+        source: 'soundcloud',
+        fallbackUsed: true
+      };
     }
   }
-  return await searchSoundCloud(query, 50);
+  return {
+    tracks: await searchSoundCloud(query, 50, true),
+    source: 'soundcloud',
+    fallbackUsed: false
+  };
+}
+
+export async function performSearch(query: string) {
+  return (await performSearchDetailed(query)).tracks;
 }
 
 /**

@@ -23,6 +23,7 @@
     "core:path:default",
     "core:event:default",
     "core:webview:default",
+    "core:webview:allow-set-webview-zoom",
     "window-state:default",
     "autostart:default",
     {

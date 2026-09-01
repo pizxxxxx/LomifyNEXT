@@ -9,6 +9,7 @@
     Play as PlayData
   } from 'lucide';
   import { currentTrack, isPlaying, progress, duration as durationStore, currentView, previousView, settings, equalizerBands, listenStats, queue, likedTracks, trackHistory, notify, playlists, globalVolume, lyricsStatus } from '$lib/stores';
+  import { buildTrackUrn } from '$lib/utils/trackUrn';
   import { getAudioUrl, getTrackInfo, getLyrics } from '$lib/api';
   import { waveActive, waveRefill, waveTrackDone, stopWave } from '$lib/wave';
   import { invoke } from '@tauri-apps/api/core';
@@ -20,12 +21,15 @@
   import PlaylistMenu from './PlaylistMenu.svelte';
   import { dragValue } from '$lib/actions/dragValue';
   import { isTrackLiked, toggleTrackLike } from '$lib/likes';
+  import { beginLastFmTrack, tickLastFmTrack } from '$lib/lastfm';
+  import { coverUrlForTrack, downloadedCoverCache } from '$lib/offlineCovers';
 
   $: isLiked = isTrackLiked($likedTracks, $currentTrack);
   let currentTime = 0;
   let duration = 0;
   let currentTrackListenTime = 0;
   let currentTrackCounted = false;
+  $: currentDisplayCover = coverUrlForTrack($currentTrack, $downloadedCoverCache);
 
   /**
    * Поделиться. Ссылка есть не только у SoundCloud: трек Яндекса приезжает с готовым
@@ -39,7 +43,7 @@
 
     const isLocal = Boolean($currentTrack.isLocal) || $currentTrack.source === 'Локальный';
     if (isLocal) {
-       notify('Это файл с диска — делиться нечем', 'error');
+       notify('Это локальный файл, поэтому у него нет ссылки для отправки.', 'info');
        return;
     }
 
@@ -69,10 +73,10 @@
     const text = `${url}\ni use Lomify btw`;
     try {
        await navigator.clipboard.writeText(text);
-       notify('Ссылка в буфере', 'success');
+       notify('Ссылка скопирована.', 'success');
     } catch (e) {
        console.error(e);
-       notify('Буфер обмена не отдался. Попробуй ещё раз', 'error');
+       notify('Не удалось скопировать ссылку. Попробуй ещё раз.', 'error');
     }
   }
   let repeatMode = 0; // 0: off, 1: all, 2: one
@@ -142,7 +146,7 @@
     // Через `$lib/likes`, а не правкой стора: отметка должна уехать в аккаунт Яндекса, а
     // снятая — не вернуться при следующей сверке.
     const liked = toggleTrackLike($currentTrack);
-    notify(liked ? 'Добавил в любимые' : 'Убрал из любимых', liked ? 'success' : 'info');
+    notify(liked ? 'Трек добавлен в любимые.' : 'Трек убран из любимых.', liked ? 'success' : 'info');
   }
 
   // Работа с плейлистами уехала в `PlaylistMenu`: там она одна на все места, где есть кнопка
@@ -169,13 +173,14 @@
   async function handleDownload() {
     if (!$currentTrack || isDownloaded || isDownloading) return;
     isDownloading = true;
-    notify('Качаю…', 'info');
+    notify('Скачиваю трек…', 'info');
     try {
        const url = await getAudioUrl($currentTrack);
        if (!url) throw new Error("No URL");
        const urn = buildUrn($currentTrack);
        const request = {
          urn,
+         coverUrl: $currentTrack.coverUrl || null,
          url,
          urls: [url],
          hq: false,
@@ -184,10 +189,10 @@
        await invoke('track_ensure_cached', { request });
        isDownloaded = true;
        window.dispatchEvent(new CustomEvent('trackCacheChanged', { detail: { urn, cached: true } }));
-       notify('Готово, трек на диске', 'success');
+       notify('Готово — трек сохранён на компьютере.', 'success');
     } catch (e) {
        console.error(e);
-       notify('Не смог скачать — сеть или трек убрали', 'error');
+       notify('Не удалось скачать трек. Проверь подключение: возможно, источник удалил запись.', 'error');
     } finally {
        isDownloading = false;
     }
@@ -204,10 +209,10 @@
       if (!removed && stillCached) throw new Error('cache file is still in use');
       isDownloaded = false;
       window.dispatchEvent(new CustomEvent('trackCacheChanged', { detail: { urn, cached: false } }));
-      notify(`Удалил «${track.title}» с диска`, 'info');
+      notify(`Трек «${track.title}» удалён с компьютера.`, 'info');
     } catch (e) {
       console.error('Could not remove cached track', e);
-      notify('Не смог удалить — возможно, трек сейчас используется', 'error');
+      notify('Не удалось удалить файл. Возможно, трек сейчас используется.', 'error');
     } finally {
       isRemovingDownload = false;
     }
@@ -229,10 +234,7 @@
    * собиралась прямо в `startLoading`; предзагрузка обязана собирать её точно так же, иначе
    * подготовленная ссылка не совпадёт сама с собой и работа уйдёт в мусор.
    */
-  function buildUrn(track: any) {
-    const trackIdStr = track.id ? track.id : `${track.title}-${track.artist}`;
-    return `lomify:${track.source}:${trackIdStr}`.replace(/[^a-zA-Z0-9а-яА-ЯёЁ:-]/g, '');
-  }
+  const buildUrn = buildTrackUrn;
 
   /**
    * За сколько секунд до конца готовить следующий трек. Раньше вся подготовка начиналась
@@ -394,8 +396,10 @@
 
       if (!cached && url && $settings.autoCache) {
         invoke('track_ensure_cached', {
-          request: { urn, url, urls: [url], hq: false, durationMs: track.duration ? track.duration : null }
-        }).catch(e => console.warn('[player] предзагрузка в кэш не удалась', e));
+          request: { urn, coverUrl: track.coverUrl || null, url, urls: [url], hq: false, durationMs: track.duration ? track.duration : null }
+        })
+          .then(() => window.dispatchEvent(new CustomEvent('trackCacheChanged', { detail: { urn, cached: true } })))
+          .catch(e => console.warn('[player] предзагрузка в кэш не удалась', e));
       }
     } finally {
       preparingNext = false;
@@ -547,6 +551,7 @@
       if (crossfadeArmed && loadingGeneration !== null) return;
       currentTime = event.payload as number;
       progress.set(currentTime);
+      if ($currentTrack) tickLastFmTrack($currentTrack, currentTime, duration, $isPlaying);
       paintProgress();
       maybePreloadNext();
       maybeStartCrossfade();
@@ -589,7 +594,21 @@
                 return {
                   ...s,
                   tracksPlayed: (s.tracksPlayed || 0) + 1,
-                  history: { ...historyObj, [trackId]: { ...currentHistory, count: currentHistory.count + 1 } }
+                  history: {
+                    ...historyObj,
+                    [trackId]: {
+                      ...currentHistory,
+                      count: currentHistory.count + 1,
+                      title: $currentTrack.title,
+                      artist: $currentTrack.artist,
+                      coverUrl: $currentTrack.coverUrl,
+                      id: $currentTrack.id,
+                      source: $currentTrack.source,
+                      artists: $currentTrack.artists,
+                      duration: $currentTrack.duration,
+                      lastPlayedAt: Date.now()
+                    }
+                  }
                 };
               });
             }
@@ -794,7 +813,7 @@
       // дальше. Настоящую недоступность отдаёт сам источник (`available === false` в
       // yandex.ts, `policy === 'BLOCK'` в api.ts) — этому мы верим, своим догадкам нет.
       const reason = urlError instanceof Error ? urlError.message.trim() : '';
-      notify(reason || 'Источник не отдал ссылку на этот трек. Иду дальше', 'error');
+      notify(reason || 'Источник не передал ссылку на этот трек. Включаю следующий.', 'error');
       setTimeout(() => playNext('dropped'), 1500);
       return;
     }
@@ -822,6 +841,7 @@
       try {
          const request = {
            urn: urn,
+           coverUrl: currentTrackObj.coverUrl || null,
            url: safeUrl,
            urls: [safeUrl],
            hq: false,
@@ -843,14 +863,16 @@
                 // (например «HTTP 403 — ссылка на поток отклонена раздачей»). Прятать её за
                 // общим «не смог включить» значит терять единственную подсказку.
                 const reason = (typeof e === 'string' ? e : (e as any)?.message ?? '').trim();
-                notify(reason ? `Не смог включить: ${reason}` : 'Не смог включить. Беру следующий', 'error');
+                notify(reason ? `Не удалось включить трек: ${reason}` : 'Не удалось включить трек. Перехожу к следующему.', 'error');
                 setTimeout(() => playNext('dropped'), 1500);
                 throw e;
               });
 
             // Cache in the background if enabled
             if ($settings.autoCache) {
-              invoke('track_ensure_cached', { request }).catch(e => console.error("Background cache failed", e));
+              invoke('track_ensure_cached', { request })
+                .then(() => window.dispatchEvent(new CustomEvent('trackCacheChanged', { detail: { urn, cached: true } })))
+                .catch(e => console.error("Background cache failed", e));
             }
          }
       } catch(e) {
@@ -884,6 +906,7 @@
       durationStore.set(duration);
       paintProgress();
       $isPlaying = true;
+      beginLastFmTrack(currentTrackObj, duration);
       invoke('audio_play').catch(() => {});
 
       invoke('audio_set_metadata', {
@@ -956,7 +979,6 @@
     switch (track.source) {
       case 'yandex': return 'Яндекс Музыка';
       case 'soundcloud': return 'SoundCloud';
-      case 'youtube': return 'YouTube';
       default: return null;
     }
   }
@@ -1098,8 +1120,8 @@
           class="relative group cursor-pointer overflow-hidden rounded-xl shadow-md w-14 h-14 bg-neutral-800 flex-shrink-0"
           on:click={toggleFullscreenView}
         >
-          {#if $currentTrack.coverUrl}
-            <img src={$currentTrack.coverUrl} alt="Cover" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-[400ms]" />
+          {#if currentDisplayCover}
+            <img src={currentDisplayCover} alt="Cover" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-[400ms]" />
           {:else}
             <div class="w-full h-full bg-gradient-to-br from-neutral-700 to-neutral-900"></div>
           {/if}

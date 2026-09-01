@@ -16,7 +16,10 @@
     Headphones,
     Captions,
     MonitorCog,
-    Database
+    Database,
+    HardDrive,
+    ShieldCheck,
+    Sparkles
   } from 'lucide-svelte';
   import { enable, isEnabled, disable } from '@tauri-apps/plugin-autostart';
   import { appDataDir, appLocalDataDir } from '@tauri-apps/api/path';
@@ -25,6 +28,10 @@
   import { withCount } from '$lib/utils/plural';
   import { APP_NAME, APP_VERSION, APP_CHANNEL } from '$lib/version';
   import { listOutputs, applyOutput, type AudioOutput } from '$lib/audioOutput';
+  import SelectMenu from './SelectMenu.svelte';
+  import SpotifyImport from './SpotifyImport.svelte';
+  import LastFmConnect from './LastFmConnect.svelte';
+  import MusicServiceIcon from './MusicServiceIcon.svelte';
   let autostartEnabled = false;
   let dataPath = '';
   let localDataPath = '';
@@ -37,6 +44,37 @@
   let appIconOpen = false;
   let appIconTrigger: HTMLButtonElement;
   let appIconDialog: HTMLElement;
+  let cacheAudioBytes = 0;
+  let cacheLikedBytes = 0;
+  let cacheImageBytes = 0;
+  let cacheStatsLoading = false;
+  let cacheCleaning = false;
+  let cacheCleanupMessage = '';
+
+  const cacheRetentionOptions = [
+    { value: 14, label: '14 дней' },
+    { value: 30, label: '30 дней' },
+    { value: 60, label: '60 дней' },
+    { value: 90, label: '90 дней' }
+  ];
+  const cacheLimitOptions = [
+    { value: 512, label: '512 МБ' },
+    { value: 1024, label: '1 ГБ' },
+    { value: 2048, label: '2 ГБ' },
+    { value: 4096, label: '4 ГБ' }
+  ];
+  const uiScaleOptions = [
+    { value: 'auto', label: 'Автоматически' },
+    { value: '100', label: '100%' },
+    { value: '110', label: '110%' },
+    { value: '125', label: '125%' },
+    { value: '133', label: '133%' },
+    { value: '150', label: '150%' },
+    { value: '175', label: '175%' },
+    { value: '200', label: '200%' }
+  ];
+
+  $: cacheTotalBytes = cacheAudioBytes + cacheLikedBytes + cacheImageBytes;
 
   type SettingsTab = 'appearance' | 'music' | 'lyrics' | 'system' | 'data';
   const settingsTabs: SettingsTab[] = ['appearance', 'music', 'lyrics', 'system', 'data'];
@@ -141,6 +179,52 @@
     void openExternalPage(url, 'Не удалось открыть ЮMoney');
   }
 
+  function formatBytes(bytes: number) {
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 МБ';
+    const mb = bytes / (1024 * 1024);
+    if (mb < 1024) return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} МБ`;
+    return `${(mb / 1024).toFixed(1)} ГБ`;
+  }
+
+  async function refreshCacheStats() {
+    if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
+    cacheStatsLoading = true;
+    try {
+      const { getCacheUsage } = await import('$lib/cacheMaintenance');
+      const usage = await getCacheUsage();
+      cacheAudioBytes = usage.audioBytes;
+      cacheLikedBytes = usage.likedBytes;
+      cacheImageBytes = usage.imageBytes;
+    } catch (e) {
+      console.warn('[cache] не удалось прочитать размер кэша', e);
+    } finally {
+      cacheStatsLoading = false;
+    }
+  }
+
+  async function cleanupCacheNow() {
+    if (cacheCleaning) return;
+    cacheCleaning = true;
+    cacheCleanupMessage = 'Проверяю сохранённые файлы…';
+    try {
+      const { runSmartCacheCleanup } = await import('$lib/cacheMaintenance');
+      const result = await runSmartCacheCleanup({ force: true });
+      const freed = formatBytes(result?.freedBytes || 0);
+      const removed = result?.removedFiles || 0;
+      cacheCleanupMessage = removed
+        ? `Удалено ${withCount(removed, 'файл', 'файла', 'файлов')} · освобождено ${freed}`
+        : 'Лишних файлов не найдено';
+      notify(removed ? `Готово: освободилось ${freed}.` : 'Кэш уже в порядке — удалять нечего.', 'success');
+      await refreshCacheStats();
+    } catch (e) {
+      console.error('[cache] smart cleanup failed', e);
+      cacheCleanupMessage = 'Не удалось завершить очистку';
+      notify('Не удалось очистить кэш. Попробуй ещё раз.', 'error');
+    } finally {
+      cacheCleaning = false;
+    }
+  }
+
   async function handleGibberishToggle() {
     $settings.gibberishMode = !$settings.gibberishMode;
     if ($settings.gibberishMode) {
@@ -190,6 +274,7 @@
     // Список устройств перечитывается на каждом открытии вкладки (компонент здесь
     // создаётся заново, см. +page.svelte), поэтому воткнутые наушники видно без кнопки.
     refreshOutputs();
+    void refreshCacheStats();
   });
 
   // ── Устройство вывода ────────────────────────────────────────────────────────
@@ -214,7 +299,7 @@
       outputs = await listOutputs();
     } catch (e) {
       console.error('[audio] list devices failed', e);
-      notify('Не смог получить список устройств', 'error');
+      notify('Не удалось получить список устройств воспроизведения.', 'error');
     }
     outputsLoading = false;
   }
@@ -234,7 +319,7 @@
       $settings.outputDevice = name;
       $settings.outputDeviceLabel = device?.description ?? '';
       notify(
-        device ? `Играю через «${device.description}»` : 'Играю через системное устройство',
+        device ? `Звук переключён на «${device.description}».` : 'Звук переключён на системное устройство.',
         'success'
       );
     } catch (e: any) {
@@ -242,8 +327,8 @@
       // устройство по умолчанию, а ошибка доезжает сюда уже после этого.
       notify(
         device
-          ? `Не смог открыть «${device.description}» — звук идёт через системное`
-          : 'Не смог переключиться на системное устройство',
+          ? `Не удалось подключить «${device.description}». Звук продолжит идти через системное устройство.`
+          : 'Не удалось переключиться на системное устройство.',
         'error'
       );
       console.error('[audio] switch device failed', e);
@@ -262,7 +347,7 @@
         autostartEnabled = true;
       }
     } catch(e) {
-      notify('Не смог настроить автозапуск', 'error');
+      notify('Не удалось изменить настройку автозапуска.', 'error');
     }
   }
 
@@ -277,13 +362,13 @@
       if (!url.startsWith('http')) url = 'https://soundcloud.com/' + url;
       const user = await resolveSoundCloudProfile(url);
       if (!user) {
-        notify('Такого профиля нет — проверь ссылку', 'error');
+        notify('Профиль не найден. Проверь ссылку или имя пользователя.', 'error');
         scLoading = false;
         return;
       }
 
       $settings.scUser = user;
-      notify('Профиль на месте', 'success');
+      notify('Профиль SoundCloud подключён.', 'success');
 
       const userPlaylists = await getUserPlaylists(user.id);
       if (userPlaylists.length > 0) {
@@ -291,7 +376,7 @@
           const fresh = userPlaylists.filter((up: any) => !p.some((existing: any) => existing.id === up.id));
           return [...fresh, ...p];
         });
-        notify(`Перенёс ${withCount(userPlaylists.length, 'плейлист', 'плейлиста', 'плейлистов')}`, 'success');
+        notify(`Импортировано ${withCount(userPlaylists.length, 'плейлист', 'плейлиста', 'плейлистов')}.`, 'success');
       }
 
       // Лайки тянет сверка, а не отдельный проход по списку. Она делает то же самое (берёт
@@ -301,7 +386,7 @@
       const { syncLikes } = await import('$lib/likes');
       await syncLikes({ only: 'soundcloud' });
     } catch (e) {
-      notify('Не получилось привязать профиль', 'error');
+      notify('Не удалось подключить профиль SoundCloud. Проверь ссылку и подключение к интернету.', 'error');
     }
     scLoading = false;
   }
@@ -316,7 +401,7 @@
       // отличает «списки сходятся» от «источник ответил не целиком».
       await syncLikes({ only: 'soundcloud' });
     } catch (e) {
-      notify('Не смог обновить лайки', 'error');
+      notify('Не удалось обновить лайки SoundCloud. Попробуй ещё раз.', 'error');
     }
     scLoading = false;
   }
@@ -343,7 +428,7 @@
     // не найдёт. Поэтому не даём молча уйти в нерабочее состояние, а показываем, чего не
     // хватает: плашка привязки стоит ниже в этой же вкладке.
     if (source === 'yandex' && !$settings.yandexToken) {
-      notify('Сначала привяжи Яндекс Музыку — плашка ниже', 'info');
+      notify('Сначала подключи Яндекс Музыку в разделе ниже.', 'info');
       return;
     }
     $settings.searchSource = source;
@@ -368,7 +453,7 @@
       $settings.yandexUser = { ...account, avatarUrl };
       $settings.searchSource = 'yandex';
       ymInputToken = '';
-      notify(`Яндекс Музыка на месте — ${account.displayName}`, 'success');
+      notify(`Яндекс Музыка подключена: ${account.displayName}.`, 'success');
       // Лайки забираем сразу: привязка ради них и делается, а ждать перезапуска ради первой
       // сверки — ровно та ручная работа, от которой мы уходим. Отдельным `catch`, чтобы
       // отказ сверки не превратился в жалобу на токен: токен уже приняли строкой выше.
@@ -383,7 +468,7 @@
       // подменяла собой причину. Причина не обязана быть в токене — это может быть и
       // неопознанный клиент, и лимит запросов, и запуск в браузере. Формулировку под каждый
       // случай даёт `describeYmError` в yandex.ts, дублировать её догадкой не нужно.
-      notify(e?.message || 'Не удалось связаться с Яндекс Музыкой', 'error');
+      notify(e?.message || 'Не удалось связаться с Яндекс Музыкой.', 'error');
     }
     ymLoading = false;
   }
@@ -394,7 +479,7 @@
     // Оставлять выбранным источник, доступа к которому больше нет, нельзя — поиск бы
     // молча падал в SoundCloud, и было бы непонятно, почему.
     if ($settings.searchSource === 'yandex') $settings.searchSource = 'soundcloud';
-    notify('Яндекс Музыка отвязана', 'info');
+    notify('Яндекс Музыка отключена.', 'info');
   }
 
   /**
@@ -413,7 +498,7 @@
       const { syncLikes } = await import('$lib/likes');
       await syncLikes({ only: 'yandex' });
     } catch (e: any) {
-      notify(e?.message ? `Лайки не пришли: ${e.message}` : 'Лайки не пришли', 'error');
+      notify(e?.message ? `Не удалось синхронизировать лайки: ${e.message}` : 'Не удалось синхронизировать лайки.', 'error');
     }
     ymLoading = false;
   }
@@ -542,7 +627,7 @@
   function resetProfileStats() {
     if (confirm('Обнулить часы прослушивания и историю? Треки и лайки останутся.')) {
       listenStats.set({ listenSeconds: 0, tracksPlayed: 0, history: {} });
-      notify('Профиль сброшен', 'success');
+      notify('Статистика профиля сброшена.', 'success');
     }
   }
 
@@ -663,8 +748,8 @@
         <div class="plate p-8">
           <h3 class="section-title">Глобальный дизайн</h3>
           <p class="empty-hint !mt-1.5 !max-w-[54ch] mb-6">
-            Полностью меняет облик приложения: материалы панелей, типографику, карточки и текст песни.
-            Цвет темы и плотность стекла настраиваются отдельно и продолжают работать в обоих дизайнах.
+            Выбери общий характер интерфейса. Цвет темы и плотность панелей настраиваются
+            отдельно и работают в обоих вариантах.
           </p>
           <div class="grid grid-cols-2 gap-3">
             <!-- Не просто две кнопки, а два превью: разницу между дизайнами видно до
@@ -700,19 +785,93 @@
         <div class="plate p-8">
           <h3 class="section-title">Стиль интерфейса</h3>
           <p class="empty-hint !mt-1.5 !max-w-[54ch] mb-6">Плотность панелей и то, насколько цвет темы проникает в фон.</p>
-          <div class="flex gap-3 mb-5">
+          <div class="settings-choice-grid mb-5">
             <button
-              class="flex-1 py-3.5 rounded-2xl text-[14px] font-medium transition-[transform,background-color,color] interactive-item { $settings.uiStyle === 'style1' ? 'bg-primary text-black shadow-[0_0_25px_color-mix(in_srgb,var(--color-primary)_60%,transparent)]' : 'glass-button' }"
+              type="button"
+              class="settings-choice"
+              class:is-active={$settings.uiStyle === 'style1'}
               on:click={() => $settings.uiStyle = 'style1'}
             >
-              Светлее
+              <span class="settings-choice-icon" aria-hidden="true"><Palette size={17} /></span>
+              <span class="settings-choice-copy">
+                <strong>Светлее</strong>
+                <small>Воздушные панели</small>
+              </span>
+              <span class="settings-choice-check" aria-hidden="true">
+                {#if $settings.uiStyle === 'style1'}<Check size={14} />{/if}
+              </span>
             </button>
             <button
-              class="flex-1 py-3.5 rounded-2xl text-[14px] font-medium transition-[transform,background-color,color] interactive-item { $settings.uiStyle === 'style2' ? 'bg-primary text-black shadow-[0_0_25px_color-mix(in_srgb,var(--color-primary)_60%,transparent)]' : 'glass-button' }"
+              type="button"
+              class="settings-choice"
+              class:is-active={$settings.uiStyle === 'style2'}
               on:click={() => $settings.uiStyle = 'style2'}
             >
-              Темнее
+              <span class="settings-choice-icon" aria-hidden="true"><MonitorCog size={17} /></span>
+              <span class="settings-choice-copy">
+                <strong>Темнее</strong>
+                <small>Плотные панели</small>
+              </span>
+              <span class="settings-choice-check" aria-hidden="true">
+                {#if $settings.uiStyle === 'style2'}<Check size={14} />{/if}
+              </span>
             </button>
+          </div>
+
+          <div class="setting-row mb-3">
+            <div class="flex-1 min-w-0">
+              <div class="setting-title">Кнопки окна</div>
+              <div class="setting-hint">
+                Оба варианта нарисованы Lomify — системная рамка Windows не включается.
+              </div>
+            </div>
+            <div
+              class="window-controls-picker"
+              role="radiogroup"
+              aria-label="Стиль кнопок окна"
+            >
+              <button
+                type="button"
+                role="radio"
+                aria-checked={$settings.windowControlsStyle !== 'macos'}
+                class:is-active={$settings.windowControlsStyle !== 'macos'}
+                on:click={() => $settings.windowControlsStyle = 'windows'}
+              >
+                <span class="window-controls-preview is-windows" aria-hidden="true">
+                  <i></i><i></i><i></i>
+                </span>
+                <span>Windows справа</span>
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={$settings.windowControlsStyle === 'macos'}
+                class:is-active={$settings.windowControlsStyle === 'macos'}
+                on:click={() => $settings.windowControlsStyle = 'macos'}
+              >
+                <span class="window-controls-preview is-macos" aria-hidden="true">
+                  <i></i><i></i><i></i>
+                </span>
+                <span>Круглые слева</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="setting-row mb-3">
+            <div class="flex-1 min-w-0">
+              <div class="setting-title">Масштаб интерфейса</div>
+              <div class="setting-hint">
+                Авто сохраняет привычный размер: Full HD — 100%, 2K — около 133%, 4K —
+                до 200%. Системный масштаб Windows уже учитывается и повторно не умножается.
+              </div>
+            </div>
+            <div class="settings-scale-control">
+              <SelectMenu
+                bind:value={$settings.uiScale}
+                options={uiScaleOptions}
+                ariaLabel="Масштаб интерфейса"
+              />
+            </div>
           </div>
 
           <div class="setting-row">
@@ -772,10 +931,9 @@
             <div>
               <div class="setting-title">Режим производительности</div>
               <div class="setting-hint">
-                Снимает всё дорогое сразу: живое размытие под панелями, атмосферную подложку,
-                блик под курсором, наклон обложки, световую полосу и объём нажатия. Помогает
-                на ноутбуках и слабых видеокартах. Выключателями эффектов ниже не управляет —
-                ваш выбор там сохраняется и вернётся, когда режим выключите.
+                Упрощает тяжёлые эффекты, отключает предпрослушивание карточек и снижает
+                нагрузку на видеокарту. Внешний вид останется знакомым, а прокрутка и текст
+                песен будут работать плавнее на старых компьютерах.
               </div>
             </div>
             <button
@@ -867,9 +1025,8 @@
         <div class="plate p-8">
           <h3 class="section-title">Движение под курсором</h3>
           <p class="empty-hint !mt-1.5 !max-w-[54ch] mb-6">
-            Выключенный эффект не «анимируется в ноль», а не выполняется вовсе: ни расчётов
-            на кадр, ни отдельного слоя на видеокарте под него. В режиме производительности
-            все четыре отключаются сами, независимо от этих тумблеров.
+            Здесь можно оставить только те движения, которые тебе нравятся. В режиме
+            производительности все четыре эффекта временно отключаются автоматически.
           </p>
 
           <div class="flex flex-col gap-3">
@@ -877,9 +1034,8 @@
               <div>
                 <div class="setting-title">3D-наклон обложек</div>
                 <div class="setting-hint">
-                  Обложка под курсором наклоняется и приподнимается над карточкой. Единственный
-                  из четырёх, который двигает геометрию, — если полки подтормаживают, выключать
-                  стоит первым.
+                  Обложка слегка наклоняется вслед за курсором. Если музыкальные полки
+                  прокручиваются рывками, попробуй сначала отключить этот эффект.
                 </div>
               </div>
               <button
@@ -897,9 +1053,7 @@
               <div>
                 <div class="setting-title">Блик под курсором</div>
                 <div class="setting-hint">
-                  Свет по карточке: мягкое свечение на стекле и отражение на обложке. Обложка —
-                  глянцевая плоскость, поэтому при включённом наклоне блик едет к той кромке,
-                  которую вы отклоняете, — как на фотографии, которую поворачивают под лампой.
+                  Мягкое свечение следует за курсором и делает обложки похожими на глянцевые.
                 </div>
               </div>
               <button
@@ -917,9 +1071,8 @@
               <div>
                 <div class="setting-title">Проблеск по плоским карточкам</div>
                 <div class="setting-hint">
-                  Полоса света, один раз пробегающая по карточке на входе курсора: строки
-                  исполнителей, плитки без обложки. На самих обложках её нет — там свет ходит
-                  отражением, и два блика на одной поверхности выглядели рябью.
+                  Короткая полоса света появляется на строках исполнителей и других плоских
+                  карточках, когда на них наводят курсор.
                 </div>
               </div>
               <button
@@ -937,8 +1090,7 @@
               <div>
                 <div class="setting-title">Отклик боковой панели</div>
                 <div class="setting-hint">
-                  Пункты навигации мягко сдвигаются к курсору и коротко отзываются на нажатие.
-                  Сама панель остаётся на месте, поэтому переходы между разделами её не дёргают.
+                  Пункты навигации слегка двигаются к курсору и мягко реагируют на нажатие.
                 </div>
               </div>
               <button
@@ -970,147 +1122,204 @@
              конец страницы. -->
         <div class="plate p-8">
           <h3 class="section-title mb-2">Источник аудио</h3>
-          <p class="setting-hint !mt-0 mb-5">Откуда искать и играть треки. Локальные файлы и кэш работают при любом выборе.</p>
-          <div class="flex gap-4">
+          <p class="setting-hint !mt-0 mb-5">Выбери сервис для поиска и воспроизведения. Музыка с компьютера и сохранённые треки доступны при любом варианте.</p>
+          <div class="settings-choice-grid">
             <button
-              class="flex-1 py-4 rounded-xl font-bold transition-all shadow-md {$settings.searchSource === 'soundcloud'
-                ? 'bg-[#ff5500] text-white shadow-[0_0_20px_rgba(255,85,0,0.35)]'
-                : 'bg-neutral-800/50 text-neutral-300 border border-white/5 hover:bg-neutral-700/60'}"
+              type="button"
+              class="settings-choice is-soundcloud"
+              class:is-active={$settings.searchSource === 'soundcloud'}
               on:click={() => setSource('soundcloud')}
             >
-              SoundCloud
+              <span class="settings-choice-icon" aria-hidden="true"><MusicServiceIcon service="soundcloud" size={19} /></span>
+              <span class="settings-choice-copy">
+                <strong>SoundCloud</strong>
+                <small>Публичные треки и профили</small>
+              </span>
+              <span class="settings-choice-check" aria-hidden="true">
+                {#if $settings.searchSource === 'soundcloud'}<Check size={14} />{/if}
+              </span>
             </button>
             <button
-              class="flex-1 py-4 rounded-xl font-bold transition-all shadow-md flex flex-col items-center justify-center gap-0.5 {$settings.searchSource === 'yandex'
-                ? 'bg-[#ffcc00] text-black shadow-[0_0_20px_rgba(255,204,0,0.35)]'
-                : 'bg-neutral-800/50 text-neutral-300 border border-white/5 hover:bg-neutral-700/60'}"
+              type="button"
+              class="settings-choice is-yandex"
+              class:is-active={$settings.searchSource === 'yandex'}
               on:click={() => setSource('yandex')}
             >
-              <span class="flex items-center justify-center gap-2">
-                <span>Яндекс Музыка</span>
-                <span class="rounded-full border px-1.5 py-0.5 text-[8px] font-extrabold uppercase tracking-[0.06em] {$settings.searchSource === 'yandex'
-                  ? 'border-black/15 bg-black/10 text-black/65'
-                  : 'border-[#ffcc00]/25 bg-[#ffcc00]/10 text-[#ffe26b]'}">
-                  Рекомендуется
+              <span class="settings-choice-icon" aria-hidden="true"><MusicServiceIcon service="yandex" size={19} /></span>
+              <span class="settings-choice-copy">
+                <span class="settings-choice-titleline">
+                  <strong>Яндекс Музыка</strong>
+                  <em>Рекомендуется</em>
                 </span>
+                <small>{$settings.yandexUser ? $settings.yandexUser.displayName : 'Нужен OAuth-токен'}</small>
               </span>
-              <span class="text-xs font-normal opacity-60">
-                {$settings.yandexUser ? $settings.yandexUser.displayName : 'Нужен OAuth-токен'}
+              <span class="settings-choice-check" aria-hidden="true">
+                {#if $settings.searchSource === 'yandex'}<Check size={14} />{/if}
               </span>
             </button>
           </div>
         </div>
 
-        <!-- SoundCloud Integration -->
-        <div class="plate p-8 border border-[#ff5500]/30 bg-gradient-to-br from-[#ff5500]/5 to-transparent">
-          <h3 class="section-title mb-4 !text-[#ff5500]">Привязка SoundCloud</h3>
+        <!-- Подключения провайдеров используют ту же иерархию, что Spotify ниже:
+             компактная шапка, один ряд аккаунта/формы и спокойная служебная подсказка. -->
+        <div class="provider-import-card is-soundcloud">
+          <div class="provider-import-head">
+            <span class="provider-import-mark" aria-hidden="true"><MusicServiceIcon service="soundcloud" size={25} /></span>
+            <div>
+              <span class="provider-import-kicker">Подключение медиатеки</span>
+              <h3>Импорт из SoundCloud</h3>
+              <p>Импортирует публичный профиль, плейлисты и лайки. Вход в аккаунт не потребуется.</p>
+            </div>
+            {#if $settings.scUser}
+              <span class="provider-import-status"><Check size={14} aria-hidden="true" /> Подключён</span>
+            {/if}
+          </div>
+
           {#if $settings.scUser}
-            <div class="flex items-center justify-between gap-4 bg-black/20 p-4 rounded-xl border border-white/5">
-              <div class="flex items-center gap-4">
-                {#if $settings.scUser.avatarUrl}
-                  <img src={$settings.scUser.avatarUrl} alt="Avatar" class="w-12 h-12 rounded-full" />
-                {/if}
-                <div>
-                  <div class="font-bold text-white">{$settings.scUser.username}</div>
-                  <div class="text-xs text-neutral-500">Синхронизировано</div>
+            <div class="provider-import-body">
+              <div class="provider-account-row">
+                <div class="provider-account-identity">
+                  <span class="provider-account-avatar">
+                    {#if $settings.scUser.avatarUrl}
+                      <img src={$settings.scUser.avatarUrl} alt="" />
+                    {:else}
+                      <MusicServiceIcon service="soundcloud" size={21} />
+                    {/if}
+                  </span>
+                  <div>
+                    <strong>{$settings.scUser.username}</strong>
+                    <span>Публичная медиатека синхронизирована</span>
+                  </div>
+                </div>
+                <div class="provider-account-actions">
+                  <button type="button" class="is-primary" on:click={refreshSCLikes} disabled={scLoading}>
+                    {#if scLoading}<Loader2 class="animate-spin w-4 h-4" aria-hidden="true" />{/if}
+                    {scLoading ? 'Сверяю…' : 'Сверить лайки'}
+                  </button>
+                  <button type="button" class="is-danger" on:click={() => $settings.scUser = null}>Отвязать</button>
                 </div>
               </div>
-              <div class="flex items-center gap-2">
-                <button class="glass-button px-4 py-2 text-sm font-bold rounded-lg hover:bg-[#ff5500] hover:text-white transition-all disabled:opacity-50" on:click={refreshSCLikes} disabled={scLoading}>
-                  {scLoading ? 'Сверяю...' : 'Сверить лайки'}
-                </button>
-                <button class="glass-button px-4 py-2 text-sm text-red-400 font-bold rounded-lg hover:bg-red-500/20 transition-all" on:click={() => $settings.scUser = null}>Отвязать</button>
-              </div>
+              <p class="provider-import-note">
+                Лайки обновляются при запуске приложения. Изменения из Lomify не отправляются
+                обратно в SoundCloud, потому что публичный профиль не даёт такого доступа.
+              </p>
             </div>
-            <p class="setting-hint !mt-4">
-              Лайки из профиля приезжают сюда сами при запуске. Обратно — нет: SoundCloud
-              принимает отметки только по токену аккаунта, а приложение работает с ним без
-              входа. Снятое здесь остаётся снятым только здесь.
-            </p>
           {:else}
-            <p class="text-neutral-300 text-sm mb-4 leading-relaxed">
-              Дай ссылку на профиль SoundCloud или просто никнейм — подтяну имя и публичные плейлисты.
-            </p>
-            <div class="flex gap-2">
-              <input type="text" bind:value={scInputUrl} placeholder="https://soundcloud.com/никнейм" class="flex-1 bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-[#ff5500] transition-colors" />
-              <button class="px-6 py-3 bg-[#ff5500] text-white rounded-xl font-bold shadow-md hover:scale-105 transition" on:click={linkSoundCloud} disabled={scLoading}>
-                {#if scLoading}
-                  <Loader2 class="animate-spin w-5 h-5" />
-                {:else}
-                  Привязать
-                {/if}
-              </button>
+            <div class="provider-import-body">
+              <label for="soundcloud-profile">Ссылка на профиль или никнейм</label>
+              <div class="provider-import-field">
+                <ExternalLink size={16} aria-hidden="true" />
+                <input
+                  id="soundcloud-profile"
+                  type="text"
+                  bind:value={scInputUrl}
+                  placeholder="https://soundcloud.com/никнейм"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+                <button type="button" class="is-primary" on:click={linkSoundCloud} disabled={scLoading}>
+                  {#if scLoading}
+                    <Loader2 class="animate-spin w-4 h-4" aria-hidden="true" />
+                    Подключаю…
+                  {:else}
+                    Привязать
+                  {/if}
+                </button>
+              </div>
+              <p class="provider-import-note">Вход и пароль не нужны — читаются только публичные данные профиля.</p>
             </div>
           {/if}
         </div>
 
         <!-- Yandex Music Integration -->
-        <div class="plate p-8 border border-[#ffcc00]/30 bg-gradient-to-br from-[#ffcc00]/5 to-transparent">
-          <h3 class="section-title mb-4 !text-[#ffcc00]">Привязка Яндекс Музыки</h3>
+        <div class="provider-import-card is-yandex">
+          <div class="provider-import-head">
+            <span class="provider-import-mark" aria-hidden="true"><MusicServiceIcon service="yandex" size={25} /></span>
+            <div>
+              <span class="provider-import-kicker">Подключение медиатеки</span>
+              <h3>Импорт из Яндекс Музыки</h3>
+              <p>Подключает аккаунт и синхронизирует любимые треки. Полные версии доступны при активной подписке Плюс.</p>
+            </div>
+            {#if $settings.yandexUser}
+              <span class="provider-import-status"><Check size={14} aria-hidden="true" /> Подключён</span>
+            {/if}
+          </div>
+
           {#if $settings.yandexUser}
-            <div class="flex items-center justify-between gap-4 bg-black/20 p-4 rounded-xl border border-white/5">
-              <div class="flex items-center gap-4">
-                <!-- Аватар, если Паспорт его отдал: у музыкального токена может не быть на
-                     это прав, и тогда остаётся фирменный знак — как было всегда. -->
-                <div class="w-12 h-12 rounded-full bg-[#ffcc00] text-black grid place-items-center shrink-0 overflow-hidden">
-                  {#if $settings.yandexUser.avatarUrl}
-                    <img src={$settings.yandexUser.avatarUrl} alt="" class="w-full h-full object-cover" />
-                  {:else}
-                    <Music class="w-6 h-6" />
-                  {/if}
-                </div>
-                <div class="min-w-0">
-                  <div class="font-bold text-white truncate">{$settings.yandexUser.displayName}</div>
-                  <div class="text-xs text-neutral-500">
-                    {$settings.yandexUser.login || 'аккаунт привязан'}{$settings.yandexUser.hasPlus ? ' · Плюс' : ''}
+            <div class="provider-import-body">
+              <div class="provider-account-row">
+                <div class="provider-account-identity">
+                  <span class="provider-account-avatar">
+                    {#if $settings.yandexUser.avatarUrl}
+                      <img src={$settings.yandexUser.avatarUrl} alt="" />
+                    {:else}
+                      <MusicServiceIcon service="yandex" size={21} />
+                    {/if}
+                  </span>
+                  <div>
+                    <strong>{$settings.yandexUser.displayName}</strong>
+                    <span>
+                      {$settings.yandexUser.login || 'Аккаунт привязан'}{$settings.yandexUser.hasPlus ? ' · Плюс' : ''}
+                    </span>
                   </div>
                 </div>
+                <div class="provider-account-actions">
+                  <button type="button" class="is-primary" on:click={syncYandexLikes} disabled={ymLoading}>
+                    {#if ymLoading}<Loader2 class="animate-spin w-4 h-4" aria-hidden="true" />{/if}
+                    {ymLoading ? 'Сверяю…' : 'Сверить лайки'}
+                  </button>
+                  <button type="button" class="is-danger" on:click={unlinkYandex}>Отвязать</button>
+                </div>
               </div>
-              <div class="flex items-center gap-2 shrink-0">
-                <button class="glass-button px-4 py-2 text-sm font-bold rounded-lg hover:bg-[#ffcc00] hover:text-black transition-all disabled:opacity-50" on:click={syncYandexLikes} disabled={ymLoading}>
-                  {ymLoading ? 'Сверяю...' : 'Сверить лайки'}
-                </button>
-                <button class="glass-button px-4 py-2 text-sm text-red-400 font-bold rounded-lg hover:bg-red-500/20 transition-all" on:click={unlinkYandex}>Отвязать</button>
-              </div>
+              <p class="provider-import-note">
+                Без активной подписки Яндекс Музыка отдаёт только короткие фрагменты, поэтому такие треки нельзя воспроизвести полностью.
+              </p>
             </div>
-            <p class="setting-hint !mt-4">
-              Без Плюса Яндекс отдаёт только тридцатисекундные отрывки — такие треки плеер пропускает как недоступные.
-            </p>
           {:else}
-            <p class="text-neutral-300 text-sm mb-2 leading-relaxed">
-              Нужен OAuth-токен аккаунта. Официального способа выдать его приложению у Яндекса нет,
-              поэтому токен добывается расширением <span class="font-mono text-xs text-[#ffcc00]">yandex-music-token</span>
-              и вставляется сюда строкой.
-            </p>
-            <p class="setting-hint !mt-0 mb-4">
-              Токен остаётся только на этом компьютере и уходит исключительно на api.music.yandex.net.
-              Он даёт полный доступ к аккаунту — не показывай его никому.
-            </p>
-            <div class="flex gap-2">
-              <input
-                type="password"
-                bind:value={ymInputToken}
-                placeholder="y0_AgAAAA..."
-                autocomplete="off"
-                spellcheck="false"
-                class="flex-1 bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-sm text-white font-mono focus:outline-none focus:border-[#ffcc00] transition-colors"
-              />
-              <button class="px-6 py-3 bg-[#ffcc00] text-black rounded-xl font-bold shadow-md hover:scale-105 transition disabled:opacity-50 grid place-items-center" on:click={linkYandex} disabled={ymLoading}>
-                {#if ymLoading}
-                  <Loader2 class="animate-spin w-5 h-5" />
-                {:else}
-                  Привязать
-                {/if}
-              </button>
+            <div class="provider-import-body">
+              <p class="provider-import-description">
+                Нужен OAuth-токен аккаунта. Его можно получить расширением
+                <code>yandex-music-token</code> и вставить сюда строкой.
+              </p>
+              <label for="yandex-token">OAuth-токен</label>
+              <div class="provider-import-field">
+                <Music size={16} aria-hidden="true" />
+                <input
+                  id="yandex-token"
+                  type="password"
+                  bind:value={ymInputToken}
+                  placeholder="y0_AgAAAA..."
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+                <button type="button" class="is-primary" on:click={linkYandex} disabled={ymLoading}>
+                  {#if ymLoading}
+                    <Loader2 class="animate-spin w-4 h-4" aria-hidden="true" />
+                    Подключаю…
+                  {:else}
+                    Привязать
+                  {/if}
+                </button>
+              </div>
+              <div class="provider-import-meta">
+                <p class="provider-import-note">
+                  Токен хранится только на этом компьютере. Он даёт полный доступ к аккаунту — не показывай его никому.
+                </p>
+                <button
+                  type="button"
+                  class="provider-help-link"
+                  on:click={() => openUrl('https://github.com/MarshalX/yandex-music-token')}
+                >
+                  Где взять токен <ExternalLink size={13} aria-hidden="true" />
+                </button>
+              </div>
             </div>
-            <button
-              class="text-xs text-neutral-500 hover:text-[#ffcc00] transition-colors mt-3"
-              on:click={() => openUrl('https://github.com/MarshalX/yandex-music-token')}
-            >
-              Где взять токен →
-            </button>
           {/if}
         </div>
+
+        <SpotifyImport />
+
+        <LastFmConnect />
 
         <!-- Устройство вывода. Стоит сразу за источниками: группа «Музыка» читается как
              «откуда играем» → «куда играем» → что делаем с кэшем. Выбор оформлен одним
@@ -1122,12 +1331,11 @@
             <div>
               <h3 class="section-title">Устройство воспроизведения</h3>
               <p class="setting-hint !mt-2 !max-w-[54ch]">
-                Куда идёт звук. Переключается на ходу: трек продолжает играть с той же
-                секунды, очередь не сбрасывается.
+                Выбери колонки или наушники. При переключении трек продолжит играть с того же места, а очередь сохранится.
               </p>
             </div>
             <button
-              class="glass-button px-4 py-2.5 text-sm font-medium rounded-xl flex items-center gap-2 shrink-0 disabled:opacity-50"
+              class="settings-action-button"
               on:click={refreshOutputs}
               disabled={outputsLoading || outputSwitching !== null}
               title="Обновить список"
@@ -1269,7 +1477,7 @@
                 max="12000"
                 step="500"
                 bind:value={$settings.crossfadeMs}
-                class="w-full accent-primary bg-neutral-700/50 rounded-lg h-2"
+                class="settings-range"
               />
               <div class="flex justify-between mt-2 text-xs text-neutral-500">
                 <span>встык</span>
@@ -1316,7 +1524,7 @@
                 max="3000"
                 step="100"
                 bind:value={$settings.hoverPreviewDelay}
-                class="w-full accent-primary bg-neutral-700/50 rounded-lg h-2"
+                class="settings-range"
               />
               <div class="flex justify-between mt-2 text-xs text-neutral-500">
                 <span>200 мс</span>
@@ -1398,7 +1606,7 @@
               max="5000"
               step="100"
               bind:value={$settings.lyricsOffset}
-              class="w-full accent-primary bg-neutral-700/50 rounded-lg h-2"
+              class="settings-range"
             />
             <div class="flex justify-between mt-2 text-xs text-neutral-500">
               <span>-5 сек (Раньше)</span>
@@ -1429,7 +1637,7 @@
       <div class="space-y-6">
 
         <!-- Autostart -->
-        <div class="plate p-8 flex items-center justify-between">
+        <div class="plate p-8 settings-system-row">
           <div>
             <h3 class="section-title">Запуск вместе с системой</h3>
             <p class="setting-hint !mt-2">Автоматически открывать Lomify при включении ПК.</p>
@@ -1446,23 +1654,24 @@
         </div>
 
         <!-- Discord RPC Setting -->
-        <div class="plate p-8 flex items-center justify-between">
+        <div class="plate p-8 settings-system-row">
           <div>
             <h3 class="section-title">Discord Rich Presence</h3>
-            <p class="setting-hint !mt-2">Показывать текущий трек в статусе Discord</p>
+            <p class="setting-hint !mt-2">Показывает в профиле Discord, какой трек сейчас играет.</p>
           </div>
           <div class="flex items-center gap-4">
             {#if $settings.enableDiscordRpc !== false}
             <button
-              class="px-4 py-2 bg-neutral-700/50 hover:bg-neutral-600 rounded-xl transition text-sm font-bold shadow-md text-white"
+              type="button"
+              class="settings-action-button"
               on:click={async () => {
                  const { invoke } = await import('@tauri-apps/api/core');
                  try {
                     await invoke('discord_disconnect');
                     await invoke('discord_connect');
-                    notify('Discord подключён заново', 'success');
+                    notify('Подключение к Discord обновлено.', 'success');
                  } catch (e) {
-                    notify('Discord не отвечает — подключусь, когда появится', 'error');
+                    notify('Discord сейчас недоступен. Lomify попробует подключиться снова автоматически.', 'error');
                  }
               }}
             >
@@ -1484,23 +1693,25 @@
         <!-- App Data Paths -->
         <div class="plate p-8">
           <h3 class="section-title mb-4">Системные файлы</h3>
-          <div class="space-y-4">
-            <div class="bg-black/20 p-4 rounded-xl border border-white/5">
-              <div class="text-sm font-bold text-neutral-300 mb-1">Данные приложения (App Data):</div>
-              <div class="font-mono text-xs text-neutral-500 break-all">{dataPath || 'Загрузка...'}</div>
+          <div class="settings-path-list">
+            <div class="settings-path-row">
+              <strong>Данные приложения</strong>
+              <span>App Data</span>
+              <code>{dataPath || 'Загрузка…'}</code>
             </div>
-            <div class="bg-black/20 p-4 rounded-xl border border-white/5">
-              <div class="text-sm font-bold text-neutral-300 mb-1">Локальные данные (Кэш, настройки):</div>
-              <div class="font-mono text-xs text-neutral-500 break-all">{localDataPath || 'Загрузка...'}</div>
+            <div class="settings-path-row">
+              <strong>Локальные данные</strong>
+              <span>Кэш и настройки</span>
+              <code>{localDataPath || 'Загрузка…'}</code>
             </div>
           </div>
         </div>
 
         <!-- Gibberish Easter Egg Setting -->
-        <div class="plate p-8 flex items-center justify-between">
+        <div class="plate p-8 settings-system-row">
           <div>
-            <h3 class="section-title">чеянесунахуй</h3>
-            <p class="setting-hint !mt-2">ывавылаывоапа ывывоалдываор ывлдаоыдвраун</p>
+            <h3 class="section-title">Секретный режим</h3>
+            <p class="setting-hint !mt-2">Небольшая пасхалка для тех, кто добрался до самого конца настроек.</p>
           </div>
           <button
             aria-label="Секретный режим"
@@ -1515,6 +1726,84 @@
       </div>
     </section>
 
+    <!-- ── Хранилище ──────────────────────────────────────────────────────── -->
+    <section class="settings-pane" data-settings-pane="data">
+      <div class="settings-group">
+        <span class="settings-group-title">Хранилище</span>
+        <span class="settings-group-rule"></span>
+      </div>
+
+      <div class="plate settings-cache-card p-8">
+        <div class="settings-cache-head">
+          <span class="settings-cache-icon" aria-hidden="true"><HardDrive size={21} /></span>
+          <div>
+            <h3 class="section-title">Умная очистка кэша</h3>
+            <p class="setting-hint !mt-1.5 !whitespace-normal">Автоматически освобождает место, не удаляя лайки, текущий трек и недавние прослушивания.</p>
+          </div>
+          <button
+            type="button"
+            aria-label="Автоматическая очистка кэша"
+            role="switch"
+            aria-checked={$settings.autoCacheCleanup !== false}
+            class="switch"
+            on:click={() => $settings.autoCacheCleanup = $settings.autoCacheCleanup === false}
+          >
+            <span class="switch-knob"></span>
+          </button>
+        </div>
+
+        <div class="settings-cache-usage" aria-busy={cacheStatsLoading}>
+          <div>
+            <span>Всего</span>
+            <strong>{cacheStatsLoading ? '…' : formatBytes(cacheTotalBytes)}</strong>
+          </div>
+          <div>
+            <span>Обычные треки</span>
+            <strong>{cacheStatsLoading ? '…' : formatBytes(cacheAudioBytes)}</strong>
+          </div>
+          <div>
+            <span class="settings-cache-protected"><ShieldCheck size={13} /> В лайках</span>
+            <strong>{cacheStatsLoading ? '…' : formatBytes(cacheLikedBytes)}</strong>
+          </div>
+          <div>
+            <span>Обложки</span>
+            <strong>{cacheStatsLoading ? '…' : formatBytes(cacheImageBytes)}</strong>
+          </div>
+        </div>
+
+        <div class="settings-cache-rules">
+          <div class="settings-cache-rule">
+            <span>Считать устаревшим через</span>
+            <SelectMenu
+              bind:value={$settings.cacheRetentionDays}
+              options={cacheRetentionOptions}
+              ariaLabel="Срок хранения неиспользуемого кэша"
+            />
+          </div>
+          <div class="settings-cache-rule">
+            <span>Примерный лимит</span>
+            <SelectMenu
+              bind:value={$settings.cacheMaxMb}
+              options={cacheLimitOptions}
+              ariaLabel="Лимит обычного кэша"
+            />
+          </div>
+        </div>
+
+        <div class="settings-cache-footer">
+          <div>
+            <div class="setting-title">Что удалится</div>
+            <div class="setting-hint !whitespace-normal">Старые обложки, давно не включавшиеся треки и сохранённые файлы, которых больше нет в любимых.</div>
+          </div>
+          <button class="settings-cache-action" type="button" disabled={cacheCleaning} on:click={cleanupCacheNow}>
+            {#if cacheCleaning}<Loader2 size={16} class="animate-spin" />{:else}<Sparkles size={16} />{/if}
+            {cacheCleaning ? 'Очищаю…' : 'Очистить сейчас'}
+          </button>
+        </div>
+        <p class="settings-cache-status" aria-live="polite">{cacheCleanupMessage}</p>
+      </div>
+    </section>
+
     <!-- ── Опасная зона ────────────────────────────────────────────────────── -->
     <section class="settings-pane" data-settings-pane="data">
       <div class="settings-group">
@@ -1522,8 +1811,8 @@
         <span class="settings-group-rule"></span>
       </div>
       <div class="plate p-8 border border-red-500/20">
-        <h3 class="section-title !text-red-400">Отсюда ничего не возвращается</h3>
-        <p class="empty-hint !mt-1.5 !max-w-[54ch] mb-6">Отмены нет ни у одного из трёх действий.</p>
+        <h3 class="section-title !text-red-400">Необратимые действия</h3>
+        <p class="empty-hint !mt-1.5 !max-w-[54ch] mb-6">Эти действия нельзя отменить. Перед удалением убедись, что выбрал нужный пункт.</p>
         <div class="flex flex-col gap-3">
           <div class="setting-row">
             <div>
@@ -1548,9 +1837,10 @@
                   await invoke('track_clear_cache');
                   await invoke('track_clear_liked_cache');
                   window.dispatchEvent(new CustomEvent('cacheCleared'));
-                  notify('Кэш чист', 'success');
+                  await refreshCacheStats();
+                  notify('Кэш треков очищен.', 'success');
                 } catch(e) {
-                  notify('Не смог очистить кэш', 'error');
+                  notify('Не удалось очистить кэш треков. Попробуй ещё раз.', 'error');
                 }
               }}
             >

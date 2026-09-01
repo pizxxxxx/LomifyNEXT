@@ -42,7 +42,23 @@ pub async fn start() -> u16 {
                 )
             });
 
-    let routes = image_route.or(proxy_route).with(cors());
+    let downloaded_cover_route =
+        warp::path("downloaded-cover")
+            .and(warp::path::tail())
+            .and_then(|tail: warp::path::Tail| async move {
+                let result = image_cache::handle_downloaded(tail.as_str()).await;
+                Ok::<_, warp::Rejection>(
+                    warp::http::Response::builder()
+                        .status(result.status)
+                        .header("Content-Type", &result.content_type)
+                        .header("Cache-Control", cache_control_for(result.status))
+                        .header("Access-Control-Allow-Origin", "*")
+                        .body(Body::from(result.data))
+                        .unwrap(),
+                )
+            });
+
+    let routes = downloaded_cover_route.or(image_route).or(proxy_route).with(cors());
 
     let addr: SocketAddr = ([127, 0, 0, 1], 0).into();
     let (addr, server) = warp::serve(routes).bind_ephemeral(addr);

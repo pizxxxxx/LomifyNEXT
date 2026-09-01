@@ -81,6 +81,9 @@ pub fn run() {
             let images_dir = cache_dir.join("images");
             std::fs::create_dir_all(&images_dir).ok();
 
+            let downloaded_covers_dir = cache_dir.join("audio_covers");
+            std::fs::create_dir_all(&downloaded_covers_dir).ok();
+
             let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
 
             let http_client = reqwest::Client::builder().build().unwrap();
@@ -97,6 +100,7 @@ pub fn run() {
             network::image_cache::STATE
                 .set(network::image_cache::ImageCache {
                     dir: images_dir,
+                    downloaded_dir: downloaded_covers_dir,
                     http_client,
                 })
                 .ok();
@@ -210,8 +214,9 @@ pub fn run() {
             audio::audio_preview_play,
             audio::audio_preview_stop,
             audio::save_track_to_path,
-            import::ym_import_start,
-            import::ym_import_stop,
+             import::ym_import_start,
+             import::ym_import_stop,
+             import::spotify_oauth_start,
             track_cache::track_ensure_cached,
             track_cache::track_export,
             track_cache::track_is_cached,
@@ -227,11 +232,13 @@ pub fn run() {
             track_cache::track_list_cached,
             track_cache::track_cache_inventory,
             track_cache::track_enforce_cache_limit,
+            track_cache::track_smart_cleanup,
             track_cache::track_cache_likes,
             track_cache::track_cache_likes_running,
             track_cache::track_cancel_cache_likes,
             network::image_cache::image_cache_size,
             network::image_cache::image_cache_clear,
+            network::image_cache::image_cache_prune,
             network::call::call_set_enabled,
             network::call::call_is_enabled,
             network::call::call_status,

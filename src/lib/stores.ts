@@ -6,7 +6,7 @@ export const currentTrack = writable<{
   artist: string;
   coverUrl: string;
   audioUrl: string;
-  source: 'soundcloud' | 'youtube' | 'Локальный' | string;
+  source: 'soundcloud' | 'yandex' | 'Локальный' | string;
   id?: string;
   isLocal?: boolean;
   duration?: number;
@@ -39,7 +39,7 @@ const defaultSettings = {
   globalThemeEffect: true, // Apply theme color to app background
   accentFromCover: true, // Pull the accent colour out of the current cover art
 
-  searchSource: 'soundcloud', // 'youtube' | 'soundcloud' | 'yandex'
+  searchSource: 'soundcloud', // 'soundcloud' | 'yandex'
   yandexToken: '', // OAuth token for Yandex Music
   // Кто привязан. Лежит рядом с токеном, чтобы настройки показывали аккаунт сразу, не
   // дёргая /account/status при каждом открытии — сеть тут только для проверки при вводе.
@@ -48,9 +48,25 @@ const defaultSettings = {
   // строка — «спрашивали, аватара нет», и повторять запрос уже не нужно.
   yandexUser: null as { uid: number, login: string, displayName: string, hasPlus: boolean, avatarUrl?: string } | null,
   spotifyPlaylistUrl: '',
+  // Client ID публичен и нужен для PKCE; Client Secret приложение никогда не спрашивает.
+  // Refresh token хранится отдельно в `lomifynext_spotify_session`, чтобы отвязка Spotify
+  // не затрагивала остальные настройки.
+  spotifyClientId: '',
+  spotifyUser: null as { id: string, accountId: string, displayName: string, avatarUrl: string, externalUrl: string } | null,
   lyricsAlignment: 'right', // 'left' | 'right' | 'fullscreen'
   lyricsOffset: 0, // ms offset for synced lyrics
   uiStyle: 'style1', // 'style1' | 'style2'
+  // Оконная рамка Tauri выключена, поэтому оба варианта рисуются самим Lomify.
+  // Windows — компактные управляющие кнопки справа; macOS — цветные точки слева.
+  windowControlsStyle: 'windows', // 'windows' | 'macos'
+  /**
+   * Масштаб всей сцены WebView, а не только текста. `auto` сохраняет физически привычный
+   * размер интерфейса на HiDPI-мониторах: за эталон берётся окно 1920×1080, а уже
+   * применённый системный DPI Windows учитывается отдельно в +layout.svelte.
+   * Числовые варианты хранятся строками процентов, чтобы SelectMenu не смешивал режим
+   * `auto` с дробными коэффициентами и сохранённое значение оставалось читаемым.
+   */
+  uiScale: 'auto', // 'auto' | '100' | '110' | '125' | '133' | '150' | '175' | '200'
   // Гарнитура только для текста песен. Шрифты поставляются локально через Fontsource и
   // содержат кириллицу; старое имя поля оставлено, чтобы не сбрасывать выбор при обновлении.
   // Неизвестное значение безопасно откатывается к Inter через `--font-lyrics`.
@@ -86,6 +102,14 @@ const defaultSettings = {
   outputDeviceLabel: '',
 
   autoCache: true, // Auto-cache tracks for offline playback
+  /** Run a conservative cache sweep at most once per day after startup. */
+  autoCacheCleanup: true,
+  /** Ordinary, unliked files older than this may be removed. */
+  cacheRetentionDays: 30,
+  /** Approximate cap for ordinary audio plus image cache. Liked audio is protected. */
+  cacheMaxMb: 2048,
+  /** Epoch milliseconds of the last successful automatic or manual smart sweep. */
+  lastCacheCleanupAt: 0,
   /**
    * Готовить следующий трек за три секунды до конца текущего (см. `PRELOAD_LEAD_SECS` в
    * Player.svelte). Выключатель нужен не ради экономии: подготовка тратит один запрос
@@ -180,10 +204,23 @@ const defaultSettings = {
 export const settings = writable(defaultSettings);
 
 // Stats state
+export interface ListenHistoryEntry {
+  count: number;
+  title: string;
+  artist: string;
+  coverUrl: string;
+  id?: string | number;
+  source?: string;
+  artists?: string[];
+  genre?: string;
+  duration?: number;
+  lastPlayedAt?: number;
+}
+
 const defaultStats = {
   listenSeconds: 0,
   tracksPlayed: 0,
-  history: {} as Record<string, { count: number, title: string, artist: string, coverUrl: string }>
+  history: {} as Record<string, ListenHistoryEntry>
 };
 export const listenStats = writable(defaultStats);
 

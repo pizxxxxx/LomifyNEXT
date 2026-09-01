@@ -100,7 +100,7 @@
         return { ...p, tracks };
       })
     );
-    notify(inside ? `Убрал из «${pl.title}»` : `Добавил в «${pl.title}»`, inside ? 'info' : 'success');
+    notify(inside ? `Трек убран из плейлиста «${pl.title}».` : `Трек добавлен в плейлист «${pl.title}».`, inside ? 'info' : 'success');
   }
 
   // Та же анимация, что у попапа настроек в полноэкранном режиме: подъём из точки клика
