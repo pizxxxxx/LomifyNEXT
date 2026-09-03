@@ -1,4 +1,4 @@
-import { writable } from 'svelte/store';
+import { derived, readable, writable } from 'svelte/store';
 
 // Global app state
 export const currentTrack = writable<{
@@ -88,6 +88,7 @@ const defaultSettings = {
   coverGlare: true, // Блик по стеклу карточки и по обложке
   cardSheen: true, // Световая полоса, проезжающая по обложке на входе курсора
   panelPress: true, // Отклик пунктов боковой панели
+  glyphWake: true, // Терминальные символы, расходящиеся от курсора по экранной сетке
 
   // ── Устройство вывода ──────────────────────────────────────────────────────
   // `null` — играть через системное устройство по умолчанию и следовать за ним, когда
@@ -196,12 +197,31 @@ const defaultSettings = {
    * По умолчанию 'panel': у того, кто обновился, экран не должен смениться сам собой.
    * Читается как `=== 'immersive'`, поэтому отсутствие ключа и любое неизвестное значение
    * дают привычную раскладку, а не пустой экран.
-   */
+  */
   fullscreenStyle: 'panel', // 'panel' | 'immersive'
-  gibberishMode: false, // Easter egg
 };
 
 export const settings = writable(defaultSettings);
+
+function detectLowEndDevice(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const nav = navigator as Navigator & { deviceMemory?: number };
+  const memoryGb = nav.deviceMemory;
+  const logicalCores = nav.hardwareConcurrency;
+  return (typeof memoryGb === 'number' && memoryGb <= 4)
+    || (typeof logicalCores === 'number' && logicalCores <= 4);
+}
+
+/**
+ * Runtime-only safeguard for genuinely weak machines. It does not rewrite the user's
+ * saved preference, but expensive CSS, previews and per-frame effects all read the same
+ * effective value. Strong machines retain the chosen visual mode.
+ */
+export const automaticPerformanceMode = readable(detectLowEndDevice());
+export const effectivePerformanceMode = derived(
+  [settings, automaticPerformanceMode],
+  ([$settings, automatic]) => $settings.perfMode === true || automatic
+);
 
 // Stats state
 export interface ListenHistoryEntry {
@@ -223,6 +243,29 @@ const defaultStats = {
   history: {} as Record<string, ListenHistoryEntry>
 };
 export const listenStats = writable(defaultStats);
+
+const STATS_PERSIST_DELAY_MS = 15_000;
+let latestStats = defaultStats;
+let statsPersistTimer: ReturnType<typeof setTimeout> | null = null;
+let storesInitialized = false;
+
+function flushListenStats() {
+  if (typeof localStorage === 'undefined') return;
+  if (statsPersistTimer !== null) {
+    clearTimeout(statsPersistTimer);
+    statsPersistTimer = null;
+  }
+  localStorage.setItem('lomifynext_stats', JSON.stringify(latestStats));
+}
+
+function scheduleListenStatsPersist(value: typeof defaultStats) {
+  latestStats = value;
+  if (statsPersistTimer !== null) return;
+  // Player updates listenSeconds every second. Serialising a large listening history at
+  // the same rate creates needless allocations and disk writes; one batched write keeps
+  // the data current while pagehide/visibilitychange below guarantee a final flush.
+  statsPersistTimer = setTimeout(flushListenStats, STATS_PERSIST_DELAY_MS);
+}
 
 // Navigation state
 export const currentView = writable<'home' | 'search' | 'library' | 'settings' | 'lyrics' | 'equalizer' | 'fullscreen' | 'profile' | 'artist'>('home');
@@ -329,6 +372,9 @@ function sanitizeStoredLikes(raw: unknown): any[] {
 
 export function initStore() {
   if (typeof localStorage !== 'undefined') {
+    if (storesInitialized) return;
+    storesInitialized = true;
+
     const stored = localStorage.getItem('lomifynext_settings');
     if (stored) {
       try {
@@ -349,8 +395,10 @@ export function initStore() {
         console.error("Failed to parse stats", e);
       }
     }
-    listenStats.subscribe(val => {
-      localStorage.setItem('lomifynext_stats', JSON.stringify(val));
+    listenStats.subscribe(scheduleListenStatsPersist);
+    window.addEventListener('pagehide', flushListenStats);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') flushListenStats();
     });
 
     const storedLikes = localStorage.getItem('lomifynext_likes');

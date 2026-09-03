@@ -29,6 +29,7 @@
   import { splitArtists } from '$lib/utils/artists';
   import { goToArtist } from '$lib/utils/navigation';
   import MusicServiceIcon from './MusicServiceIcon.svelte';
+  import { coverUrlAtSize } from '$lib/offlineCovers';
 
   type SearchView = 'all' | 'tracks' | 'artists' | 'playlists' | 'local';
   type SearchSourceKind = 'soundcloud' | 'yandex' | 'local';
@@ -571,7 +572,7 @@
           {#each artistMatches as artist (artist.name)}
             <button type="button" class="search-artist-card" on:click={() => goToArtist(artist.name)}>
               <span class="search-artist-avatar">
-                {#if artist.avatarUrl}<img src={artist.avatarUrl} alt="" loading="lazy" decoding="async" />{:else}<UserRound size={22} />{/if}
+                {#if artist.avatarUrl}<img src={coverUrlAtSize(artist.avatarUrl, 120)} alt="" width="56" height="56" loading="lazy" decoding="async" />{:else}<UserRound size={22} />{/if}
               </span>
               <span class="search-artist-copy"><strong>{artist.name}</strong><small>{withCount(artist.matches, 'совпадение', 'совпадения', 'совпадений')}</small></span>
               <span class="search-artist-source is-{artist.source}" aria-label={artist.source === 'local' ? 'Файл на компьютере' : artist.source}>
@@ -626,7 +627,7 @@
                       <!-- svelte-ignore a11y-no-static-element-interactions -->
                       <div class="search-playlist-track group/playlist-track" class:is-active={playlistTrackActive} on:click={() => { queue.set(pl.tracks.slice(i + 1)); currentTrack.set(pt); isPlaying.set(true); }}>
                         <span class="tnum">{i + 1}</span>
-                        <span class="search-playlist-track-art">{#if pt.coverUrl}<img src={pt.coverUrl} alt="" loading="lazy" decoding="async" />{:else}<Music size={16} />{/if}</span>
+                        <span class="search-playlist-track-art">{#if pt.coverUrl}<img src={coverUrlAtSize(pt.coverUrl, 50)} alt="" width="36" height="36" loading="lazy" decoding="async" />{:else}<Music size={16} />{/if}</span>
                         <span class="search-playlist-track-copy"><strong>{pt.title}</strong><small><ArtistTag artist={pt.artist} artists={pt.artists} /></small></span>
                         <button type="button" aria-label={isTrackLiked($likedTracks, pt) ? 'Убрать из любимых' : 'Добавить в любимые'} on:click={(e) => toggleLikeSearch(pt, e)}>
                           <Heart size={15} fill={isTrackLiked($likedTracks, pt) ? 'currentColor' : 'none'} />
@@ -658,7 +659,7 @@
             <div class="track-row-card group interactive-item {isActive ? 'is-active' : ''} {track.isBanned ? 'is-banned' : ''}" class:has-open-menu={showPlaylistMenuId === rowKey} on:click={() => playTrack(track)}>
               <TrackStatus index={topResult ? i + 1 : i} {isActive} playing={$isPlaying} banned={track.isBanned} size="md" />
               <div class="track-row-art">
-                {#if track.coverUrl}<img src={track.coverUrl} alt="" loading="lazy" decoding="async" />{:else}<div class="track-row-art-empty"><Music size={20} /></div>{/if}
+                {#if track.coverUrl}<img src={coverUrlAtSize(track.coverUrl, 120)} alt="" width="48" height="48" loading="lazy" decoding="async" />{:else}<div class="track-row-art-empty"><Music size={20} /></div>{/if}
               </div>
               <div class="track-row-copy">
                 <span class="track-row-title">{track.title}</span>

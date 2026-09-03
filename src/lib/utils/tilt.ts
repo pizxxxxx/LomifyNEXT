@@ -90,7 +90,8 @@
  * остаётся, и наоборот.
  */
 
-import { settings } from '$lib/stores';
+import { effectivePerformanceMode, settings } from '$lib/stores';
+import { get } from 'svelte/store';
 
 /** Хозяин ховера. Его геометрию мы не меняем — см. заголовок файла. */
 const CARD_ROOT = '.interactive-item';
@@ -507,7 +508,7 @@ export function trackTilt(): () => void {
     // тумблеров. CSS их и так гасит (`data-fx-*` в +layout.svelte), но погашенный эффект
     // здесь продолжал бы считаться: mousemove → rAF → запись переменных на каждом кадре.
     // В режиме, который человек включил ради кадров, это ровно та работа, которую надо снять.
-    const lite = value?.perfMode === true;
+    const lite = get(effectivePerformanceMode);
     const nextTilt = value?.coverTilt !== false && !lite;
     const nextGlare = value?.coverGlare !== false && !lite;
     const turnedOff = (fxTilt && !nextTilt) || (fxGlare && !nextGlare);

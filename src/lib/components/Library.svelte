@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { onMount, onDestroy, tick } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
-  import { Play, FolderOpen, Heart, User, Music, Trash2, ListMusic, Plus, ExternalLink, Check, Download, Info, Radio, X, Loader2, ArrowLeft } from 'lucide-svelte';
+  import { Play, FolderOpen, Heart, User, Music, Trash2, ListMusic, Plus, ExternalLink, Check, Download, Info, Radio, X, Loader2, ArrowLeft, Pencil } from 'lucide-svelte';
   import { LayoutGrid as LayoutGridIcon, List as ListIcon, Pause as PauseIcon, Play as PlayIcon } from 'lucide';
   import { MorphIcon } from 'morphicons/svelte';
   import ArtistTag from './ArtistTag.svelte';
@@ -17,7 +17,7 @@
   import { setTrackLiked } from '$lib/likes';
   import { invoke } from '@tauri-apps/api/core';
   import { withCount } from '$lib/utils/plural';
-  import { coverUrlForTrack, downloadedCoverCache } from '$lib/offlineCovers';
+  import { coverUrlAtSize, coverUrlForTrack, downloadedCoverCache } from '$lib/offlineCovers';
 
   type LibraryTab = 'liked' | 'playlists' | 'artists' | 'local';
 
@@ -56,13 +56,12 @@
    * Сколько строк рисуем сразу. Раньше медиатека строила ВСЕ строки в один кадр, и на
    * нескольких сотнях лайков это был один синхронный проход на полсекунды: клик по
    * «Медиатеке» ощущался как заминка, а анимация входа за это время успевала «пройти»
-   * вхолостую — её просто не было видно. Первый кадр теперь заведомо дешёвый, остальное
-   * дорисовывается по кадрам: к моменту, когда человек доскроллит, список уже целый.
+   * вхолостую — её просто не было видно. Первый кадр теперь заведомо дешёвый, а остальное
+   * появляется только при приближении к низу уже отрисованной части.
    */
   const ROWS_FIRST_PAINT = 18;
   const ROWS_STEP = 40;
   let rowBudget = ROWS_FIRST_PAINT;
-  let growHandle = 0;
 
   /** Оба всплывающих слоя строки принадлежат одному состоянию: это не даёт информации и
       плейлистам открыться одновременно и держит тяжёлую разметку только у одной строки. */
@@ -95,7 +94,9 @@
 
   function onTrackMenuKeydown(event: KeyboardEvent) {
     if (event.key !== 'Escape') return;
-    if (showCreatePlaylistModal) {
+    if (renamingPlaylistId !== null) {
+      closeRenamePlaylistDialog();
+    } else if (showCreatePlaylistModal) {
       closeCreatePlaylistDialog();
     } else if (expandedPlaylist) {
       closePlaylistDetail();
@@ -114,7 +115,6 @@
     // раскрученного «Любимого» снова строил бы сотни строк в том же кадре, в котором
     // начинается выезд панели, и выезда опять было бы не видно.
     rowBudget = ROWS_FIRST_PAINT;
-    growRows();
   }
 
   /** Сколько строк вообще нужно активной вкладке — предел, до которого растёт бюджет. */
@@ -122,22 +122,35 @@
     activeTab === 'liked' ? $likedTracks.length
     : activeTab === 'local' ? localTracks.length
     : activeTab === 'artists' ? groupedArtists.length
+    : openedPlaylist ? openedPlaylist.tracks?.length || 0
     : $playlists.length;
 
   $: visibleLiked = $likedTracks.slice(0, rowBudget);
   $: visibleLocal = localTracks.slice(0, rowBudget);
   $: visibleArtists = groupedArtists.slice(0, rowBudget);
+  $: visiblePlaylists = $playlists.slice(0, rowBudget);
+  $: visiblePlaylistTracks = openedPlaylist?.tracks?.slice(0, rowBudget) || [];
 
-  function growRows() {
-    if (typeof requestAnimationFrame === 'undefined') return;
-    if (growHandle) cancelAnimationFrame(growHandle);
-    const step = () => {
-      growHandle = 0;
-      if (rowBudget >= rowsNeeded) return;
-      rowBudget += ROWS_STEP;
-      growHandle = requestAnimationFrame(step);
-    };
-    growHandle = requestAnimationFrame(step);
+  /**
+   * Дорисовываем следующую порцию только перед тем, как человек до неё доскроллит.
+   * Прежний RAF-цикл за несколько кадров всё равно создавал все сотни строк, вместе с
+   * компонентами, SVG и ленивыми картинками: первый кадр был быстрым, но память WebView
+   * через мгновение становилась такой же, как без лимита. Новый sentinel держит в DOM
+   * только уже просмотренную часть и запас примерно в один экран.
+   */
+  function revealRowsWhenVisible(node: HTMLElement) {
+    if (typeof IntersectionObserver === 'undefined') {
+      rowBudget = rowsNeeded;
+      return {};
+    }
+
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      rowBudget = Math.min(rowsNeeded, rowBudget + ROWS_STEP);
+    }, { rootMargin: '700px 0px' });
+
+    observer.observe(node);
+    return { destroy: () => observer.disconnect() };
   }
 
   function startPlaylistPreview(e: Event, pl: any) {
@@ -152,6 +165,7 @@
   }
 
   function openPlaylistDetail(id: string) {
+    rowBudget = ROWS_FIRST_PAINT;
     expandedPlaylist = id;
     activeTrackMenu = null;
     if (typeof requestAnimationFrame !== 'undefined') {
@@ -163,7 +177,15 @@
 
   function closePlaylistDetail() {
     const id = expandedPlaylist;
+    const playlistIndex = id
+      ? $playlists.findIndex((playlist) => `${playlist.id}` === `${id}`)
+      : -1;
     expandedPlaylist = null;
+    // Если открыли карточку далеко в списке, вернём хотя бы просмотренную часть: иначе
+    // сброс до 18 удалял саму карточку из DOM, и фокус после кнопки «Все плейлисты» терялся.
+    rowBudget = playlistIndex >= 0
+      ? Math.max(ROWS_FIRST_PAINT, playlistIndex + 1)
+      : ROWS_FIRST_PAINT;
     if (id) void tick().then(() => focusPlaylistCard(id));
   }
 
@@ -194,6 +216,8 @@
   let newPlaylistName = '';
   let showCreatePlaylistModal = false;
   let createPlaylistTrigger: HTMLButtonElement;
+  let renamingPlaylistId: string | null = null;
+  let renamePlaylistName = '';
 
   function openCreatePlaylistDialog() {
     newPlaylistName = '';
@@ -221,6 +245,41 @@
     }
   }
 
+  function focusPlaylistRenameControl(id: string) {
+    if (typeof document === 'undefined') return;
+    const safeId = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(id) : id;
+    document.querySelector<HTMLButtonElement>(`[data-rename-playlist-id="${safeId}"]`)?.focus();
+  }
+
+  function openRenamePlaylistDialog(event: Event, playlist: any) {
+    event.stopPropagation();
+    renamingPlaylistId = `${playlist.id}`;
+    renamePlaylistName = `${playlist.title ?? ''}`;
+  }
+
+  function closeRenamePlaylistDialog(restoreFocus = true) {
+    const id = renamingPlaylistId;
+    renamingPlaylistId = null;
+    renamePlaylistName = '';
+    if (restoreFocus && id) void tick().then(() => focusPlaylistRenameControl(id));
+  }
+
+  function handleRenamePlaylistSubmit() {
+    const id = renamingPlaylistId;
+    const title = renamePlaylistName.trim();
+    if (!id || !title) return;
+
+    let previousTitle = '';
+    playlists.update((items) => items.map((playlist) => {
+      if (`${playlist.id}` !== id) return playlist;
+      previousTitle = `${playlist.title ?? ''}`;
+      return { ...playlist, title };
+    }));
+
+    closeRenamePlaylistDialog();
+    if (previousTitle !== title) notify(`Плейлист переименован в «${title}».`, 'success');
+  }
+
   onMount(() => {
     try {
       const savedView = localStorage.getItem(LIKED_VIEW_KEY);
@@ -229,13 +288,11 @@
 
     (async () => {
       localTracks = await getTracks();
-      growRows();
       try {
         const list = await invoke<string[]>('track_list_cached');
         cachedUrns = new Set(list);
       } catch (e) {}
     })();
-    growRows();
 
     const handleCacheCleared = () => {
       cachedUrns = new Set();
@@ -258,10 +315,6 @@
       window.removeEventListener('pointerdown', onTrackMenuPointerDown, true);
       window.removeEventListener('keydown', onTrackMenuKeydown);
     };
-  });
-
-  onDestroy(() => {
-    if (growHandle) cancelAnimationFrame(growHandle);
   });
 
   /**
@@ -736,7 +789,7 @@
               <TrackStatus index={i} {isActive} playing={$isPlaying} banned={track.isBanned} />
               <div class="track-row-art">
                 {#if track.coverUrl}
-                  <img src={coverUrlForTrack(track, $downloadedCoverCache)} alt="" loading="lazy" decoding="async" />
+                  <img src={coverUrlAtSize(coverUrlForTrack(track, $downloadedCoverCache), 120)} alt="" width="48" height="48" loading="lazy" decoding="async" />
                 {:else}
                   <div class="track-row-art-empty">
                     <Music size={20} />
@@ -1024,7 +1077,7 @@
                 <span class="library-artist-rank tnum" aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>
                 <span class="library-artist-art">
                   {#if artist.avatarUrl}
-                    <img src={artist.avatarUrl} alt="" loading="lazy" decoding="async" />
+                    <img src={coverUrlAtSize(artist.avatarUrl, 120)} alt="" width="72" height="72" loading="lazy" decoding="async" />
                   {:else}
                     <User size={25} aria-hidden="true" />
                   {/if}
@@ -1085,6 +1138,14 @@
                 </button>
                 <button
                   type="button"
+                  data-rename-playlist-id={openedPlaylist.id}
+                  on:click={(event) => openRenamePlaylistDialog(event, openedPlaylist)}
+                >
+                  <Pencil size={16} aria-hidden="true" />
+                  Переименовать
+                </button>
+                <button
+                  type="button"
                   class:is-danger={isDownloadingAll}
                   disabled={isAllPlaylistCached(openedPlaylist.tracks) && !isDownloadingAll}
                   on:click={() => {
@@ -1127,7 +1188,7 @@
             </div>
           {:else}
             <div class="library-playlist-track-list">
-              {#each openedPlaylist.tracks as track, i}
+              {#each visiblePlaylistTracks as track, i}
                 {@const isActive = $currentTrack?.title === track.title && $currentTrack?.artist === track.artist}
                 <!-- svelte-ignore a11y-click-events-have-key-events -->
                 <!-- svelte-ignore a11y-no-static-element-interactions -->
@@ -1139,7 +1200,7 @@
                   <TrackStatus index={i} {isActive} playing={$isPlaying} />
                   <div class="library-playlist-track-cover">
                     {#if track.coverUrl}
-                      <img src={coverUrlForTrack(track, $downloadedCoverCache)} alt="" loading="lazy" decoding="async" />
+                      <img src={coverUrlAtSize(coverUrlForTrack(track, $downloadedCoverCache), 120)} alt="" width="48" height="48" loading="lazy" decoding="async" />
                     {:else}
                       <Music size={19} aria-hidden="true" />
                     {/if}
@@ -1213,7 +1274,7 @@
               </span>
             </button>
 
-            {#each $playlists as pl}
+            {#each visiblePlaylists as pl}
               {@const hasTracks = Boolean(pl.tracks?.length)}
               <article class="library-playlist-card">
                 <div class="library-playlist-art-shell">
@@ -1284,6 +1345,11 @@
         </section>
       {/if}
     {/if}
+    {#if rowBudget < rowsNeeded}
+      {#key rowBudget}
+        <div class="h-px w-full" aria-hidden="true" use:revealRowsWhenVisible></div>
+      {/key}
+    {/if}
     </div>
   {/key}
 </div>
@@ -1341,6 +1407,60 @@
         <button type="button" class="is-primary" on:click={handleCreatePlaylistSubmit} disabled={!newPlaylistName.trim()}>
           <Plus size={17} aria-hidden="true" />
           Создать
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if renamingPlaylistId !== null}
+  <!-- svelte-ignore a11y-click-events-have-key-events -->
+  <!-- svelte-ignore a11y-no-static-element-interactions -->
+  <div class="playlist-create-backdrop" on:pointerdown|self={() => closeRenamePlaylistDialog()}>
+    <div
+      class="playlist-create-dialog"
+      role="dialog"
+      tabindex="-1"
+      aria-modal="true"
+      aria-labelledby="playlist-rename-title"
+      aria-describedby="playlist-rename-help"
+      on:click|stopPropagation
+    >
+      <button
+        type="button"
+        class="playlist-create-close"
+        aria-label="Закрыть переименование плейлиста"
+        on:click={() => closeRenamePlaylistDialog()}
+      >
+        <X size={18} aria-hidden="true" />
+      </button>
+
+      <span class="playlist-create-mark"><Pencil size={24} aria-hidden="true" /></span>
+      <span class="playlist-create-kicker">Плейлист</span>
+      <h2 id="playlist-rename-title">Новое название</h2>
+      <p id="playlist-rename-help">Треки и порядок останутся без изменений.</p>
+
+      <label for="playlist-rename-name">Название</label>
+      <div class="playlist-create-field">
+        <Music size={17} aria-hidden="true" />
+        <!-- svelte-ignore a11y-autofocus -->
+        <input
+          id="playlist-rename-name"
+          type="text"
+          bind:value={renamePlaylistName}
+          maxlength="80"
+          autocomplete="off"
+          on:keydown={(event) => event.key === 'Enter' && handleRenamePlaylistSubmit()}
+          autofocus
+        />
+        <span class="tnum">{renamePlaylistName.trim().length}/80</span>
+      </div>
+
+      <div class="playlist-create-actions">
+        <button type="button" class="is-secondary" on:click={() => closeRenamePlaylistDialog()}>Отмена</button>
+        <button type="button" class="is-primary" on:click={handleRenamePlaylistSubmit} disabled={!renamePlaylistName.trim()}>
+          <Pencil size={17} aria-hidden="true" />
+          Сохранить
         </button>
       </div>
     </div>

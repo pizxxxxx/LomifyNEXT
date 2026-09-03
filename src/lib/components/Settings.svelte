@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { settings, playlists, listenStats, notify, currentTrack, isPlaying } from '$lib/stores';
+  import { settings, automaticPerformanceMode, playlists, listenStats, notify } from '$lib/stores';
   import {
     Download,
     Loader2,
@@ -225,37 +225,6 @@
     }
   }
 
-  async function handleGibberishToggle() {
-    $settings.gibberishMode = !$settings.gibberishMode;
-    if ($settings.gibberishMode) {
-      try {
-        const { getSoundCloudClientId, safeFetch, findBestTranscoding } = await import('$lib/api');
-        const clientId = await getSoundCloudClientId();
-        const url = "https://soundcloud.com/denismellstroy/tyomnyy-prints-madk1d-ty-che-obkukurikalas-prod-by-k4neswagga-yngyuuuchi";
-        const res = await safeFetch(`https://api-v2.soundcloud.com/resolve?url=${encodeURIComponent(url)}&client_id=${clientId}`);
-        const t = await res.json();
-        if (t && t.id) {
-           const cover = t.artwork_url ? t.artwork_url.replace('large', 't500x500') : '';
-           const track = {
-             id: t.id,
-             title: t.title,
-             artist: t.user?.username || 'Unknown',
-             coverUrl: cover,
-             audioUrl: findBestTranscoding(t),
-             source: 'soundcloud',
-             duration: t.duration || 0,
-             permalinkUrl: t.permalink_url || url,
-             transcodings: t.media?.transcodings?.map((tr: any) => `${tr.url}?client_id=${clientId}`) || []
-           };
-           currentTrack.set(track as any);
-           isPlaying.set(true);
-        }
-      } catch (e) {
-        console.error("Gibberish track load failed", e);
-      }
-    }
-  }
-
   onMount(() => {
     if ($settings.uiStyle === 'style3') {
       $settings.uiStyle = 'style1';
@@ -407,7 +376,7 @@
   }
 
   /**
-   * Переключатель эффекта движения. Один на все четыре, а не четыре обработчика подряд:
+   * Переключатель эффекта движения. Один на все пять, а не пять обработчиков подряд:
    * тумблеры отличаются только именем настройки.
    *
    * Сравнение с `false`, а не `!value`, — из-за уже сохранённых настроек: у тех, кто
@@ -415,7 +384,7 @@
    * читаться как «включено» (эффекты работали и раньше). `!undefined` дало бы обратное —
    * первое нажатие ничего бы не изменило, потому что тумблер уже показан включённым.
    */
-  function toggleFx(key: 'coverTilt' | 'coverGlare' | 'cardSheen' | 'panelPress') {
+  function toggleFx(key: 'coverTilt' | 'coverGlare' | 'cardSheen' | 'panelPress' | 'glyphWake') {
     $settings[key] = $settings[key] === false;
   }
 
@@ -645,7 +614,7 @@
   <div class="settings-tabs-shell">
     <div
       class="seg-control is-lg settings-tabs-control"
-      style="--seg-count: 5; --seg-index: {settingsTabIndex}"
+      style="--seg-count: 5; --seg-index: {settingsTabIndex}; backdrop-filter: blur(24px) saturate(1.24); -webkit-backdrop-filter: blur(24px) saturate(1.24)"
       role="tablist"
       tabindex="-1"
       aria-label="Разделы настроек"
@@ -934,13 +903,18 @@
                 Упрощает тяжёлые эффекты, отключает предпрослушивание карточек и снижает
                 нагрузку на видеокарту. Внешний вид останется знакомым, а прокрутка и текст
                 песен будут работать плавнее на старых компьютерах.
+                {#if $automaticPerformanceMode}
+                  На этом компьютере режим включён автоматически.
+                {/if}
               </div>
             </div>
             <button
               aria-label="Режим производительности"
               role="switch"
-              aria-checked={$settings.perfMode}
+              aria-checked={$settings.perfMode || $automaticPerformanceMode}
               class="switch"
+              disabled={$automaticPerformanceMode}
+              title={$automaticPerformanceMode ? 'Включено автоматически для слабого компьютера' : 'Переключить режим производительности'}
               on:click={() => $settings.perfMode = !$settings.perfMode}
             >
               <span class="switch-knob"></span>
@@ -1018,15 +992,15 @@
         <span class="settings-group-rule"></span>
       </div>
       <div class="space-y-6">
-        <!-- Четыре эффекта в одной плашке, а не четыре плашки по тумблеру: выключают их, как
+        <!-- Пять эффектов в одной плашке, а не пять плашек по тумблеру: выключают их, как
              правило, все разом и по одной причине — «пусть ничего не дёргается». Разложенные
              по странице, они бы читались как четыре независимые функции, и связь между ними
-             (все четыре — движение под курсором) пришлось бы угадывать. -->
+             (все пять — движение под курсором) пришлось бы угадывать. -->
         <div class="plate p-8">
           <h3 class="section-title">Движение под курсором</h3>
           <p class="empty-hint !mt-1.5 !max-w-[54ch] mb-6">
             Здесь можно оставить только те движения, которые тебе нравятся. В режиме
-            производительности все четыре эффекта временно отключаются автоматически.
+            производительности все пять эффектов временно отключаются автоматически.
           </p>
 
           <div class="flex flex-col gap-3">
@@ -1099,6 +1073,25 @@
                 aria-checked={$settings.panelPress !== false}
                 class="switch"
                 on:click={() => toggleFx('panelPress')}
+              >
+                <span class="switch-knob"></span>
+              </button>
+            </div>
+
+            <div class="setting-row">
+              <div>
+                <div class="setting-title">Терминальный след</div>
+                <div class="setting-hint">
+                  Символы # / + − собираются по сетке и мягко расходятся от курсора, как
+                  чернила в воде. Эффект сам засыпает, когда мышь не двигается.
+                </div>
+              </div>
+              <button
+                aria-label="Терминальный след"
+                role="switch"
+                aria-checked={$settings.glyphWake !== false}
+                class="switch"
+                on:click={() => toggleFx('glyphWake')}
               >
                 <span class="switch-knob"></span>
               </button>
@@ -1707,22 +1700,6 @@
           </div>
         </div>
 
-        <!-- Gibberish Easter Egg Setting -->
-        <div class="plate p-8 settings-system-row">
-          <div>
-            <h3 class="section-title">Секретный режим</h3>
-            <p class="setting-hint !mt-2">Небольшая пасхалка для тех, кто добрался до самого конца настроек.</p>
-          </div>
-          <button
-            aria-label="Секретный режим"
-            role="switch"
-            aria-checked={$settings.gibberishMode}
-            class="switch"
-            on:click={handleGibberishToggle}
-          >
-            <span class="switch-knob"></span>
-          </button>
-        </div>
       </div>
     </section>
 
@@ -1762,7 +1739,7 @@
             <strong>{cacheStatsLoading ? '…' : formatBytes(cacheAudioBytes)}</strong>
           </div>
           <div>
-            <span class="settings-cache-protected"><ShieldCheck size={13} /> В лайках</span>
+            <span class="settings-cache-protected" title="Скачанные треки, которые отмечены сердечком"><ShieldCheck size={13} /> В лайках</span>
             <strong>{cacheStatsLoading ? '…' : formatBytes(cacheLikedBytes)}</strong>
           </div>
           <div>

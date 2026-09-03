@@ -3,11 +3,12 @@
   import { fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { Play, Loader2, User, Info, Disc, X, ListMusic, ChevronLeft, Music2 } from 'lucide-svelte';
-  import { currentArtist, currentTrack, isPlaying, queue, settings, globalVolume, notify, pageAtmosphere, type PageAtmosphere } from '$lib/stores';
+  import { currentArtist, currentTrack, isPlaying, queue, settings, effectivePerformanceMode, globalVolume, notify, pageAtmosphere, type PageAtmosphere } from '$lib/stores';
   import { getArtistTracks, getAudioUrl, getArtistAlbums, getArtistProfile, getAlbumTracks, trackByArtist, type ArtistSource } from '$lib/api';
   import ArtistTag from './ArtistTag.svelte';
   import TrackStatus from './TrackStatus.svelte';
   import { withCount, plural } from '$lib/utils/plural';
+  import { coverUrlAtSize } from '$lib/offlineCovers';
 
   let tracks: any[] = [];
   let isLoading = true;
@@ -178,14 +179,14 @@
   });
 
   async function handleMouseEnter(track: any) {
-    if (!$settings.enableHoverPreview) return;
+    if ($effectivePerformanceMode || !$settings.enableHoverPreview) return;
     if (hoverTimer) clearTimeout(hoverTimer);
     hoveredTrack = track;
     hoverTimer = setTimeout(async () => {
       if (!previewAudio) return;
       try {
         const url = await getAudioUrl(track, { silent: true });
-        if (url && previewAudio) {
+        if (url && previewAudio && !$effectivePerformanceMode) {
           previewAudio.src = url;
           previewAudio.volume = Math.pow($globalVolume, 3);
           const durSecs = (track.duration || 0) / 1000;
@@ -206,6 +207,8 @@
       previewAudio.src = '';
     }
   }
+
+  $: if ($effectivePerformanceMode) handleMouseLeave();
 
   // React to artist and source changes. Явный source не даёт API тихо подменить выбранную
   // площадку fallback-данными другой площадки.
@@ -752,13 +755,13 @@
               <!-- `lazy` — потому что список перестал быть короткой выдачей поиска: у артиста
                    с большой дискографией здесь сотни строк, и без этого браузер полез бы за
                    всеми обложками сразу, включая те, до которых никто не докрутит. -->
-              <img src={track.coverUrl} alt="" loading="lazy" />
+              <img src={coverUrlAtSize(track.coverUrl, 120)} alt="" width="48" height="48" loading="lazy" decoding="async" />
             {:else}
               <div class="track-row-art-empty">
                 <Play size={20} />
               </div>
             {/if}
-            {#if $settings.enableHoverPreview}
+            {#if $settings.enableHoverPreview && !$effectivePerformanceMode}
               <div class="absolute bottom-0 left-0 h-[3px] bg-primary shadow-[0_0_8px_#00e5ff]"
                    style="width: {hoveredTrack?.title === track.title ? '100%' : '0%'}; transition: width {$settings.hoverPreviewDelay}ms linear;">
               </div>

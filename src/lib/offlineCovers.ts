@@ -12,6 +12,33 @@ export const downloadedCoverCache = writable<DownloadedCoverCacheState>({
   cachedUrns: new Set<string>()
 });
 
+/**
+ * Ask the two artwork CDNs used by Lomify for an image close to its rendered size.
+ * A 48px list row does not need a decoded 500x500 bitmap (roughly 1 MB in RGBA) for
+ * every visible item. Unknown and local URLs stay untouched.
+ */
+export function coverUrlAtSize(url: string, requestedSize: number): string {
+  if (!url) return '';
+  const size = Math.max(32, Math.min(1000, Math.round(requestedSize)));
+
+  if (url.includes('avatars.yandex.net') || url.includes('.yandex.net/get-music-content')) {
+    return url
+      .replace('%%', `${size}x${size}`)
+      .replace(/\/\d+x\d+(?=($|[?#]))/, `/${size}x${size}`);
+  }
+
+  if (url.includes('sndcdn.com')) {
+    const supported = [50, 120, 200, 300, 500];
+    const soundCloudSize = supported.find((candidate) => candidate >= size) ?? 500;
+    return url.replace(
+      /-(t\d+x\d+|large|badge|small|tiny|mini|crop)(?=\.(jpg|jpeg|png)(?:$|[?#]))/i,
+      `-t${soundCloudSize}x${soundCloudSize}`
+    );
+  }
+
+  return url;
+}
+
 function encodePayload(values: string[]): string {
   const bytes = new TextEncoder().encode(JSON.stringify(values));
   let binary = '';

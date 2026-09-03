@@ -14,13 +14,12 @@
   import ArtistPage from '$lib/components/ArtistPage.svelte';
   import Notifications from '$lib/components/Notifications.svelte';
   import WaveHero from '$lib/components/WaveHero.svelte';
-  import { currentView, previousView, currentTrack, isPlaying, queue, likedTracks, listenStats, searchHistory, playlists, navHistory, navFuture, isHistoryNavigation, currentArtist, searchQuery as searchQueryStore, settings, notify, pageAtmosphere } from '$lib/stores';
+  import GlyphWake from '$lib/components/GlyphWake.svelte';
+  import { currentView, previousView, currentTrack, isPlaying, queue, likedTracks, listenStats, searchHistory, playlists, navHistory, navFuture, isHistoryNavigation, currentArtist, searchQuery as searchQueryStore, settings, effectivePerformanceMode, notify, pageAtmosphere } from '$lib/stores';
   import { getTrendingTracks } from '$lib/api';
   import { LASTFM_TASTE_UPDATED_EVENT } from '$lib/lastfm';
   import { getTracks } from '$lib/db';
   import { coverUrlForTrack, downloadedCoverCache } from '$lib/offlineCovers';
-
-  import { gibberish } from '$lib/actions/gibberish';
 
   let greeting = 'Добрый вечер';
   let osUsername = 'User';
@@ -306,9 +305,11 @@
   const ATMOS_HEIGHT = 620;
   let mainEl: HTMLElement | null = null;
   let atmosShift = 0;
+  let mainScrollTop = 0;
 
   function syncAtmosShift() {
-    atmosShift = mainEl ? Math.min(mainEl.scrollTop, ATMOS_HEIGHT) : 0;
+    mainScrollTop = mainEl?.scrollTop ?? 0;
+    atmosShift = Math.min(mainScrollTop, ATMOS_HEIGHT);
   }
 
   // `<main>` один на все разделы, и переключение раздела его прокрутку не сбрасывает —
@@ -336,7 +337,7 @@
 
 <!-- `tracks-left` only re-anchors the track grids themselves (see `.track-collection`
      in app.css) — headings, buttons and the rest of the chrome stay put. -->
-<div class="h-screen w-screen flex flex-col bg-[var(--color-dark)] text-white font-sans overflow-hidden relative transition-colors duration-[1500ms]" class:tracks-left={$settings.leftAlignTracks} use:gibberish>
+<div class="h-screen w-screen flex flex-col bg-[var(--color-dark)] text-white font-sans overflow-hidden relative transition-colors duration-[1500ms]" class:tracks-left={$settings.leftAlignTracks}>
   
   <!-- Main Area -->
   <div class="flex-1 flex overflow-hidden relative">
@@ -348,7 +349,9 @@
            is the only visible one, so retaining this second full-window blur only wastes a GPU
            surface. It is mounted again before the outro begins. -->
       {#if currentDisplayCover && ($currentView !== 'fullscreen' || !fullscreenOverlaySettled)}
-        <div class="app-track-backdrop absolute inset-0 opacity-[0.15] blur-[100px] transition-all duration-1000" style="background-image: url('{currentDisplayCover}'); background-size: cover; background-position: center; transform: scale(1.2);"></div>
+        <!-- The accent already follows the cover. Gradients retain the same quiet colour
+             atmosphere without keeping a scaled, full-window 100px blur in GPU memory. -->
+        <div class="app-track-backdrop absolute inset-0" aria-hidden="true"></div>
       {/if}
       <div class="absolute inset-0 bg-gradient-to-b from-[var(--color-dark-gradient)]/50 to-[var(--color-dark)] transition-colors duration-[1500ms]"></div>
 
@@ -368,6 +371,14 @@
           <div class="page-atmos-fade"></div>
         </div>
       {/if}
+
+      <!-- One capped canvas, dormant while the pointer is still. It sits above the colour
+           atmosphere but below every interactive surface, so the glyph wake feels embedded
+           in the page rather than painted over cards. -->
+      <GlyphWake
+        enabled={$settings.glyphWake !== false && !$effectivePerformanceMode && $currentView !== 'fullscreen'}
+        scrollOffset={mainScrollTop}
+      />
     </div>
 
     <div class="flex w-full relative">
@@ -434,7 +445,7 @@
         username={osUsername}
         sourceTracks={trendingTracks}
         onPage={$currentView === 'home'}
-        motionEnabled={!$settings.perfMode}
+        motionEnabled={!$effectivePerformanceMode}
       />
     </div>
 

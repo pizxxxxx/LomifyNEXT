@@ -27,7 +27,8 @@
  * под полосу не создаётся.
  */
 
-import { settings } from '$lib/stores';
+import { effectivePerformanceMode, settings } from '$lib/stores';
+import { get } from 'svelte/store';
 
 /** Класс, по которому CSS дизайна переводит полосу в конечное положение. */
 const RUNNING = 'is-sheening';
@@ -130,7 +131,7 @@ export function trackSheen(): () => void {
     // Режим производительности выключает полосу вместе с остальными эффектами: её слой во всю
     // обложку CSS убирает из дерева отрисовки, и вешать на него класс по каждому наведению
     // курсора там уже незачем.
-    enabled = value?.cardSheen !== false && value?.perfMode !== true;
+    enabled = value?.cardSheen !== false && !get(effectivePerformanceMode);
     if (!enabled) clearRunning();
   });
 

@@ -18,6 +18,42 @@ fn exit_app() {
     std::process::exit(0);
 }
 
+/// WebView2 normally keeps decoded images, script heaps and render caches around for fast
+/// revisits. Lomify is a long-running player rather than a tab-heavy browser, so ask the
+/// runtime to release those caches more aggressively. Older WebView2 runtimes simply fail
+/// the interface cast; that is logged and startup continues normally.
+#[cfg(windows)]
+fn request_low_webview_memory(app: &tauri::App) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
+    };
+    use windows_core::Interface;
+
+    let Some(main) = app.get_webview_window("main") else {
+        return;
+    };
+
+    if let Err(error) = main.with_webview(|webview| {
+        let result = unsafe {
+            webview
+                .controller()
+                .CoreWebView2()
+                .and_then(|core| core.cast::<ICoreWebView2_19>())
+                .and_then(|core| {
+                    core.SetMemoryUsageTargetLevel(COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW)
+                })
+        };
+        if let Err(error) = result {
+            eprintln!("[WebView2] low-memory target is unavailable: {error}");
+        }
+    }) {
+        eprintln!("[WebView2] failed to configure memory target: {error}");
+    }
+}
+
+#[cfg(not(windows))]
+fn request_low_webview_memory(_app: &tauri::App) {}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();
@@ -52,6 +88,8 @@ pub fn run() {
             });
         })
         .setup(move |app| {
+            request_low_webview_memory(app);
+
             let cache_dir = app
                 .path()
                 .app_cache_dir()

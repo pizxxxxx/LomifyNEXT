@@ -23,6 +23,12 @@ export type CacheUsage = {
   imageBytes: number;
 };
 
+type CacheInventoryEntry = {
+  urn: string;
+  bytes: number;
+  liked: boolean;
+};
+
 function isTauri() {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
@@ -34,11 +40,27 @@ function finiteSetting(value: unknown, fallback: number, min: number, max: numbe
 
 export async function getCacheUsage(): Promise<CacheUsage> {
   if (!isTauri()) return { audioBytes: 0, likedBytes: 0, imageBytes: 0 };
-  const [audioBytes, likedBytes, imageBytes] = await Promise.all([
-    invoke<number>('track_cache_size'),
-    invoke<number>('track_liked_cache_size'),
+  const [inventory, imageBytes] = await Promise.all([
+    invoke<CacheInventoryEntry[]>('track_cache_inventory'),
     invoke<number>('image_cache_size')
   ]);
+
+  // "В лайках" is a user-facing category, not the name of an implementation folder.
+  // Tracks saved from the player/library historically landed in `audio/`; only the unused
+  // bulk-cache command routed them to `audio_liked/`. Counting the folder therefore showed
+  // 0 MB even when many liked tracks were already available offline. Classify the one native
+  // inventory by the current likes instead, while retaining the native `liked` bit for files
+  // that were explicitly put in the protected cache.
+  const likedUrns = new Set(get(likedTracks).map(buildTrackUrn).filter(Boolean));
+  let audioBytes = 0;
+  let likedBytes = 0;
+  for (const entry of inventory) {
+    const bytes = Number(entry?.bytes);
+    if (!Number.isFinite(bytes) || bytes <= 0) continue;
+    if (entry.liked || likedUrns.has(entry.urn)) likedBytes += bytes;
+    else audioBytes += bytes;
+  }
+
   return { audioBytes, likedBytes, imageBytes };
 }
 

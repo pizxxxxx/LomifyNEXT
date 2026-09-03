@@ -2,7 +2,7 @@
   import { onDestroy } from 'svelte';
   import { fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
-  import { currentTrack, isPlaying, queue, globalVolume, likedTracks, settings, playlists, notify } from '$lib/stores';
+  import { currentTrack, isPlaying, queue, globalVolume, likedTracks, settings, effectivePerformanceMode, playlists, notify } from '$lib/stores';
   import { Play, Pause, Info, ListMusic, Radio, Heart } from 'lucide-svelte';
   import { Plus as PlusIcon, Check as CheckIcon } from 'lucide';
   import { MorphIcon } from 'morphicons/svelte';
@@ -65,14 +65,14 @@
   async function handleMouseEnter(track: any) {
     // Performance mode must not quietly keep a second decoder/network stream alive just
     // because the pointer rested on an artwork.
-    if ($settings.perfMode || !$settings.enableHoverPreview) return;
+    if ($effectivePerformanceMode || !$settings.enableHoverPreview) return;
     if (hoverTimer) clearTimeout(hoverTimer);
     hoveredTrack = track;
     const generation = ++previewGeneration;
     hoverTimer = setTimeout(async () => {
       try {
         const url = await getAudioUrl(track, { silent: true });
-        if (generation !== previewGeneration || hoveredTrack !== track || !url || $settings.perfMode) return;
+        if (generation !== previewGeneration || hoveredTrack !== track || !url || $effectivePerformanceMode) return;
         if (!previewAudio) previewAudio = new Audio();
         if (previewAudio) {
           previewAudio.src = url;
@@ -102,7 +102,7 @@
     stopHoverPreview();
   }
 
-  $: if ($settings.perfMode) stopHoverPreview();
+  $: if ($effectivePerformanceMode) stopHoverPreview();
 
   $: if (previewAudio) {
     previewAudio.volume = Math.pow($globalVolume, 3);
@@ -173,7 +173,7 @@
                обложку. На раскрытой панели наклон и подъём не нужны: панель во всю ширину,
                с матовым стеклом, и любое её движение под курсором — это перерисовка
                `backdrop-filter` вместе со всем, что под ним. -->
-          <div class="pl-tile {isOpen ? 'is-open' : 'interactive-item'} group"
+          <div class="pl-tile {isOpen ? 'is-open' : 'track-tile interactive-item rounded-[1.25rem]'} group"
                on:click={() => { expandedPlaylistId = isOpen ? null : track.id; }}>
 
             <div class="{isOpen ? 'pl-tile-art-open' : 'w-full aspect-[2/1] mb-3 spec-art art-glow'} rounded-xl overflow-hidden shadow-lg relative bg-neutral-800 border border-white/5">
@@ -407,7 +407,7 @@
                   {/if}
                 </button>
                 <!-- Hover Progress Bar -->
-                {#if $settings.enableHoverPreview && !$settings.perfMode}
+                {#if $settings.enableHoverPreview && !$effectivePerformanceMode}
                   <div
                     class="tile-preview-progress"
                     class:is-previewing={hoveredTrack?.title === track.title}

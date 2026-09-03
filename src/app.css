@@ -2499,6 +2499,10 @@ textarea:focus-visible,
 .track-row-card {
   position: relative;
   isolation: isolate;
+  /* Long artist/search lists may contain hundreds of rows. Chromium can keep their DOM
+     semantics while skipping layout, paint and image raster for rows far off screen. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 60px;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -9356,6 +9360,8 @@ body[data-perf="light"] .spotify-progress-track > span {
 
 .library-artist-card {
   position: relative;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 103px;
   display: grid;
   grid-template-columns: auto 4.5rem minmax(0, 1fr) 2.15rem;
   align-items: center;
@@ -9537,6 +9543,8 @@ body[data-perf="light"] .spotify-progress-track > span {
 
 .library-playlist-card {
   position: relative;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 260px;
   padding: 0.55rem;
   border: 1px solid rgba(255, 255, 255, 0.075);
   background: linear-gradient(155deg, rgba(255, 255, 255, 0.055), rgba(11, 10, 12, 0.7));
@@ -12454,9 +12462,9 @@ body[data-ui-style="style2"] .sidebar-shell {
   gap: 5px;
   padding: 3px 10px;
   border-radius: 9999px;
-  background: color-mix(in srgb, #eab308 16%, transparent);
-  border: 1px solid color-mix(in srgb, #eab308 26%, transparent);
-  color: #f0c33c;
+  background: color-mix(in srgb, #72ea96 14%, transparent);
+  border: 1px solid color-mix(in srgb, #72ea96 25%, transparent);
+  color: #9cf3b6;
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.1em;
@@ -12643,19 +12651,17 @@ body[data-perf="light"] .play-btn-glow {
   display: none;
 }
 
-/* The permanent current-track backdrop was the one full-window blur not covered by the
-   performance switch. A 100px filtered bitmap reserves several large intermediate GPU
-   surfaces even while nothing moves. In light mode we keep the same cover-derived colour
-   atmosphere with gradients (the primary token already follows the cover) and need no
-   bitmap filter at all. The fullscreen variant uses the same treatment behind its existing
-   dark veil, so contrast and composition remain unchanged. */
-body[data-perf="light"] .app-track-backdrop {
+/* The old version scaled the current cover over the full window and blurred it by 100px.
+   It was subtle behind the dark veil, but WebView2 still retained the decoded cover plus
+   several viewport-sized filter surfaces. The accent token is already extracted from the
+   same cover, so these gradients preserve the colour atmosphere without a bitmap filter. */
+.app-track-backdrop {
   background-image:
     radial-gradient(circle at 72% 18%, color-mix(in srgb, var(--color-primary) 42%, transparent), transparent 58%),
-    radial-gradient(circle at 18% 78%, color-mix(in srgb, var(--color-primary) 20%, #191622), transparent 62%) !important;
-  filter: none !important;
-  transform: none !important;
-  opacity: 0.32 !important;
+    radial-gradient(circle at 18% 78%, color-mix(in srgb, var(--color-primary) 20%, #191622), transparent 62%);
+  contain: strict;
+  opacity: 0.3;
+  pointer-events: none;
 }
 
 body[data-perf="light"] .fs-backdrop-layer {
@@ -12764,6 +12770,7 @@ body[data-design="aurora"][data-perf="light"] {
    design-aurora.css, и специфичности (0,3,1) против (0,2,1) хватает, чтобы та победила. */
 body[data-perf="light"] .glass-panel,
 body[data-perf="light"] .sidebar-shell,
+body[data-perf="light"] .settings-tabs-control,
 body[data-perf="light"] [class*="backdrop-blur"][class*="bg-white/"] {
   background-image: var(--perf-glass);
 }

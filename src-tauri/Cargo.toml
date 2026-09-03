@@ -1,6 +1,6 @@
 [package]
 name = "lomifynext-tauri"
-version = "9.3.0"
+version = "9.3.1"
 description = "LomifyNEXT"
 authors = ["dopaminegdev"]
 license = "GPL-3.0-or-later"
@@ -63,6 +63,13 @@ discord-rich-presence = "1"
 call-client = { path = "../utils/call/client" }
 decrypt-client = { path = "../utils/decrypt-client" }
 tauri-plugin-window-state = "2.4.1"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# `souvlaki` registers SMTC callbacks on the thread that creates MediaControls. Windows
+# delivers those callbacks through that thread's message queue, so we pump it explicitly.
+windows = { version = "0.44", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+webview2-com = "0.38"
+windows-core = "0.61"
 
 [features]
 # Opt-in escape hatch: `cargo tauri build --features devtools` puts the inspector back

@@ -1,9 +1,9 @@
 <script lang="ts">
   import '../app.css';
-  import { settings, initStore, currentTrack } from '$lib/stores';
+  import { settings, initStore, currentTrack, effectivePerformanceMode } from '$lib/stores';
   import Titlebar from '$lib/components/Titlebar.svelte';
   import { onMount } from 'svelte';
-  import { Wrench } from 'lucide-svelte';
+  import { ArrowRight, Terminal } from 'lucide-svelte';
   import { APP_CHANNEL, APP_NAME, APP_VERSION } from '$lib/version';
   import { extractCoverAccent, rgbToHex } from '$lib/utils/coverAccent';
   import { lockDevTools } from '$lib/utils/devLock';
@@ -16,7 +16,9 @@
     initDownloadedCoverCache
   } from '$lib/offlineCovers';
 
-  let showStartupWarning = false;
+  let showStartupNotice = false;
+  let startupAction: HTMLButtonElement;
+  const STARTUP_NOTICE_KEY = 'lomify_stable_notice_v1';
 
   /** Отложенная сверка лайков. Держим ссылку, чтобы снять её, если окно закрыли раньше. */
   let likesSyncTask: ReturnType<typeof setTimeout> | null = null;
@@ -107,18 +109,23 @@
     });
   }
 
-  function dismissWarning() {
-    showStartupWarning = false;
-    sessionStorage.setItem('lomify_unstable_warning_v2', 'true');
+  function dismissStartupNotice() {
+    showStartupNotice = false;
+    sessionStorage.setItem(STARTUP_NOTICE_KEY, 'true');
   }
 
   // Клавиатура закрывает окно так же, как кнопка: пока оно висит поверх всего, Enter и Esc
   // больше ни на что не назначены, а тянуться к мыши ради одной кнопки незачем.
   function onStartupKeydown(e: KeyboardEvent) {
-    if (!showStartupWarning) return;
+    if (!showStartupNotice) return;
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      startupAction?.focus();
+      return;
+    }
     if (e.key === 'Escape' || e.key === 'Enter') {
       e.preventDefault();
-      dismissWarning();
+      dismissStartupNotice();
     }
   }
 
@@ -241,9 +248,9 @@
       window.addEventListener('focus', refreshYandexLikes);
       document.addEventListener('visibilitychange', refreshYandexLikes);
 
-      const hasSeenWarning = sessionStorage.getItem('lomify_unstable_warning_v2');
-      if (!hasSeenWarning) {
-        showStartupWarning = true;
+      const hasSeenNotice = sessionStorage.getItem(STARTUP_NOTICE_KEY);
+      if (!hasSeenNotice) {
+        showStartupNotice = true;
       }
 
       // Ссылки живут в блоке Tauri выше, а общий cleanup возвращается из onMount ниже.
@@ -299,7 +306,7 @@
 
       // Режим производительности. Снимает самые дорогие эффекты (живое размытие фона под
       // панелями) без потери визуального строя: вместо стекла — плотная тёмная заливка.
-      document.body.setAttribute('data-perf', $settings.perfMode ? 'light' : 'full');
+      document.body.setAttribute('data-perf', $effectivePerformanceMode ? 'light' : 'full');
 
       // Эффекты движения. Атрибут ставится всегда, а не только в положении «выключено»:
       // селектор `body[data-fx-glare="off"]` читается однозначно, а `body:not([data-fx-glare])`
@@ -313,7 +320,7 @@
       // Режим производительности гасит все четыре разом. Именно здесь, а не записью `false` в
       // сами настройки: выбор человека должен вернуться, когда режим выключат, — иначе один
       // тумблер молча стирал бы четыре других, и восстанавливать их пришлось бы руками.
-      const lite = $settings.perfMode === true;
+      const lite = $effectivePerformanceMode;
       const fx = (on: boolean) => (on && !lite ? 'on' : 'off');
       document.body.setAttribute('data-fx-tilt', fx($settings.coverTilt !== false));
       document.body.setAttribute('data-fx-glare', fx($settings.coverGlare !== false));
@@ -371,8 +378,8 @@
 <Titlebar />
 <slot />
 
-{#if showStartupWarning}
-  <div class="startup-veil" role="presentation">
+{#if showStartupNotice}
+  <div class="startup-veil">
     <div
       class="startup-card"
       role="dialog"
@@ -380,37 +387,41 @@
       aria-labelledby="startup-title"
       aria-describedby="startup-text"
     >
-      <span class="startup-halo" aria-hidden="true"></span>
+      <div class="startup-copy">
+        <div class="startup-heading">
+          <span class="startup-icon" aria-hidden="true"><Terminal size={18} /></span>
+          <div class="startup-meta">
+            <span class="startup-build">{APP_NAME} {APP_VERSION}</span>
+            <span class="startup-status"><i></i>{APP_CHANNEL}</span>
+          </div>
+        </div>
 
-      <div class="startup-badge">
-        <Wrench size={12} strokeWidth={2} />
-        <span>{APP_NAME} {APP_VERSION} · {APP_CHANNEL}</span>
+        <h2 id="startup-title" class="display-title startup-title">Версия уже стабильна</h2>
+        <p id="startup-text" class="startup-text">
+          Основные сценарии работают уверенно — можно пользоваться каждый день. Зелёный
+          тег оставили для честности: редкая шероховатость всё ещё возможна.
+        </p>
+
+        <div class="startup-footer">
+          <button
+            class="startup-action"
+            bind:this={startupAction}
+            use:focusOnMount
+            on:click={dismissStartupNotice}
+          >
+            <span>Открыть Lomify</span>
+            <ArrowRight size={17} strokeWidth={2} />
+          </button>
+          <p class="startup-footnote">Один раз за запуск <span>Enter</span></p>
+        </div>
       </div>
-
-      <h2 id="startup-title" class="display-title startup-title">Версия уже почти стабильная</h2>
-      <p id="startup-text" class="startup-text">
-        Основные сценарии уже работают уверенно. Редкий сбой всё ещё возможен — если
-        что-то поведёт себя странно, это повод сообщить о баге, а не сомневаться в себе.
-      </p>
-
-      <button class="startup-action" use:focusOnMount on:click={dismissWarning}>
-        Понял, поехали
-      </button>
-      <p class="startup-footnote">Показывается один раз за запуск</p>
     </div>
   </div>
 {/if}
 
 <style>
-  /* Стартовое окно.
-     Раньше первым, что человек видел при запуске, была жёлтая плашка со знаком опасности —
-     тот же значок, которым системы предупреждают о потере данных. Здесь речь всего лишь о
-     недоделанной сборке, так что смысл остался, а тон снят: значок инструмента в спокойной
-     подложке и строка с версией вместо тревожного цвета.
-
-     Появление вынесено в реальные `@keyframes`: в разметке стояли классы `animate-in
-     fade-in zoom-in` из tailwindcss-animate, а этого плагина в проекте нет — то есть окно
-     не анимировалось вовсе, просто возникало рывком поверх интерфейса. */
+  /* Стартовый статус намеренно спокойнее основного интерфейса: одна компактная панель,
+     обычная иерархия и единственный зелёный акцент на честной пометке канала. */
   .startup-veil {
     position: fixed;
     inset: 0;
@@ -419,138 +430,199 @@
     align-items: center;
     justify-content: center;
     padding: 1rem;
-    background: rgba(0, 0, 0, 0.45);
-    backdrop-filter: blur(14px) saturate(120%);
-    -webkit-backdrop-filter: blur(14px) saturate(120%);
-    animation: startup-veil-in 260ms ease-out both;
+    background: rgba(3, 3, 4, 0.56);
+    backdrop-filter: blur(12px) saturate(108%);
+    -webkit-backdrop-filter: blur(12px) saturate(108%);
+    animation: startup-fade-in 250ms var(--ease-smooth-out) both;
   }
 
   .startup-card {
     position: relative;
     overflow: hidden;
-    width: 100%;
-    max-width: 27rem;
-    padding: 2rem;
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    border-radius: 1.75rem;
-    background: linear-gradient(
-      168deg,
-      rgba(255, 255, 255, 0.085) 0%,
-      rgba(255, 255, 255, 0.035) 55%,
-      rgba(255, 255, 255, 0.05) 100%
-    );
-    border: 1px solid rgba(255, 255, 255, 0.09);
+    width: min(31rem, 100%);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 1.5rem;
+    background: linear-gradient(155deg, rgba(29, 28, 31, 0.97), rgba(17, 16, 19, 0.97));
     box-shadow:
-      0 34px 90px rgba(0, 0, 0, 0.5),
-      inset 0 1px 0 rgba(255, 255, 255, 0.07);
-    backdrop-filter: blur(22px) saturate(150%);
-    -webkit-backdrop-filter: blur(22px) saturate(150%);
-    animation: startup-card-in 340ms cubic-bezier(0.16, 1, 0.3, 1) both;
+      0 24px 72px rgba(0, 0, 0, 0.48),
+      inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    animation: startup-card-in 250ms var(--ease-smooth-out) both;
   }
 
-  /* Акцент темы (он же следует за обложкой) — единственное цветное пятно в окне, и оно
-     светит из-за края, а не заливает значок. */
-  .startup-halo {
+  .startup-card::before {
+    content: '';
     position: absolute;
-    top: -45%;
-    left: 50%;
-    width: 130%;
-    height: 90%;
-    transform: translateX(-50%);
+    inset: 0 12% auto;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.18), transparent);
     pointer-events: none;
-    background: radial-gradient(
-      50% 50% at 50% 50%,
-      color-mix(in srgb, var(--color-primary, #ffffff) 26%, transparent) 0%,
-      transparent 70%
-    );
-    opacity: 0.55;
   }
 
-  .startup-badge {
-    position: relative;
+  .startup-copy {
+    padding: 1.85rem;
+  }
+
+  .startup-heading {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    margin-bottom: 1.45rem;
+  }
+
+  .startup-icon {
+    width: 2.55rem;
+    height: 2.55rem;
+    flex: 0 0 auto;
     display: inline-flex;
     align-items: center;
-    gap: 0.4rem;
-    padding: 0.3rem 0.65rem 0.3rem 0.5rem;
-    margin-bottom: 1.35rem;
+    justify-content: center;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 0.85rem;
+    background: rgba(255, 255, 255, 0.045);
+    color: rgba(255, 255, 255, 0.58);
+  }
+
+  .startup-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+  }
+
+  .startup-build,
+  .startup-status {
+    display: inline-flex;
+    align-items: center;
+    min-height: 1.5rem;
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.055);
-    border: 1px solid rgba(255, 255, 255, 0.075);
-    color: rgba(255, 255, 255, 0.5);
-    font-size: 11.5px;
-    letter-spacing: 0.01em;
+    font: 600 10px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+    letter-spacing: 0.035em;
     white-space: nowrap;
   }
 
-  .startup-title {
-    position: relative;
-    margin-bottom: 0.6rem;
-  }
-
-  .startup-text {
-    position: relative;
-    margin-bottom: 1.6rem;
-    font-size: 13.5px;
-    line-height: 1.65;
+  .startup-build {
+    padding: 0.28rem 0.58rem;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.03);
     color: rgba(255, 255, 255, 0.48);
   }
 
-  .startup-action {
-    position: relative;
-    width: 100%;
-    padding: 0.85rem 0;
-    border-radius: 0.85rem;
-    background: rgba(255, 255, 255, 0.94);
-    color: #000;
-    font-size: 14px;
-    font-weight: 500;
-    transition:
-      background 150ms ease,
-      transform 150ms ease;
+  .startup-status {
+    gap: 0.38rem;
+    padding: 0.28rem 0.6rem;
+    border: 1px solid rgba(113, 241, 151, 0.18);
+    background: rgba(93, 222, 131, 0.075);
+    color: rgba(156, 243, 182, 0.78);
   }
 
-  .startup-action:hover {
-    background: #fff;
+  .startup-status i {
+    width: 0.38rem;
+    height: 0.38rem;
+    border-radius: 50%;
+    background: #72ea96;
+    box-shadow: 0 0 0.5rem rgba(114, 234, 150, 0.38);
+  }
+
+  .startup-title {
+    margin: 0 0 0.85rem;
+    color: rgba(255, 255, 255, 0.9);
+    font-size: clamp(1.75rem, 4vw, 2.15rem);
+    line-height: 1.06;
+    letter-spacing: -0.035em;
+  }
+
+  .startup-text {
+    max-width: 56ch;
+    margin: 0 0 1.55rem;
+    color: rgba(255, 255, 255, 0.46);
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  .startup-footer {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .startup-action {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.85rem 1rem 0.85rem 1.05rem;
+    border: 1px solid rgba(255, 255, 255, 0.11);
+    border-radius: 0.9rem;
+    background: rgba(255, 255, 255, 0.075);
+    color: rgba(255, 255, 255, 0.86);
+    font-size: 13px;
+    font-weight: 650;
+    transition:
+      background-color 150ms ease,
+      border-color 150ms ease,
+      transform 160ms var(--ease-smooth-out);
   }
 
   .startup-action:active {
-    transform: scale(0.99);
+    transform: scale(0.97);
   }
 
   .startup-action:focus-visible {
-    outline: 2px solid rgba(255, 255, 255, 0.35);
-    outline-offset: 2px;
+    outline: 2px solid rgba(255, 255, 255, 0.28);
+    outline-offset: 3px;
   }
 
   .startup-footnote {
-    position: relative;
-    width: 100%;
-    margin-top: 0.85rem;
-    text-align: center;
-    font-size: 11px;
-    color: rgba(255, 255, 255, 0.28);
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    color: rgba(255, 255, 255, 0.3);
+    font-size: 10.5px;
+    white-space: nowrap;
   }
 
-  @keyframes startup-veil-in {
-    from {
-      opacity: 0;
+  .startup-footnote span {
+    padding: 0.25rem 0.38rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.35rem;
+    color: rgba(255, 255, 255, 0.46);
+    font: 600 9px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+    text-transform: uppercase;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .startup-action:hover {
+      border-color: rgba(255, 255, 255, 0.17);
+      background: rgba(255, 255, 255, 0.11);
     }
+  }
+
+  @keyframes startup-fade-in {
+    from { opacity: 0; }
   }
 
   @keyframes startup-card-in {
     from {
       opacity: 0;
-      transform: translateY(10px) scale(0.975);
+      transform: scale(0.96);
     }
   }
 
-  /* Уважаем системную просьбу «без анимаций»: окно всё равно должно появиться. */
+  @media (max-width: 560px) {
+    .startup-veil { padding: 0.75rem; }
+    .startup-card { border-radius: 1.25rem; }
+    .startup-copy { padding: 1.45rem; }
+    .startup-title { font-size: 1.75rem; }
+    .startup-footer { align-items: stretch; flex-direction: column; }
+    .startup-action { width: 100%; }
+    .startup-footnote { justify-content: center; }
+  }
+
   @media (prefers-reduced-motion: reduce) {
-    .startup-veil,
     .startup-card {
-      animation-duration: 1ms;
+      animation: startup-fade-in 180ms var(--ease-smooth-out) both;
     }
+
   }
 </style>
