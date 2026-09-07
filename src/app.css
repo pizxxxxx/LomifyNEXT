@@ -4509,6 +4509,11 @@ body[data-design="aurora"] .track-row-card > .track-status {
   border-radius: 1.2rem;
 }
 
+.library-track-tile::before,
+.library-track-tile::after {
+  display: none !important;
+}
+
 .library-track-tile.has-open-menu {
   z-index: 100;
 }
@@ -4520,7 +4525,7 @@ body[data-design="aurora"] .track-row-card > .track-status {
 
 .library-track-tile > .tile-art {
   margin-bottom: 0.7rem;
-  overflow: visible;
+  overflow: hidden;
 }
 
 .library-tile-art-clip {
@@ -4529,34 +4534,6 @@ body[data-design="aurora"] .track-row-card > .track-status {
   overflow: hidden;
   border-radius: inherit;
   background: inherit;
-}
-
-/* В плитке медиатеки наклоняется только визуальная плоскость обложки. Нижняя панель
-   действий остаётся в неподвижном слое `.tile-art`: так её hit-area не уезжает вслед за
-   perspective-transform и все четыре кнопки надёжно нажимаются даже на сильном наклоне. */
-[data-tilt].library-track-tile > .tile-art {
-  transform: none;
-  will-change: auto;
-}
-
-[data-tilt].library-track-tile .library-tile-art-clip {
-  transform: perspective(var(--tilt-perspective))
-             translateZ(var(--tilt-lift, 0px))
-             rotateX(var(--tilt-rx, 0deg))
-             rotateY(var(--tilt-ry, 0deg));
-  will-change: transform;
-}
-
-body[data-fx-tilt="off"] [data-tilt].library-track-tile .library-tile-art-clip {
-  transform: none;
-  will-change: auto;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  [data-tilt].library-track-tile .library-tile-art-clip {
-    transform: none;
-    will-change: auto;
-  }
 }
 
 .library-tile-art-empty {

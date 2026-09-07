@@ -926,12 +926,28 @@
               <div class="setting-title">Треки слева</div>
               <div class="setting-hint">Списки треков прижимаются к левому краю. Остальной интерфейс не двигается.</div>
             </div>
-            <button
+              <button
               aria-label="Левосторонний список треков"
               role="switch"
               aria-checked={$settings.leftAlignTracks}
               class="switch"
               on:click={() => $settings.leftAlignTracks = !$settings.leftAlignTracks}
+            >
+              <span class="switch-knob"></span>
+            </button>
+          </div>
+
+          <div class="setting-row mt-3">
+            <div>
+              <div class="setting-title">Окно приветствия при запуске</div>
+              <div class="setting-hint">Показывать стартовое окно со статусом версии при открытии приложения.</div>
+            </div>
+            <button
+              aria-label="Окно приветствия при запуске"
+              role="switch"
+              aria-checked={$settings.showStartupNotice !== false}
+              class="switch"
+              on:click={() => $settings.showStartupNotice = $settings.showStartupNotice === false ? true : false}
             >
               <span class="switch-knob"></span>
             </button>
@@ -1641,6 +1657,23 @@
             aria-checked={autostartEnabled}
             class="switch"
             on:click={toggleAutostart}
+          >
+            <span class="switch-knob"></span>
+          </button>
+        </div>
+
+        <!-- Startup Notice -->
+        <div class="plate p-8 settings-system-row">
+          <div>
+            <h3 class="section-title">Окно приветствия при запуске</h3>
+            <p class="setting-hint !mt-2">Показывать стартовое окно со статусом версии при открытии приложения.</p>
+          </div>
+          <button
+            aria-label="Окно приветствия при запуске"
+            role="switch"
+            aria-checked={$settings.showStartupNotice !== false}
+            class="switch"
+            on:click={() => $settings.showStartupNotice = $settings.showStartupNotice === false ? true : false}
           >
             <span class="switch-knob"></span>
           </button>

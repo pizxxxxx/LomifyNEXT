@@ -32,7 +32,8 @@ const FFT_SIZE: usize = 2048;
 const RING_CAPACITY: usize = 4096;
 const FFT_INTERVAL_MS: u64 = 33;
 pub const NUM_BINS: usize = 64;
-const MIN_FREQ_HZ: f32 = 50.0;
+const MIN_FREQ_HZ: f32 = 20.0;
+const MAX_FREQ_HZ: f32 = 20_000.0;
 
 pub struct AnalyserBuffer {
     samples: Mutex<VecDeque<f32>>,
@@ -222,40 +223,51 @@ fn run_fft_loop(app: AppHandle, buffer: Arc<AnalyserBuffer>) {
         let sample_rate = buffer.sample_rate.load(Ordering::Relaxed) as f32;
         let nyquist = (sample_rate * 0.5).max(1.0);
         let mag_count = FFT_SIZE / 2;
-
-        let log_min = MIN_FREQ_HZ.ln();
-        let log_max = nyquist.ln();
-        let log_range = (log_max - log_min).max(1e-3);
-
-        // Bin-bucketing: distribute FFT magnitudes into log-spaced bins, take max.
-        //
-        // The 50 Hz bin and its neighbours all land in display bin 0, so bass used to read as
-        // a couple of bars no matter how much low end the track had. Splitting magnitude
-        // across the two bins around the exact log position smooths the staircase: an
-        // intermediate component now fills in the gap between neighbours instead of being
-        // dropped into only one of them.
         let spread = (FFT_SIZE as f32 / 1024.0).max(1.0);
+
+        // Bin-bucketing: map FFT magnitudes into 64 log-spaced display bands from
+        // sub-bass (MIN_FREQ_HZ ≈ 20 Hz) to Nyquist/20kHz without dead gaps.
+        //
+        // Low frequencies (where FFT resolution is coarse) interpolate smoothly between
+        // adjacent FFT bins, ensuring display bins 0 and 1 receive real sub-bass energy.
+        // High frequencies take the peak magnitude across all FFT bins in the band.
+        let min_freq = MIN_FREQ_HZ;
+        let max_freq = nyquist.min(MAX_FREQ_HZ);
+        let bin_hz = (nyquist / mag_count as f32).max(1.0); // ~21.5 Hz per bin at 44.1kHz
+        let log_ratio = (max_freq / min_freq).ln();
+
+        let mut mags = vec![0.0f32; mag_count];
+        for i in 1..mag_count {
+            let c = fft_buf[i];
+            mags[i] = (c.re * c.re + c.im * c.im).sqrt() * spread;
+        }
+
         let mut bins = vec![0.0f32; NUM_BINS];
-        let nbins_minus_1 = (NUM_BINS - 1) as f32;
-        for (i, c) in fft_buf.iter().take(mag_count).enumerate() {
-            let freq = (i as f32) * nyquist / (mag_count as f32);
-            if freq < MIN_FREQ_HZ {
-                continue;
+        for k in 0..NUM_BINS {
+            let t0 = k as f32 / NUM_BINS as f32;
+            let t1 = (k + 1) as f32 / NUM_BINS as f32;
+            let f0 = min_freq * (t0 * log_ratio).exp();
+            let f1 = min_freq * (t1 * log_ratio).exp();
+
+            let idx0 = (f0 / bin_hz).clamp(1.0, (mag_count - 1) as f32);
+            let idx1 = (f1 / bin_hz).clamp(1.0, (mag_count - 1) as f32);
+
+            let i_start = idx0.floor() as usize;
+            let i_end = (idx1.ceil() as usize).max(i_start + 1);
+
+            let mut peak = 0.0f32;
+            if i_end - i_start <= 1 {
+                let i0 = i_start.min(mag_count - 2);
+                let frac = idx0 - i0 as f32;
+                peak = mags[i0] * (1.0 - frac) + mags[i0 + 1] * frac;
+            } else {
+                for i in i_start..=i_end.min(mag_count - 1) {
+                    if mags[i] > peak {
+                        peak = mags[i];
+                    }
+                }
             }
-            let log_freq = freq.ln();
-            let pos = ((log_freq - log_min) / log_range).clamp(0.0, 1.0) * nbins_minus_1;
-            let idx = pos as usize;
-            let frac = pos - idx as f32;
-            let mag = (c.re * c.re + c.im * c.im).sqrt() * spread;
-            let mag_up = mag / (1.0 + frac);
-            let mag_down = mag - mag_up;
-            let k = idx.min(NUM_BINS - 1);
-            if mag_up > bins[k] {
-                bins[k] = mag_up;
-            }
-            if frac > 0.001 && k + 1 < NUM_BINS && mag_down > bins[k + 1] {
-                bins[k + 1] = mag_down;
-            }
+            bins[k] = peak;
         }
 
         // Log-compress + normalize + smooth with previous frame.

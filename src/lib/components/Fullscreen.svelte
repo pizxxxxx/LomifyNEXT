@@ -122,12 +122,12 @@
         ctx.clearRect(0, 0, width, height);
 
         const barCount = bins.length;
-        const barWidth = (width / barCount);
-        // Небольшая рамка по краям и тонкие щели между полосами, чтобы они не сливались
-        // в сплошную белую полосу: визуализатор — фон, а не «огни сцены».
+        // Симметричные отступы по краям и равномерный шаг полос
         const gx = width * 0.015;
         const gw = Math.max(24, width * 0.97);
-        const barW = Math.max(3, (gw / barCount) * 0.68);
+        const barStep = gw / barCount;
+        const barW = Math.max(3, barStep * 0.68);
+        const slotOffset = (barStep - barW) * 0.5;
 
         // Вертикальный градиент: прозрачный низ, лёгкий белый к середине, почти прозрачный
         // верх. Никакого акцентного свечения — мягкие столбики, растворяющиеся кверху.
@@ -142,15 +142,12 @@
         ctx.fillStyle = vizGrad!;
 
         for (let i = 0; i < barCount; i++) {
-          // Полосы приходят долями единицы, а не байтами (см. lib/fft.ts). Здесь стояло
-          // деление на 255 — то есть высота каждого столбика выходила меньше пикселя, и
-          // визуализация в полном экране была ровным пустым местом всё это время.
           const v = bins[i];
           // Слегка степенная кривая: удары выстреливают, тихий фон оседает.
           const intensity = Math.pow(v, 1.4);
-          const barHeight = intensity * height * 0.34;
+          const barHeight = Math.max(2, intensity * height * 0.34);
 
-          const x = gx + i * barWidth;
+          const x = gx + i * barStep + slotOffset;
           const rad = Math.min(barW * 0.5, 10);
 
           ctx.beginPath();

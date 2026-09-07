@@ -140,6 +140,8 @@ const defaultSettings = {
    */
   crossfadeMs: 6000,
   enableDiscordRpc: true,
+  /** Показывать стартовое информационное окно со статусом версии при запуске приложения. */
+  showStartupNotice: true,
   showLyricsByDefault: false,
   enableHoverPreview: true,
   hoverPreviewDelay: 1000,

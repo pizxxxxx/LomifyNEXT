@@ -3,7 +3,7 @@
   import { settings, initStore, currentTrack, effectivePerformanceMode } from '$lib/stores';
   import Titlebar from '$lib/components/Titlebar.svelte';
   import { onMount } from 'svelte';
-  import { ArrowRight, Terminal } from 'lucide-svelte';
+  import { ArrowRight, Check, Sparkles, X } from 'lucide-svelte';
   import { APP_CHANNEL, APP_NAME, APP_VERSION } from '$lib/version';
   import { extractCoverAccent, rgbToHex } from '$lib/utils/coverAccent';
   import { lockDevTools } from '$lib/utils/devLock';
@@ -17,6 +17,7 @@
   } from '$lib/offlineCovers';
 
   let showStartupNotice = false;
+  let dontShowAgain = false;
   let startupAction: HTMLButtonElement;
   const STARTUP_NOTICE_KEY = 'lomify_stable_notice_v1';
 
@@ -112,6 +113,9 @@
   function dismissStartupNotice() {
     showStartupNotice = false;
     sessionStorage.setItem(STARTUP_NOTICE_KEY, 'true');
+    if (dontShowAgain && $settings.showStartupNotice !== false) {
+      $settings.showStartupNotice = false;
+    }
   }
 
   // Клавиатура закрывает окно так же, как кнопка: пока оно висит поверх всего, Enter и Esc
@@ -249,7 +253,7 @@
       document.addEventListener('visibilitychange', refreshYandexLikes);
 
       const hasSeenNotice = sessionStorage.getItem(STARTUP_NOTICE_KEY);
-      if (!hasSeenNotice) {
+      if (!hasSeenNotice && $settings.showStartupNotice !== false) {
         showStartupNotice = true;
       }
 
@@ -387,20 +391,40 @@
       aria-labelledby="startup-title"
       aria-describedby="startup-text"
     >
+      <button
+        class="startup-close"
+        on:click={dismissStartupNotice}
+        aria-label="Закрыть"
+        title="Закрыть (Esc)"
+      >
+        <X size={17} />
+      </button>
+
       <div class="startup-copy">
         <div class="startup-heading">
-          <span class="startup-icon" aria-hidden="true"><Terminal size={18} /></span>
+          <div class="startup-icon" aria-hidden="true">
+            <Sparkles size={18} />
+          </div>
           <div class="startup-meta">
             <span class="startup-build">{APP_NAME} {APP_VERSION}</span>
             <span class="startup-status"><i></i>{APP_CHANNEL}</span>
           </div>
         </div>
 
-        <h2 id="startup-title" class="display-title startup-title">Версия уже стабильна</h2>
+        <h2 id="startup-title" class="startup-title">LomifyNEXT готов к работе</h2>
         <p id="startup-text" class="startup-text">
-          Основные сценарии работают уверенно — можно пользоваться каждый день. Зелёный
-          тег оставили для честности: редкая шероховатость всё ещё возможна.
+          Ваш персональный плеер с непрерывным воспроизведением, чистым звуком и быстрой синхронизацией треков.
         </p>
+
+        <label class="startup-checkbox-label">
+          <span class="startup-checkbox-box" class:checked={dontShowAgain}>
+            {#if dontShowAgain}
+              <Check size={12} strokeWidth={3} />
+            {/if}
+          </span>
+          <input type="checkbox" bind:checked={dontShowAgain} class="startup-checkbox-input" />
+          <span>Больше не показывать при запуске</span>
+        </label>
 
         <div class="startup-footer">
           <button
@@ -409,10 +433,10 @@
             use:focusOnMount
             on:click={dismissStartupNotice}
           >
-            <span>Открыть Lomify</span>
-            <ArrowRight size={17} strokeWidth={2} />
+            <span>Начать прослушивание</span>
+            <ArrowRight size={17} strokeWidth={2.2} />
           </button>
-          <p class="startup-footnote">Один раз за запуск <span>Enter</span></p>
+          <p class="startup-footnote"><span>Enter</span> для входа</p>
         </div>
       </div>
     </div>
@@ -420,8 +444,6 @@
 {/if}
 
 <style>
-  /* Стартовый статус намеренно спокойнее основного интерфейса: одна компактная панель,
-     обычная иерархия и единственный зелёный акцент на честной пометке канала. */
   .startup-veil {
     position: fixed;
     inset: 0;
@@ -429,57 +451,114 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 1rem;
-    background: rgba(3, 3, 4, 0.56);
-    backdrop-filter: blur(12px) saturate(108%);
-    -webkit-backdrop-filter: blur(12px) saturate(108%);
-    animation: startup-fade-in 250ms var(--ease-smooth-out) both;
+    padding: 1.25rem;
+    background: rgba(4, 4, 6, 0.65);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    animation: startup-fade-in 220ms var(--ease-smooth-out) both;
   }
 
   .startup-card {
     position: relative;
     overflow: hidden;
-    width: min(31rem, 100%);
+    width: min(29rem, 100%);
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 1.5rem;
-    background: linear-gradient(155deg, rgba(29, 28, 31, 0.97), rgba(17, 16, 19, 0.97));
+    background: linear-gradient(155deg, rgba(22, 22, 28, 0.95), rgba(12, 12, 16, 0.97));
     box-shadow:
-      0 24px 72px rgba(0, 0, 0, 0.48),
-      inset 0 1px 0 rgba(255, 255, 255, 0.06);
-    animation: startup-card-in 250ms var(--ease-smooth-out) both;
+      0 24px 72px rgba(0, 0, 0, 0.65),
+      0 4px 16px rgba(0, 0, 0, 0.4),
+      inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    animation: startup-card-in 260ms var(--ease-smooth-out) both;
+    font-family: var(--font-ui);
   }
 
   .startup-card::before {
     content: '';
     position: absolute;
-    inset: 0 12% auto;
+    inset: 0 10% auto;
     height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.18), transparent);
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
     pointer-events: none;
   }
 
+  .startup-card::after {
+    content: '';
+    position: absolute;
+    top: -30px;
+    left: 20%;
+    width: 160px;
+    height: 90px;
+    background: var(--color-primary, #1DB954);
+    opacity: 0.12;
+    filter: blur(40px);
+    pointer-events: none;
+    border-radius: 50%;
+  }
+
+  .startup-close {
+    position: absolute;
+    top: 1.2rem;
+    right: 1.2rem;
+    z-index: 2;
+    width: 2rem;
+    height: 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(255, 255, 255, 0.45);
+    cursor: pointer;
+    transition:
+      background-color 150ms ease,
+      color 150ms ease,
+      border-color 150ms ease,
+      transform 150ms ease;
+  }
+
+  .startup-close:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.9);
+    border-color: rgba(255, 255, 255, 0.2);
+    transform: scale(1.05);
+  }
+
+  .startup-close:active {
+    transform: scale(0.95);
+  }
+
+  .startup-close:focus-visible {
+    outline: 2px solid rgba(255, 255, 255, 0.35);
+    outline-offset: 2px;
+  }
+
   .startup-copy {
+    position: relative;
+    z-index: 1;
     padding: 1.85rem;
   }
 
   .startup-heading {
     display: flex;
     align-items: center;
-    gap: 0.8rem;
-    margin-bottom: 1.45rem;
+    gap: 0.85rem;
+    margin-bottom: 1.25rem;
   }
 
   .startup-icon {
-    width: 2.55rem;
-    height: 2.55rem;
+    width: 2.5rem;
+    height: 2.5rem;
     flex: 0 0 auto;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border: 1px solid rgba(255, 255, 255, 0.09);
-    border-radius: 0.85rem;
-    background: rgba(255, 255, 255, 0.045);
-    color: rgba(255, 255, 255, 0.58);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 0.8rem;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02));
+    color: var(--color-primary, #1DB954);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
   }
 
   .startup-meta {
@@ -489,59 +568,117 @@
     gap: 0.45rem;
   }
 
-  .startup-build,
+  .startup-build {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.22rem 0.58rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 11px;
+    font-weight: 600;
+  }
+
   .startup-status {
     display: inline-flex;
     align-items: center;
-    min-height: 1.5rem;
+    gap: 0.35rem;
+    padding: 0.22rem 0.58rem;
+    border: 1px solid rgba(29, 185, 84, 0.28);
     border-radius: 999px;
-    font: 600 10px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
-    letter-spacing: 0.035em;
-    white-space: nowrap;
-  }
-
-  .startup-build {
-    padding: 0.28rem 0.58rem;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(255, 255, 255, 0.03);
-    color: rgba(255, 255, 255, 0.48);
-  }
-
-  .startup-status {
-    gap: 0.38rem;
-    padding: 0.28rem 0.6rem;
-    border: 1px solid rgba(113, 241, 151, 0.18);
-    background: rgba(93, 222, 131, 0.075);
-    color: rgba(156, 243, 182, 0.78);
+    background: rgba(29, 185, 84, 0.09);
+    color: #4ade80;
+    font-size: 11px;
+    font-weight: 600;
   }
 
   .startup-status i {
-    width: 0.38rem;
-    height: 0.38rem;
+    width: 0.35rem;
+    height: 0.35rem;
     border-radius: 50%;
-    background: #72ea96;
-    box-shadow: 0 0 0.5rem rgba(114, 234, 150, 0.38);
+    background: var(--color-primary, #1DB954);
+    box-shadow: 0 0 0.45rem color-mix(in srgb, var(--color-primary, #1DB954) 60%, transparent);
   }
 
   .startup-title {
-    margin: 0 0 0.85rem;
-    color: rgba(255, 255, 255, 0.9);
-    font-size: clamp(1.75rem, 4vw, 2.15rem);
-    line-height: 1.06;
-    letter-spacing: -0.035em;
+    margin: 0 0 0.55rem;
+    color: rgba(255, 255, 255, 0.95);
+    font-size: 1.45rem;
+    font-weight: 700;
+    letter-spacing: -0.025em;
+    line-height: 1.25;
   }
 
   .startup-text {
-    max-width: 56ch;
-    margin: 0 0 1.55rem;
-    color: rgba(255, 255, 255, 0.46);
+    margin: 0 0 1.25rem;
+    color: rgba(255, 255, 255, 0.55);
     font-size: 13px;
-    line-height: 1.6;
+    line-height: 1.55;
+  }
+
+  .startup-checkbox-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.65rem;
+    margin-bottom: 1.35rem;
+    cursor: pointer;
+    user-select: none;
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 13px;
+    transition: color 150ms ease;
+  }
+
+  .startup-checkbox-label:hover {
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .startup-checkbox-box {
+    width: 1.2rem;
+    height: 1.2rem;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 0.38rem;
+    background: rgba(255, 255, 255, 0.05);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #ffffff;
+    transition:
+      background-color 150ms ease,
+      border-color 150ms ease,
+      box-shadow 150ms ease,
+      transform 120ms ease;
+    flex-shrink: 0;
+  }
+
+  .startup-checkbox-label:hover .startup-checkbox-box {
+    border-color: rgba(255, 255, 255, 0.38);
+    background: rgba(255, 255, 255, 0.09);
+  }
+
+  .startup-checkbox-label:active .startup-checkbox-box {
+    transform: scale(0.92);
+  }
+
+  .startup-checkbox-box.checked {
+    background: var(--color-primary, #1DB954);
+    border-color: var(--color-primary, #1DB954);
+    color: #ffffff;
+    box-shadow: 0 0 12px color-mix(in srgb, var(--color-primary, #1DB954) 50%, transparent);
+  }
+
+  .startup-checkbox-input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+    pointer-events: none;
   }
 
   .startup-footer {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 1rem;
   }
 
@@ -549,19 +686,30 @@
     flex: 1;
     display: inline-flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 0.85rem 1rem 0.85rem 1.05rem;
-    border: 1px solid rgba(255, 255, 255, 0.11);
+    justify-content: center;
+    gap: 0.65rem;
+    padding: 0.78rem 1.25rem;
+    border: 1px solid rgba(255, 255, 255, 0.14);
     border-radius: 0.9rem;
-    background: rgba(255, 255, 255, 0.075);
-    color: rgba(255, 255, 255, 0.86);
-    font-size: 13px;
-    font-weight: 650;
+    background: var(--color-primary, #1DB954);
+    color: #ffffff;
+    font-size: 13.5px;
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow:
+      0 4px 16px rgba(0, 0, 0, 0.3),
+      0 0 16px -4px color-mix(in srgb, var(--color-primary, #1DB954) 55%, transparent);
     transition:
-      background-color 150ms ease,
-      border-color 150ms ease,
+      filter 150ms ease,
+      box-shadow 150ms ease,
       transform 160ms var(--ease-smooth-out);
+  }
+
+  .startup-action:hover {
+    filter: brightness(1.12);
+    box-shadow:
+      0 6px 22px rgba(0, 0, 0, 0.4),
+      0 0 22px -2px color-mix(in srgb, var(--color-primary, #1DB954) 75%, transparent);
   }
 
   .startup-action:active {
@@ -569,33 +717,27 @@
   }
 
   .startup-action:focus-visible {
-    outline: 2px solid rgba(255, 255, 255, 0.28);
-    outline-offset: 3px;
+    outline: 2px solid rgba(255, 255, 255, 0.45);
+    outline-offset: 2px;
   }
 
   .startup-footnote {
     display: flex;
     align-items: center;
-    gap: 0.45rem;
-    color: rgba(255, 255, 255, 0.3);
-    font-size: 10.5px;
+    gap: 0.4rem;
+    color: rgba(255, 255, 255, 0.35);
+    font-size: 11px;
     white-space: nowrap;
   }
 
   .startup-footnote span {
-    padding: 0.25rem 0.38rem;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 0.2rem 0.4rem;
+    border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 0.35rem;
-    color: rgba(255, 255, 255, 0.46);
-    font: 600 9px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
-    text-transform: uppercase;
-  }
-
-  @media (hover: hover) and (pointer: fine) {
-    .startup-action:hover {
-      border-color: rgba(255, 255, 255, 0.17);
-      background: rgba(255, 255, 255, 0.11);
-    }
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(255, 255, 255, 0.65);
+    font-size: 10px;
+    font-weight: 600;
   }
 
   @keyframes startup-fade-in {
@@ -605,7 +747,7 @@
   @keyframes startup-card-in {
     from {
       opacity: 0;
-      transform: scale(0.96);
+      transform: scale(0.95);
     }
   }
 
@@ -613,7 +755,7 @@
     .startup-veil { padding: 0.75rem; }
     .startup-card { border-radius: 1.25rem; }
     .startup-copy { padding: 1.45rem; }
-    .startup-title { font-size: 1.75rem; }
+    .startup-title { font-size: 1.25rem; }
     .startup-footer { align-items: stretch; flex-direction: column; }
     .startup-action { width: 100%; }
     .startup-footnote { justify-content: center; }
@@ -623,6 +765,5 @@
     .startup-card {
       animation: startup-fade-in 180ms var(--ease-smooth-out) both;
     }
-
   }
 </style>

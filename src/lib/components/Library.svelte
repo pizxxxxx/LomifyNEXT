@@ -911,8 +911,8 @@
                 class:has-open-menu={activeTrackMenu?.row === i}
                 on:click={() => playTrackList(track, $likedTracks)}
               >
-                <div class="tile-art" class:is-active={isActive}>
-                  <div class="library-tile-art-clip spec-art">
+                <div class="tile-art spec-art" class:is-active={isActive}>
+                  <div class="library-tile-art-clip">
                     {#if track.coverUrl}
                       <img src={coverUrlForTrack(track, $downloadedCoverCache)} alt="" class="tile-cover-image" loading="lazy" decoding="async" />
                     {:else}
