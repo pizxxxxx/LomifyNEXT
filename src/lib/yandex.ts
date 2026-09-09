@@ -852,7 +852,7 @@ export const WAVE_STATION = 'user:onyourwave';
  */
 const WAVE_FROM = 'radio-web-user_onyourwave-default';
 
-export type YandexWaveEvent = 'radioStarted' | 'trackStarted' | 'trackFinished' | 'skip';
+export type YandexWaveEvent = 'radioStarted' | 'trackStarted' | 'trackFinished' | 'skip' | 'trackDisliked';
 
 export interface YandexWaveBatch {
   /** Идентификатор порции. Уходит обратно в отметках о треках из неё. */
@@ -1220,6 +1220,49 @@ export async function yandexSetLikes(
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ 'track-ids': chunk.join(',') }).toString(),
     });
+  }
+}
+
+/**
+ * Поставить или снять отметку «Не рекомендовать» (дизлайк) в аккаунте Яндекс Музыки.
+ */
+export async function yandexSetDislikes(
+  rawToken: string,
+  trackIds: (string | number)[],
+  disliked: boolean
+): Promise<void> {
+  const token = normalizeYandexToken(rawToken);
+  const ids = trackIds.map((id) => `${id ?? ''}`.trim()).filter(Boolean);
+  if (!token || ids.length === 0) return;
+
+  const uid = await accountUid(token);
+  const action = disliked ? 'add-multiple' : 'remove';
+
+  for (let i = 0; i < ids.length; i += 100) {
+    const chunk = ids.slice(i, i + 100);
+    await ymJson(`${API}/users/${uid}/dislikes/tracks/${action}`, token, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ 'track-ids': chunk.join(',') }).toString(),
+    });
+  }
+}
+
+/**
+ * Получить список идентификаторов скрытых треков (дизлайков) из аккаунта Яндекс Музыки.
+ */
+export async function getYandexDislikes(rawToken: string): Promise<string[]> {
+  const token = normalizeYandexToken(rawToken);
+  if (!token) return [];
+  const uid = await accountUid(token);
+  try {
+    const data = await ymJson(`${API}/users/${uid}/dislikes/tracks`, token);
+    return (data?.library?.tracks ?? [])
+      .map((t: any) => `${t?.id ?? ''}`.trim())
+      .filter(Boolean);
+  } catch (e) {
+    console.warn('[yandex] не удалось получить дизлайки аккаунта', e);
+    return [];
   }
 }
 

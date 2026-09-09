@@ -38,7 +38,7 @@
  */
 
 import { get } from 'svelte/store';
-import { likedTracks, settings, notify } from './stores';
+import { likedTracks, dislikedTracks, settings, notify } from './stores';
 import { withCount } from './utils/plural';
 
 type SourceKey = 'yandex' | 'soundcloud';
@@ -140,6 +140,15 @@ export function setTrackLiked(track: any, liked: boolean): void {
     if (matches.length > 0) return;
     likedTracks.set([track, ...list]);
     rememberIntent(track, true);
+    const disliked = get(dislikedTracks);
+    if (disliked.some((t) => sameTrack(t, track))) {
+      dislikedTracks.set(disliked.filter((t) => !sameTrack(t, track)));
+      const token = get(settings).yandexToken;
+      const id = trackId(track);
+      if (token && id && (track.source === 'yandex' || track.service === 'yandex' || !track.source)) {
+        import('./yandex').then(({ yandexSetDislikes }) => yandexSetDislikes(token, [id], false)).catch(() => {});
+      }
+    }
     return;
   }
 

@@ -377,6 +377,7 @@
            in the page rather than painted over cards. -->
       <GlyphWake
         enabled={$settings.glyphWake !== false && !$effectivePerformanceMode && $currentView !== 'fullscreen'}
+        mode={$settings.glyphWakeMode || 'classic'}
         scrollOffset={mainScrollTop}
       />
     </div>

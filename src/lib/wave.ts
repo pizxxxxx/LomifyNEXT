@@ -19,7 +19,8 @@
  */
 
 import { writable, get } from 'svelte/store';
-import { settings, queue, currentTrack, isPlaying, notify } from './stores';
+import { settings, queue, currentTrack, isPlaying, notify, dislikedTracks } from './stores';
+import { isTrackDisliked } from './dislikes';
 import { yandexWaveBatch, yandexWaveFeedback } from './yandex';
 import {
   describeWaveFilters,
@@ -109,12 +110,14 @@ async function filteredWaveBatch(
 ): Promise<FilteredWaveBatch> {
   const filterState = get(settings);
   const filtered = hasWaveFilters(filterState);
+  const currentDisliked = get(dislikedTracks);
+  const hasDislikes = currentDisliked.length > 0;
   const tracks: any[] = [];
   const seen = new Set<string>();
   let latestBatchId = '';
   let cursor = `${prevTrackId ?? ''}`.trim();
 
-  const scanBatches = filtered || sessionOccurrences.size > 0 ? FILTER_SCAN_BATCHES : 1;
+  const scanBatches = filtered || sessionOccurrences.size > 0 || hasDislikes ? FILTER_SCAN_BATCHES : 1;
   for (let attempt = 0; attempt < scanBatches; attempt++) {
     const batch = await yandexWaveBatch(rawToken, cursor || undefined);
     latestBatchId = batch.batchId || latestBatchId;
@@ -127,6 +130,7 @@ async function filteredWaveBatch(
         !id ||
         seen.has(id) ||
         occurrenceCount(track) >= MAX_TRACK_OCCURRENCES ||
+        isTrackDisliked(currentDisliked, track) ||
         !trackMatchesWaveFilters(track, filterState)
       ) continue;
       seen.add(id);

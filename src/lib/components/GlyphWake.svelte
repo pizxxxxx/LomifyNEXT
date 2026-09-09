@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
 
   export let enabled = true;
+  export let mode: 'classic' | 'physical' = 'classic';
   export let scrollOffset = 0;
 
   type Glyph = {
@@ -20,15 +21,15 @@
   const SYMBOLS = ['#', '/', '\\', '+', '−', '>', '_', '*', '|', '=', '[', ']'];
   const COLUMN_WIDTH = 17;
   const ROW_HEIGHT = 22;
-  const MAX_PARTICLES = 180;
+  const MAX_PARTICLES = 280;
   const MAX_CANVAS_PIXELS = 1_500_000;
   const FRAME_INTERVAL_MS = 1000 / 30;
-  const EMIT_SPACING = 34;
-  const MAX_PUFFS_PER_EVENT = 7;
-  const COLLISION_DISTANCE = 13;
+  const EMIT_SPACING = 20;
+  const MAX_PUFFS_PER_EVENT = 8;
+  const COLLISION_DISTANCE = 8;
   const COLLISION_DISTANCE_SQ = COLLISION_DISTANCE * COLLISION_DISTANCE;
-  const EDGE_RESTITUTION = 0.32;
-  const MIN_EDGE_REBOUND = 14;
+  const EDGE_RESTITUTION = 0.72;
+  const WALL_FRICTION = 0.8;
 
   let canvas: HTMLCanvasElement;
   let context: CanvasRenderingContext2D | null = null;
@@ -92,30 +93,34 @@
 
   /**
    * Один вход курсора создаёт не линию вдоль траектории, а маленький сгусток в одной
-   * ячейке. Радиальные импульсы разворачивают его наружу; направление движения мыши лишь
-   * едва сдувает облако назад, поэтому на быстрых жестах не появляются прежние «рельсы».
+   * ячейке. Скорость передаётся мягко и дозировано, чтобы при круговом вращении мыши
+   * облако не разрывалось на изолированные куски.
    */
   function spawnPuff(x: number, y: number, pointerVx: number, pointerVy: number) {
+    const isPhysical = mode === 'physical';
     const sourceX = snap(x, COLUMN_WIDTH);
     const sourceY = snap(y, ROW_HEIGHT);
     const pointerSpeed = Math.hypot(pointerVx, pointerVy);
-    const inheritedX = Math.max(-125, Math.min(125, pointerVx * 0.13));
-    const inheritedY = Math.max(-125, Math.min(125, pointerVy * 0.13));
+    const speedRatio = Math.min(1, pointerSpeed / 1800);
+    const velocityFactor = isPhysical ? (0.08 + speedRatio * 0.07) : 0.07;
+    const maxInherited = isPhysical ? 160 : 85;
+    const inheritedX = Math.max(-maxInherited, Math.min(maxInherited, pointerVx * velocityFactor));
+    const inheritedY = Math.max(-maxInherited, Math.min(maxInherited, pointerVy * velocityFactor));
     const count = pointerSpeed > 1400 ? 2 : 3;
     const phase = Math.random() * Math.PI * 2;
     const scrollsWithContent = Boolean(document.elementFromPoint(x, y)?.closest('main'));
 
     for (let index = 0; index < count; index += 1) {
-      const angle = phase + (index / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.42;
-      const burstSpeed = 23 + Math.random() * 25;
-      const nudge = 0.7 + Math.random() * 1.8;
+      const angle = phase + (index / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.35;
+      const burstSpeed = isPhysical ? (12 + Math.random() * 14) : (10 + Math.random() * 12);
+      const nudge = 0.5 + Math.random() * 1.5;
       particles.push({
         x: sourceX + Math.cos(angle) * nudge,
         y: sourceY + Math.sin(angle) * nudge,
         vx: Math.cos(angle) * burstSpeed + inheritedX,
-        vy: Math.sin(angle) * burstSpeed + inheritedY - 5,
+        vy: Math.sin(angle) * burstSpeed + inheritedY - 4,
         age: 0,
-        lifetime: 2600 + Math.random() * 900,
+        lifetime: 2400 + Math.random() * 800,
         seed: Math.random() * Math.PI * 2,
         symbol: SYMBOLS[Math.floor(Math.random() * SYMBOLS.length)],
         green: Math.random() < 0.2,
@@ -124,11 +129,20 @@
     }
 
     if (particles.length > MAX_PARTICLES) {
-      particles.splice(0, particles.length - MAX_PARTICLES);
+      const overflow = particles.length - MAX_PARTICLES;
+      for (let i = 0; i < overflow; i++) {
+        // Мягко ускоряем затухание самых старых частиц вместо резкого среза,
+        // чтобы при круговом движении хвост не исчезал кусками
+        particles[i].age = Math.max(particles[i].age, particles[i].lifetime * 0.85);
+      }
     }
   }
 
-  /** Небольшой упругий контакт не даёт символам схлопываться в одну дорожку. */
+  /**
+   * Небольшой упругий контакт предотвращает схлопывание символов в одну ячейку.
+   * Корректируется только положение (overlap), без добавления импульсов скорости,
+   * чтобы не возникало цепных ускорений в сторону при сжатии у границ окна.
+   */
   function resolveCollisions() {
     for (let a = 0; a < particles.length - 1; a += 1) {
       const first = particles[a];
@@ -149,35 +163,38 @@
         const distance = Math.sqrt(distanceSq);
         const nx = dx / distance;
         const ny = dy / distance;
-        const overlap = (COLLISION_DISTANCE - distance) * 0.5;
+        const overlap = (COLLISION_DISTANCE - distance) * 0.2;
         first.x -= nx * overlap;
         first.y -= ny * overlap;
         second.x += nx * overlap;
         second.y += ny * overlap;
-
-        const relativeVelocity = (second.vx - first.vx) * nx + (second.vy - first.vy) * ny;
-        if (relativeVelocity >= 0) continue;
-        const impulse = -relativeVelocity * 0.58;
-        first.vx -= impulse * nx;
-        first.vy -= impulse * ny;
-        second.vx += impulse * nx;
-        second.vy += impulse * ny;
       }
+    }
+
+    const edgeX = COLUMN_WIDTH * 0.5;
+    const edgeY = ROW_HEIGHT * 0.5;
+    const maxX = window.innerWidth - edgeX;
+    const maxY = window.innerHeight - edgeY;
+    for (const p of particles) {
+      if (p.x < edgeX) p.x = edgeX;
+      else if (p.x > maxX) p.x = maxX;
+      if (p.y < edgeY) p.y = edgeY;
+      else if (p.y > maxY) p.y = maxY;
     }
   }
 
   function update(elapsedMs: number) {
+    const isPhysical = mode === 'physical';
     const dt = elapsedMs / 1000;
-    const drag = Math.exp(-0.82 * dt);
+    const drag = Math.exp((isPhysical ? -0.78 : -0.92) * dt);
 
     particles = particles.filter((particle) => {
       particle.age += elapsedMs;
       if (particle.age >= particle.lifetime) return false;
 
-      // Медленный поперечный поток даёт водяной завиток, но не двигает источник за
-      // курсором. Всё остаётся локальным и после отпускания мыши спокойно рассеивается.
-      particle.vx += Math.sin(particle.seed + particle.age * 0.0026) * 19 * dt;
-      particle.vy += (Math.cos(particle.seed + particle.age * 0.0022) * 7 - 6) * dt;
+      // Спокойные вихри в толще
+      particle.vx += Math.sin(particle.seed + particle.age * 0.0026) * 16 * dt;
+      particle.vy += (Math.cos(particle.seed + particle.age * 0.0022) * 6 - 5) * dt;
       particle.vx *= drag;
       particle.vy *= drag;
       particle.x += particle.vx * dt;
@@ -187,20 +204,64 @@
       const edgeY = ROW_HEIGHT * 0.5;
       const maxX = window.innerWidth - edgeX;
       const maxY = window.innerHeight - edgeY;
-      if (particle.x < edgeX) {
-        particle.x = edgeX;
-        particle.vx = Math.max(MIN_EDGE_REBOUND, Math.abs(particle.vx) * EDGE_RESTITUTION);
-      } else if (particle.x > maxX) {
-        particle.x = maxX;
-        particle.vx = -Math.max(MIN_EDGE_REBOUND, Math.abs(particle.vx) * EDGE_RESTITUTION);
+
+      if (isPhysical) {
+        let bounced = false;
+        // Честное физическое отражение: вектор нормальной скорости инвертируется,
+        // касательная слегка гасится трением о стенку, никакого бокового увода.
+        if (particle.x < edgeX) {
+          particle.x = edgeX;
+          if (particle.vx < 0) {
+            particle.vx = -particle.vx * EDGE_RESTITUTION;
+            particle.vy *= WALL_FRICTION;
+            bounced = true;
+          }
+        } else if (particle.x > maxX) {
+          particle.x = maxX;
+          if (particle.vx > 0) {
+            particle.vx = -particle.vx * EDGE_RESTITUTION;
+            particle.vy *= WALL_FRICTION;
+            bounced = true;
+          }
+        }
+
+        if (particle.y < edgeY) {
+          particle.y = edgeY;
+          if (particle.vy < 0) {
+            particle.vy = -particle.vy * EDGE_RESTITUTION;
+            particle.vx *= WALL_FRICTION;
+            bounced = true;
+          }
+        } else if (particle.y > maxY) {
+          particle.y = maxY;
+          if (particle.vy > 0) {
+            particle.vy = -particle.vy * EDGE_RESTITUTION;
+            particle.vx *= WALL_FRICTION;
+            bounced = true;
+          }
+        }
+
+        if (bounced && particle.age > particle.lifetime * 0.45) {
+          particle.age = particle.lifetime * 0.45;
+        }
+      } else {
+        // Классический режим (Вариант 1): мягкое удержание без отскоков
+        if (particle.x < edgeX) {
+          particle.x = edgeX;
+          particle.vx *= 0.4;
+        } else if (particle.x > maxX) {
+          particle.x = maxX;
+          particle.vx *= 0.4;
+        }
+        if (particle.y < edgeY) {
+          particle.y = edgeY;
+          particle.vy *= 0.4;
+        } else if (particle.y > maxY) {
+          particle.y = maxY;
+          particle.vy *= 0.4;
+        }
       }
-      if (particle.y < edgeY) {
-        particle.y = edgeY;
-        particle.vy = Math.max(MIN_EDGE_REBOUND, Math.abs(particle.vy) * EDGE_RESTITUTION);
-      } else if (particle.y > maxY) {
-        particle.y = maxY;
-        particle.vy = -Math.max(MIN_EDGE_REBOUND, Math.abs(particle.vy) * EDGE_RESTITUTION);
-      }
+
       return true;
     });
 

@@ -2,32 +2,35 @@
   import { onMount, tick } from 'svelte';
   import { fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
-  import { Play, FolderOpen, Heart, User, Music, Trash2, ListMusic, Plus, ExternalLink, Check, Download, Info, Radio, X, Loader2, ArrowLeft, Pencil } from 'lucide-svelte';
+  import { Play, FolderOpen, Heart, ThumbsDown, User, Music, Trash2, ListMusic, Plus, ExternalLink, Check, Download, Info, Radio, X, Loader2, ArrowLeft, Pencil } from 'lucide-svelte';
   import { LayoutGrid as LayoutGridIcon, List as ListIcon, Pause as PauseIcon, Play as PlayIcon } from 'lucide';
   import { MorphIcon } from 'morphicons/svelte';
   import ArtistTag from './ArtistTag.svelte';
   import PlaylistMenu from './PlaylistMenu.svelte';
   import TrackStatus from './TrackStatus.svelte';
   import PlaylistTrailer from './PlaylistTrailer.svelte';
-  import { currentTrack, isPlaying, likedTracks, queue, currentView, searchQuery, playlists, notify, settings } from '$lib/stores';
+  import { currentTrack, isPlaying, likedTracks, dislikedTracks, queue, currentView, searchQuery, playlists, notify, settings, activeLibraryTab, type LibraryTab } from '$lib/stores';
   import { goToArtist } from '$lib/utils/navigation';
   import { splitArtists } from '$lib/utils/artists';
   import { saveTrack, getTracks, removeTrack } from '$lib/db';
   import { getAudioUrl } from '$lib/api';
-  import { setTrackLiked } from '$lib/likes';
+  import { setTrackLiked, isTrackLiked } from '$lib/likes';
+  import { toggleTrackDislike, clearAllDislikes } from '$lib/dislikes';
   import { invoke } from '@tauri-apps/api/core';
   import { withCount } from '$lib/utils/plural';
   import { coverUrlAtSize, coverUrlForTrack, downloadedCoverCache } from '$lib/offlineCovers';
 
-  type LibraryTab = 'liked' | 'playlists' | 'artists' | 'local';
-
   /** Порядок вкладок — он же порядок ячеек переключателя, из него берётся и направление
       перехода: вправо, если ушли к следующей вкладке, влево — если к предыдущей. */
-  const TAB_ORDER: LibraryTab[] = ['liked', 'playlists', 'artists', 'local'];
+  const TAB_ORDER: LibraryTab[] = ['liked', 'playlists', 'artists', 'local', 'disliked'];
 
   let activeTab: LibraryTab = 'liked';
   let navDir = 1;
   $: tabIndex = TAB_ORDER.indexOf(activeTab);
+
+  $: if ($activeLibraryTab && $activeLibraryTab !== activeTab && TAB_ORDER.includes($activeLibraryTab)) {
+    setTab($activeLibraryTab);
+  }
 
   let localTracks: any[] = [];
   let cachedUrns = new Set<string>();
@@ -111,6 +114,7 @@
     expandedPlaylist = null;
     activeTrackMenu = null;
     activeTab = tab;
+    activeLibraryTab.set(tab);
     // Бюджет строк сбрасывается вместе с вкладкой: иначе переход на «Локальные» с уже
     // раскрученного «Любимого» снова строил бы сотни строк в том же кадре, в котором
     // начинается выезд панели, и выезда опять было бы не видно.
@@ -120,12 +124,14 @@
   /** Сколько строк вообще нужно активной вкладке — предел, до которого растёт бюджет. */
   $: rowsNeeded =
     activeTab === 'liked' ? $likedTracks.length
+    : activeTab === 'disliked' ? $dislikedTracks.length
     : activeTab === 'local' ? localTracks.length
     : activeTab === 'artists' ? groupedArtists.length
     : openedPlaylist ? openedPlaylist.tracks?.length || 0
     : $playlists.length;
 
   $: visibleLiked = $likedTracks.slice(0, rowBudget);
+  $: visibleDisliked = $dislikedTracks.slice(0, rowBudget);
   $: visibleLocal = localTracks.slice(0, rowBudget);
   $: visibleArtists = groupedArtists.slice(0, rowBudget);
   $: visiblePlaylists = $playlists.slice(0, rowBudget);
@@ -450,6 +456,24 @@
     notify('Трек убран из любимых.', 'info');
   }
 
+  async function restoreDislikedTrack(e: Event, track: any) {
+    e.stopPropagation();
+    await toggleTrackDislike(track);
+    notify(`Трек «${track.title}» возвращён в рекомендации.`, 'info');
+  }
+
+  function likeDislikedTrack(e: Event, track: any) {
+    e.stopPropagation();
+    setTrackLiked(track, true);
+    notify(`Трек «${track.title}» перенесён в любимые.`, 'success');
+  }
+
+  function handleClearAllDislikes() {
+    if ($dislikedTracks.length === 0) return;
+    clearAllDislikes();
+    notify('Список скрытых треков очищен.', 'info');
+  }
+
   function createPlaylist(): string | null {
     const title = newPlaylistName.trim();
     if (!title) return null;
@@ -596,7 +620,7 @@
   <div class="library-tabs">
     <div
       class="seg-control is-lg"
-      style="--seg-count: 4; --seg-index: {tabIndex}"
+      style="--seg-count: {TAB_ORDER.length}; --seg-index: {tabIndex}"
       role="tablist"
       aria-label="Разделы медиатеки"
     >
@@ -648,6 +672,18 @@
         <FolderOpen size={15} />
         Локальные
         <span class="seg-count tnum">{localTracks.length}</span>
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === 'disliked'}
+        class="seg-item"
+        class:is-active={activeTab === 'disliked'}
+        on:click={() => setTab('disliked')}
+      >
+        <ThumbsDown size={15} />
+        Скрытые
+        <span class="seg-count tnum">{$dislikedTracks.length}</span>
       </button>
     </div>
   </div>
@@ -1343,6 +1379,116 @@
             {/each}
           </div>
         </section>
+      {/if}
+    {:else if activeTab === 'disliked'}
+      {#if $dislikedTracks.length === 0}
+        <div class="w-full py-20 px-10 flex flex-col items-start plate mt-4">
+          <ThumbsDown size={26} class="mb-5 text-white/20" />
+          <p class="display-title">Нет скрытых треков</p>
+          <p class="empty-hint">Треки с отметкой «Не нравится» попадают сюда. Они больше не появляются в «Моей волне» и персональных рекомендациях.</p>
+        </div>
+      {:else}
+        <div class="library-liked-toolbar">
+          <div class="text-sm text-neutral-400">{withCount($dislikedTracks.length, 'скрытый трек', 'скрытых трека', 'скрытых треков')}</div>
+          <div class="library-liked-tools">
+            <button
+              class="glass-button hover:bg-red-500/20 hover:text-red-400 text-neutral-400 transition-all px-4 py-2 rounded-xl font-medium flex items-center gap-2 text-sm shadow-md"
+              on:click={handleClearAllDislikes}
+              title="Очистить список скрытых треков"
+            >
+              <Trash2 size={16} /> Очистить список
+            </button>
+          </div>
+        </div>
+
+        <!-- svelte-ignore a11y-no-static-element-interactions -->
+        <div
+          class="track-row-list"
+          class:has-open-track-menu={activeTrackMenu !== null}
+        >
+          {#each visibleDisliked as track, i}
+            {@const isActive = $currentTrack?.title === track.title && $currentTrack?.artist === track.artist}
+            {@const isLiked = isTrackLiked($likedTracks, track)}
+            <!-- svelte-ignore a11y-click-events-have-key-events -->
+            <!-- svelte-ignore a11y-no-static-element-interactions -->
+            <div
+              data-row={i}
+              data-track-menu-owner={i}
+              class="track-row-card group interactive-item {isActive ? 'is-active' : ''}"
+              class:has-open-menu={activeTrackMenu?.row === i}
+              on:click={() => playTrackList(track, $dislikedTracks)}
+            >
+              <TrackStatus index={i} {isActive} playing={$isPlaying} />
+              <div class="track-row-art">
+                {#if track.coverUrl}
+                  <img src={coverUrlAtSize(coverUrlForTrack(track, $downloadedCoverCache), 120)} alt="" width="48" height="48" loading="lazy" decoding="async" />
+                {:else}
+                  <div class="track-row-art-empty">
+                    <Music size={20} />
+                  </div>
+                {/if}
+              </div>
+              <div class="track-row-copy">
+                <div class="flex items-center gap-2">
+                  <span class="track-row-title">{track.title}</span>
+                </div>
+                <span class="track-row-artist"><ArtistTag artist={track.artist} artists={track.artists} /></span>
+              </div>
+              <div class="track-row-actions">
+                <button
+                  type="button"
+                  class="track-row-action text-red-500 hover:text-red-400"
+                  on:click|stopPropagation={(e) => restoreDislikedTrack(e, track)}
+                  aria-label="Вернуть в рекомендации"
+                  title="Вернуть в рекомендации"
+                >
+                  <ThumbsDown size={18} fill="currentColor" />
+                </button>
+
+                <button
+                  type="button"
+                  class="track-row-action hover:text-primary"
+                  on:click|stopPropagation={(e) => likeDislikedTrack(e, track)}
+                  aria-label="Добавить в любимые"
+                  title="Добавить в любимые"
+                >
+                  <Heart size={18} fill={isLiked ? 'currentColor' : 'none'} />
+                </button>
+
+                <div class="track-row-menu-slot" data-track-menu-owner={i}>
+                  <button
+                    data-press-late
+                    class="track-row-action"
+                    class:is-open={activeTrackMenu?.row === i && activeTrackMenu?.kind === 'info'}
+                    aria-label="Информация"
+                    aria-haspopup="dialog"
+                    aria-expanded={activeTrackMenu?.row === i && activeTrackMenu?.kind === 'info'}
+                    on:click={(event) => toggleInfoMenu(event, i)}
+                  >
+                    <Info size={18} />
+                  </button>
+                </div>
+              </div>
+
+              {#if activeTrackMenu?.row === i && activeTrackMenu?.kind === 'info'}
+                <div class="track-row-info-pop {i >= visibleDisliked.length - 2 ? 'is-top' : 'is-bottom'}" role="dialog" aria-label="Информация о треке" tabindex="-1" on:click|stopPropagation>
+                  <div class="track-row-popover">
+                    <p class="mb-1"><strong class="text-white">Автор:</strong> {track.artist}</p>
+                    {#if track.playbackCount != null}
+                      <p class="mb-1"><strong class="text-white">Прослушиваний SC:</strong> {track.playbackCount.toLocaleString('ru-RU')}</p>
+                    {/if}
+                    {#if track.releaseDate}
+                      <p class="mb-1"><strong class="text-white">Выпущен:</strong> {new Date(track.releaseDate).toLocaleDateString('ru-RU')}</p>
+                    {/if}
+                    {#if track.genre}
+                      <p><strong class="text-white">Жанр:</strong> {track.genre}</p>
+                    {/if}
+                  </div>
+                </div>
+              {/if}
+            </div>
+          {/each}
+        </div>
       {/if}
     {/if}
     {#if rowBudget < rowsNeeded}

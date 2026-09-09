@@ -1,6 +1,7 @@
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { get } from 'svelte/store';
-import { settings, notify } from './stores';
+import { settings, notify, dislikedTracks } from './stores';
+import { isTrackDisliked } from './dislikes';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import {
   searchYandex,
@@ -187,6 +188,7 @@ export async function searchSoundCloud(query: string, limit: number = 15, strict
  * have nothing to do with what you were just listening to.
  */
 export async function getRelatedTracks(track: any, likedTracks: any[] = [], listenStats: any = null, playlists: any[] = []) {
+  const currentDisliked = get(dislikedTracks);
   // Яндексовый трек нельзя продолжать фидом SoundCloud: автоплей уводил бы человека в
   // другой источник посреди прослушивания. Похожие спрашиваем там же, где играет трек.
   if (track.source === 'yandex' && track.id) {
@@ -194,7 +196,8 @@ export async function getRelatedTracks(track: any, likedTracks: any[] = [], list
     if (current.yandexToken) {
       try {
         const similar = await getYandexSimilar(current.yandexToken, track.id, 15);
-        if (similar.length > 0) return similar;
+        const filtered = similar.filter((t: any) => !isTrackDisliked(currentDisliked, t));
+        if (filtered.length > 0) return filtered;
       } catch (e) {
         console.error('[yandex] похожие треки не пришли', e);
       }
@@ -202,7 +205,8 @@ export async function getRelatedTracks(track: any, likedTracks: any[] = [], list
   }
   if (track.source === 'soundcloud' && track.id) {
     const related = await fetchRelatedTracks(track.id, 15);
-    if (related.length > 0) return related;
+    const filtered = related.filter((t: any) => !isTrackDisliked(currentDisliked, t));
+    if (filtered.length > 0) return filtered;
   }
   return await getTrendingTracks(likedTracks, listenStats, [], playlists);
 }
@@ -584,6 +588,7 @@ export async function getTrendingTracks(likedTracks: any[] = [], listenStats: an
     if (t?.title && t?.artist) knownSignatures.add(`${normKey(t.title)}-${normKey(t.artist)}`);
   };
   (likedTracks || []).forEach(addKnown);
+  (get(dislikedTracks) || []).forEach(addKnown);
   if (listenStats?.history) Object.values(listenStats.history).forEach(addKnown);
   (playlists || []).forEach(pl => (pl?.tracks || []).forEach(addKnown));
   getCachedLastFmKnownTracks().forEach(addKnown);

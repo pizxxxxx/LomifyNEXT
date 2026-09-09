@@ -89,6 +89,7 @@ const defaultSettings = {
   cardSheen: true, // Световая полоса, проезжающая по обложке на входе курсора
   panelPress: true, // Отклик пунктов боковой панели
   glyphWake: true, // Терминальные символы, расходящиеся от курсора по экранной сетке
+  glyphWakeMode: 'classic' as 'classic' | 'physical', // 'classic' (вариант 1, спокойный) | 'physical' (вариант 2, упругий)
 
   // ── Устройство вывода ──────────────────────────────────────────────────────
   // `null` — играть через системное устройство по умолчанию и следовать за ним, когда
@@ -272,6 +273,8 @@ function scheduleListenStatsPersist(value: typeof defaultStats) {
 // Navigation state
 export const currentView = writable<'home' | 'search' | 'library' | 'settings' | 'lyrics' | 'equalizer' | 'fullscreen' | 'profile' | 'artist'>('home');
 export const previousView = writable<'home' | 'search' | 'library' | 'settings' | 'lyrics' | 'equalizer' | 'fullscreen' | 'profile' | 'artist'>('home');
+export type LibraryTab = 'liked' | 'playlists' | 'artists' | 'local' | 'disliked';
+export const activeLibraryTab = writable<LibraryTab>('liked');
 export const activeEqualizerPreset = writable<string>('flat');
 
 /**
@@ -347,6 +350,7 @@ export const searchHistory = writable<string[]>([]);
 export const queue = writable<any[]>([]);
 export const trackHistory = writable<any[]>([]);
 export const likedTracks = writable<any[]>([]);
+export const dislikedTracks = writable<any[]>([]);
 
 /**
  * Снимает с сохранённых лайков флаг `isBanned`.
@@ -413,6 +417,18 @@ export function initStore() {
     }
     likedTracks.subscribe(val => {
       localStorage.setItem('lomifynext_likes', JSON.stringify(val));
+    });
+
+    const storedDislikes = localStorage.getItem('lomifynext_dislikes');
+    if (storedDislikes) {
+      try {
+        dislikedTracks.set(JSON.parse(storedDislikes));
+      } catch (e) {
+        console.error("Failed to parse disliked tracks", e);
+      }
+    }
+    dislikedTracks.subscribe(val => {
+      localStorage.setItem('lomifynext_dislikes', JSON.stringify(val));
     });
 
     const storedSearch = localStorage.getItem('lomifynext_search_history');

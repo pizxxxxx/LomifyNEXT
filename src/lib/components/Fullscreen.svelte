@@ -400,7 +400,7 @@
                 <!-- Наведение — единственный момент, когда человек ещё ничего не потерял:
                      сказать про отсутствие текста надо здесь, а не пустой панелью после. -->
                 <Ghost size={42} strokeWidth={1.5} />
-                <span>Текста нет — только музыка</span>
+                <span>Текста нет: только музыка</span>
               {:else}
                 <AlignLeft size={42} strokeWidth={1.5} />
                 <span>{$lyricsStatus === 'loading' ? 'Ищу текст…' : 'Показать текст'}</span>
@@ -442,7 +442,7 @@
   {:else}
     <div class="z-10 flex flex-col items-center gap-1.5">
       <div class="display-title">Тишина</div>
-      <div class="empty-hint !mt-0 text-center">Поставь что-нибудь — и здесь появится обложка.</div>
+      <div class="empty-hint !mt-0 text-center">Включите трек, и здесь появится обложка.</div>
     </div>
   {/if}
 </div>

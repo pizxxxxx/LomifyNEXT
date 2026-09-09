@@ -9225,7 +9225,8 @@ body[data-perf="light"] .spotify-progress-track > span {
 }
 
 .library-tabs .seg-control {
-  min-width: 34rem;
+  min-width: 42rem;
+  max-width: 100%;
 }
 
 /* То же, что `.artist-pane`, но для медиатеки: контейнер под вход раздела. Отдельное имя —

@@ -6,6 +6,7 @@
     Loader2,
     Music,
     Heart,
+    ThumbsDown,
     ListMusic,
     Radio,
     X,
@@ -18,7 +19,8 @@
   import { Plus as PlusIcon, Check as CheckIcon } from 'lucide';
   import { MorphIcon } from 'morphicons/svelte';
   import { performSearchDetailed, getSoundCloudPlaylists } from '$lib/api';
-  import { currentTrack, isPlaying, settings, searchQuery, searchResults, searchPlaylists, queue, searchHistory, likedTracks, playlists, notify } from '$lib/stores';
+  import { currentTrack, isPlaying, settings, searchQuery, searchResults, searchPlaylists, queue, searchHistory, likedTracks, dislikedTracks, playlists, notify } from '$lib/stores';
+  import { isTrackDisliked, toggleTrackDislike } from '$lib/dislikes';
   import { getTracks } from '$lib/db';
   import ArtistTag from './ArtistTag.svelte';
   import PlaylistMenu from './PlaylistMenu.svelte';
@@ -372,6 +374,12 @@
     notify(liked ? 'Трек добавлен в любимые.' : 'Трек убран из любимых.', liked ? 'success' : 'info');
   }
 
+  async function toggleDislikeSearch(track: any, e: Event) {
+    e.stopPropagation();
+    const disliked = await toggleTrackDislike(track);
+    notify(disliked ? 'Трек скрыт и больше не будет рекомендоваться.' : 'Ограничение снято: трек снова доступен.', 'info');
+  }
+
   /**
    * Какая строка держит открытое меню плейлистов. Само меню теперь живёт в `PlaylistMenu` и
    * состояние сообщает событием — здесь оно нужно ровно для двух вещей: поднять строку по
@@ -656,7 +664,7 @@
             {@const rowKey = `${sourceKind(track)}:${track.id || track.title}`}
             <!-- svelte-ignore a11y-click-events-have-key-events -->
             <!-- svelte-ignore a11y-no-static-element-interactions -->
-            <div class="track-row-card group interactive-item {isActive ? 'is-active' : ''} {track.isBanned ? 'is-banned' : ''}" class:has-open-menu={showPlaylistMenuId === rowKey} on:click={() => playTrack(track)}>
+            <div class="track-row-card group interactive-item {isActive ? 'is-active' : ''} {track.isBanned ? 'is-banned' : ''}" class:opacity-40={isTrackDisliked($dislikedTracks, track)} class:has-open-menu={showPlaylistMenuId === rowKey} on:click={() => playTrack(track)}>
               <TrackStatus index={topResult ? i + 1 : i} {isActive} playing={$isPlaying} banned={track.isBanned} size="md" />
               <div class="track-row-art">
                 {#if track.coverUrl}<img src={coverUrlAtSize(track.coverUrl, 120)} alt="" width="48" height="48" loading="lazy" decoding="async" />{:else}<div class="track-row-art-empty"><Music size={20} /></div>{/if}
@@ -675,6 +683,16 @@
               <div class="track-row-actions">
                 <button type="button" aria-label={isTrackLiked($likedTracks, track) ? 'Убрать из любимых' : 'Добавить в любимые'} aria-pressed={isTrackLiked($likedTracks, track)} class="track-row-action" class:is-liked={isTrackLiked($likedTracks, track)} on:click={(e) => toggleLikeSearch(track, e)}>
                   <Heart size={17} fill={isTrackLiked($likedTracks, track) ? 'currentColor' : 'none'} />
+                </button>
+                <button
+                  type="button"
+                  aria-label={isTrackDisliked($dislikedTracks, track) ? 'Убрать из скрытых' : 'Не рекомендовать (дизлайк)'}
+                  title={isTrackDisliked($dislikedTracks, track) ? 'Убрать из скрытых' : 'Не рекомендовать (дизлайк)'}
+                  class="track-row-action"
+                  class:text-red-500={isTrackDisliked($dislikedTracks, track)}
+                  on:click={(e) => toggleDislikeSearch(track, e)}
+                >
+                  <ThumbsDown size={15} fill={isTrackDisliked($dislikedTracks, track) ? 'currentColor' : 'none'} />
                 </button>
                 <span class="track-row-menu-slot">
                   <PlaylistMenu {track} placement="top" align="right" on:toggle={(e) => showPlaylistMenuId = e.detail ? rowKey : null} buttonClass="track-row-action" />

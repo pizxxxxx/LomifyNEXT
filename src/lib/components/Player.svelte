@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { Volume2, SkipBack, SkipForward, Shuffle, Repeat, Mic2, Radio, Heart, Share2, Download, Check, Trash2, Loader2 } from 'lucide-svelte';
+  import { Volume2, SkipBack, SkipForward, Shuffle, Repeat, Mic2, Radio, Heart, ThumbsDown, Share2, Download, Check, Trash2, Loader2 } from 'lucide-svelte';
   import { MorphIcon } from 'morphicons/svelte';
   import {
     Maximize2 as Maximize2Data,
@@ -8,7 +8,7 @@
     Pause as PauseData,
     Play as PlayData
   } from 'lucide';
-  import { currentTrack, isPlaying, progress, duration as durationStore, currentView, previousView, settings, equalizerBands, listenStats, queue, likedTracks, trackHistory, notify, playlists, globalVolume, lyricsStatus } from '$lib/stores';
+  import { currentTrack, isPlaying, progress, duration as durationStore, currentView, previousView, settings, equalizerBands, listenStats, queue, likedTracks, dislikedTracks, trackHistory, notify, playlists, globalVolume, lyricsStatus } from '$lib/stores';
   import { buildTrackUrn } from '$lib/utils/trackUrn';
   import { getAudioUrl, getTrackInfo, getLyrics } from '$lib/api';
   import { waveActive, waveRefill, waveTrackDone, stopWave } from '$lib/wave';
@@ -21,10 +21,12 @@
   import PlaylistMenu from './PlaylistMenu.svelte';
   import { dragValue } from '$lib/actions/dragValue';
   import { isTrackLiked, toggleTrackLike } from '$lib/likes';
+  import { isTrackDisliked, toggleTrackDislike, sameTrack } from '$lib/dislikes';
   import { beginLastFmTrack, tickLastFmTrack } from '$lib/lastfm';
   import { coverUrlForTrack, downloadedCoverCache } from '$lib/offlineCovers';
 
   $: isLiked = isTrackLiked($likedTracks, $currentTrack);
+  $: isDisliked = isTrackDisliked($dislikedTracks, $currentTrack);
   let currentTime = 0;
   let duration = 0;
   let currentTrackListenTime = 0;
@@ -147,6 +149,25 @@
     // снятая — не вернуться при следующей сверке.
     const liked = toggleTrackLike($currentTrack);
     notify(liked ? 'Трек добавлен в любимые.' : 'Трек убран из любимых.', liked ? 'success' : 'info');
+  }
+
+  async function toggleDislike() {
+    if (!$currentTrack) return;
+    const trackToDislike = $currentTrack;
+    const nextDisliked = await toggleTrackDislike(trackToDislike);
+    if (nextDisliked) {
+      notify(
+        $waveActive
+          ? 'Трек скрыт и больше не появится в Моей волне.'
+          : 'Трек скрыт и больше не будет рекомендоваться.',
+        'info'
+      );
+      if ($currentTrack && sameTrack($currentTrack, trackToDislike)) {
+        playNext('skip');
+      }
+    } else {
+      notify('Ограничение снято: трек снова доступен.', 'info');
+    }
   }
 
   // Работа с плейлистами уехала в `PlaylistMenu`: там она одна на все места, где есть кнопка
@@ -464,7 +485,12 @@
       await waveRefill();
     }
 
-    const currentQueue = get(queue);
+    const rawQueue = get(queue);
+    const currentDisliked = get(dislikedTracks);
+    const currentQueue = rawQueue.filter(t => !isTrackDisliked(currentDisliked, t));
+    if (currentQueue.length !== rawQueue.length) {
+      queue.set(currentQueue);
+    }
     if (currentQueue && currentQueue.length > 0) {
       // Если следующий трек уже подготовлен, берём именно его. Иначе при перемешивании
       // жребий бросался бы дважды: предзагрузка тянула бы ссылку для одного трека, а играл
@@ -1149,6 +1175,16 @@
         <div class="flex items-center gap-2 ml-2 relative">
           <button aria-label="Like track" class="interactive-item text-neutral-400 hover:text-white" on:click={toggleLike}>
             <Heart size={18} fill={isLiked ? "var(--color-primary)" : "none"} color={isLiked ? "var(--color-primary)" : "currentColor"} />
+          </button>
+          <button
+            type="button"
+            aria-label={isDisliked ? "Убрать из скрытых" : "Не рекомендовать (дизлайк)"}
+            title={isDisliked ? "Убрать из скрытых" : "Не рекомендовать (дизлайк)"}
+            class="interactive-item text-neutral-400 hover:text-red-400 transition-colors"
+            class:text-red-500={isDisliked}
+            on:click={toggleDislike}
+          >
+            <ThumbsDown size={17} fill={isDisliked ? "currentColor" : "none"} />
           </button>
           <!-- Меню «в плейлист». Раскрывается вверх и от левого края: плеер стоит в самом низу
                окна, а строка с кнопками — у левого края, так что вниз и вправо меню уехало бы

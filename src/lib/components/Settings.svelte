@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { settings, automaticPerformanceMode, playlists, listenStats, notify } from '$lib/stores';
+  import { settings, automaticPerformanceMode, playlists, listenStats, notify, dislikedTracks, currentView, activeLibraryTab } from '$lib/stores';
+  import { clearAllDislikes } from '$lib/dislikes';
   import {
     Download,
     Loader2,
@@ -214,7 +215,7 @@
       cacheCleanupMessage = removed
         ? `Удалено ${withCount(removed, 'файл', 'файла', 'файлов')} · освобождено ${freed}`
         : 'Лишних файлов не найдено';
-      notify(removed ? `Готово: освободилось ${freed}.` : 'Кэш уже в порядке — удалять нечего.', 'success');
+      notify(removed ? `Готово: освободилось ${freed}.` : 'Кэш уже в порядке, удалять нечего.', 'success');
       await refreshCacheStats();
     } catch (e) {
       console.error('[cache] smart cleanup failed', e);
@@ -223,6 +224,16 @@
     } finally {
       cacheCleaning = false;
     }
+  }
+
+  function handleClearDislikes() {
+    clearAllDislikes();
+    notify('Список скрытых треков очищен.', 'success');
+  }
+
+  function openDislikedInLibrary() {
+    activeLibraryTab.set('disliked');
+    currentView.set('library');
   }
 
   onMount(() => {
@@ -385,7 +396,17 @@
    * первое нажатие ничего бы не изменило, потому что тумблер уже показан включённым.
    */
   function toggleFx(key: 'coverTilt' | 'coverGlare' | 'cardSheen' | 'panelPress' | 'glyphWake') {
-    $settings[key] = $settings[key] === false;
+    settings.update((s) => ({
+      ...s,
+      [key]: s[key] === false
+    }));
+  }
+
+  function setGlyphWakeMode(mode: 'classic' | 'physical') {
+    settings.update((s) => ({
+      ...s,
+      glyphWakeMode: mode
+    }));
   }
 
   function toggleAutoCache() {
@@ -791,7 +812,7 @@
             <div class="flex-1 min-w-0">
               <div class="setting-title">Кнопки окна</div>
               <div class="setting-hint">
-                Оба варианта нарисованы Lomify — системная рамка Windows не включается.
+                Оба варианта нарисованы Lomify, системная рамка Windows не используется.
               </div>
             </div>
             <div
@@ -830,8 +851,7 @@
             <div class="flex-1 min-w-0">
               <div class="setting-title">Масштаб интерфейса</div>
               <div class="setting-hint">
-                Авто сохраняет привычный размер: Full HD — 100%, 2K — около 133%, 4K —
-                до 200%. Системный масштаб Windows уже учитывается и повторно не умножается.
+                Автоматически подбирает размер под экран: 100% для Full HD, около 133% для 2K и до 200% для 4K. Системный масштаб Windows учитывается без повторного умножения.
               </div>
             </div>
             <div class="settings-scale-control">
@@ -957,7 +977,7 @@
         <!-- Theme Selection -->
         <div class="plate p-8">
           <h3 class="section-title">Тема оформления</h3>
-          <p class="empty-hint !mt-1.5 !max-w-[54ch] mb-6">Акцентный цвет всего интерфейса — подписи, активные элементы, свечение.</p>
+          <p class="empty-hint !mt-1.5 !max-w-[54ch] mb-6">Акцентный цвет интерфейса: подписи, активные элементы и свечение.</p>
 
           <!-- The adaptive accent used to live in another plate entirely, which made the
                palette below look broken for no visible reason once it was on. It *replaces*
@@ -1098,8 +1118,7 @@
               <div>
                 <div class="setting-title">Терминальный след</div>
                 <div class="setting-hint">
-                  Символы # / + − собираются по сетке и мягко расходятся от курсора, как
-                  чернила в воде. Эффект сам засыпает, когда мышь не двигается.
+                  Символы # / + − собираются по сетке и мягко расходятся от курсора. Эффект сам засыпает, когда мышь не двигается.
                 </div>
               </div>
               <button
@@ -1112,6 +1131,33 @@
                 <span class="switch-knob"></span>
               </button>
             </div>
+
+            {#if $settings.glyphWake !== false}
+              <div class="setting-row !pt-2.5 !border-t-0 pl-3">
+                <div>
+                  <div class="setting-title text-sm">Вариант поведения следа</div>
+                  <div class="setting-hint">
+                    Вариант 1: спокойный (классический след без отскоков). Вариант 2: физический (упругий отскок от границ экрана).
+                  </div>
+                </div>
+                <div class="inline-flex items-center gap-1 bg-white/[0.04] border border-white/10 rounded-lg p-1 shrink-0">
+                  <button
+                    type="button"
+                    class="px-2.5 py-1 text-xs rounded-md font-medium transition-all {$settings.glyphWakeMode !== 'physical' ? 'bg-white/20 text-white shadow-sm' : 'text-white/50 hover:text-white'}"
+                    on:click={() => setGlyphWakeMode('classic')}
+                  >
+                    1 • Спокойный
+                  </button>
+                  <button
+                    type="button"
+                    class="px-2.5 py-1 text-xs rounded-md font-medium transition-all {$settings.glyphWakeMode === 'physical' ? 'bg-white/20 text-white shadow-sm' : 'text-white/50 hover:text-white'}"
+                    on:click={() => setGlyphWakeMode('physical')}
+                  >
+                    2 • Физический
+                  </button>
+                </div>
+              </div>
+            {/if}
           </div>
         </div>
       </div>
@@ -1235,7 +1281,7 @@
                   {/if}
                 </button>
               </div>
-              <p class="provider-import-note">Вход и пароль не нужны — читаются только публичные данные профиля.</p>
+              <p class="provider-import-note">Вход и пароль не нужны: читаются только публичные данные профиля.</p>
             </div>
           {/if}
         </div>
@@ -1312,7 +1358,7 @@
               </div>
               <div class="provider-import-meta">
                 <p class="provider-import-note">
-                  Токен хранится только на этом компьютере. Он даёт полный доступ к аккаунту — не показывай его никому.
+                  Токен хранится только на этом компьютере. Он даёт полный доступ к аккаунту: не показывай его никому.
                 </p>
                 <button
                   type="button"
@@ -1370,7 +1416,7 @@
               <span class="min-w-0">
                 <span class="output-row-name">Системное по умолчанию</span>
                 <span class="output-row-hint">
-                  Следовать за системой: сменили устройство в Windows — звук уходит туда же.
+                  Следовать за системой: при смене устройства в Windows звук переключается автоматически.
                 </span>
               </span>
               {#if $settings.outputDevice === null}
@@ -1411,8 +1457,8 @@
                 <span class="min-w-0">
                   <span class="output-row-name">{missingOutput}</span>
                   <span class="output-row-hint">
-                    Сейчас не подключено — звук идёт через системное. Выбор сохранён и
-                    вернётся вместе с устройством.
+                    Сейчас отключено: звук идёт через системное устройство. Выбор сохранён и
+                    вернётся при подключении.
                   </span>
                 </span>
               </div>
@@ -1420,8 +1466,7 @@
 
             {#if outputs.length === 0 && !outputsLoading}
               <p class="empty-hint !max-w-[54ch]">
-                Устройств не нашлось. В браузере такой список пуст — он собирается только в
-                собранном приложении.
+                Устройств не найдено. Список доступен только в настольном приложении.
               </p>
             {/if}
           </div>
@@ -1453,9 +1498,9 @@
             <div>
               <div class="setting-title">Готовить следующий трек заранее</div>
               <div class="setting-hint">
-                За несколько секунд до конца берём ссылку на следующий трек — переход получается
-                без паузы на запрос. С микшированием запас больше: загрузка обязана успеть до
-                начала перехода. При включённом кеше он же начинает докачиваться.
+                За несколько секунд до конца загружает следующий трек, чтобы переход происходил
+                без паузы на запрос. С микшированием запас больше: загрузка успевает до
+                начала перехода. При включённом кеше трек начинает докачиваться заранее.
               </div>
             </div>
             <button
@@ -1494,7 +1539,7 @@
                 <span>12 сек</span>
               </div>
               <div class="setting-hint mt-3">
-                Уходящий трек гаснет, пока следующий нарастает, — на автоматическом переходе.
+                Уходящий трек плавно затихает, пока следующий нарастает (при автоматическом переходе).
                 Кнопка «дальше» переключает сразу. На короткой склейке переход укорачивается сам:
                 дольше четверти трека он не длится.
               </div>
@@ -1543,6 +1588,36 @@
             </div>
           {/if}
         </div>
+
+        <!-- Скрытые треки (дизлайки) -->
+        <div class="plate p-8">
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <h3 class="section-title">Скрытые треки</h3>
+              <p class="setting-hint !mt-2 !max-w-[54ch]">
+                Треки с отметкой «не рекомендовать». Они исключаются из «Моей волны», очередей и персональных рекомендаций.
+              </p>
+            </div>
+            <div class="flex items-center gap-2">
+              <button
+                type="button"
+                class="settings-action-button"
+                on:click={openDislikedInLibrary}
+              >
+                Посмотреть ({$dislikedTracks.length})
+              </button>
+              {#if $dislikedTracks.length > 0}
+                <button
+                  type="button"
+                  class="settings-action-button text-red-400 hover:text-red-300"
+                  on:click={handleClearDislikes}
+                >
+                  Сбросить
+                </button>
+              {/if}
+            </div>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -1558,7 +1633,7 @@
         <div class="plate p-8">
           <h3 class="section-title">Шрифт текста песен</h3>
           <p class="empty-hint !mt-1.5 !max-w-[54ch] mb-6">
-            Меняет только строки песни — меню, кнопки и заголовки приложения остаются прежними. Шрифты работают офлайн.
+            Меняет только строки песни: меню, кнопки и заголовки приложения остаются прежними. Шрифты работают офлайн.
           </p>
           <div class="font-picker" role="radiogroup" aria-label="Шрифт текста песен">
             {#each lyricsFonts as font}
@@ -1904,7 +1979,7 @@
             </button>
           </div>
           <a href="https://t.me/dopaminegdev" target="_blank" class="settings-about-author">
-            Автор — @dopaminegdev
+            Автор: @dopaminegdev
             <ExternalLink size={13} aria-hidden="true" />
           </a>
         </div>
@@ -2003,7 +2078,7 @@
         </div>
         <div class="support-dialog-copy">
           <h2 id="support-dialog-title">Поддержать LomifyNEXT</h2>
-          <p id="support-dialog-description">Выберите удобный способ — платёж пройдёт на стороне ЮMoney.</p>
+          <p id="support-dialog-description">Выберите удобный способ: платёж пройдёт на стороне ЮMoney.</p>
         </div>
         <button
           type="button"
@@ -2026,7 +2101,7 @@
           </span>
           <span class="support-method-copy">
             <strong>Быстрый платёж</strong>
-            <span>Готовая сумма — останется выбрать способ оплаты</span>
+            <span>Готовая сумма: останется выбрать способ оплаты</span>
           </span>
           <span class="support-method-price">150 ₽</span>
           <ExternalLink size={16} aria-hidden="true" />
