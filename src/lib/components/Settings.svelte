@@ -1893,11 +1893,11 @@
           </div>
 
           {#if $settings.lyricsAdlibs !== false}
-            <div class="mb-8 pt-3 border-t border-white/[0.06]">
-              <div class="grid grid-cols-2 gap-3 max-w-md">
+            <div class="mb-6 pt-3.5 border-t border-white/[0.06]">
+              <div class="grid grid-cols-2 gap-3 max-w-xl">
                 <button
                   type="button"
-                  class="settings-choice"
+                  class="settings-choice !grid-cols-[1fr_auto]"
                   class:is-active={$settings.lyricsAdlibStyle !== 'backdrop'}
                   on:click={() => {
                     $settings.lyricsAdlibStyle = 'overlay';
@@ -1914,7 +1914,7 @@
                 </button>
                 <button
                   type="button"
-                  class="settings-choice"
+                  class="settings-choice !grid-cols-[1fr_auto]"
                   class:is-active={$settings.lyricsAdlibStyle === 'backdrop'}
                   on:click={() => {
                     $settings.lyricsAdlibStyle = 'backdrop';

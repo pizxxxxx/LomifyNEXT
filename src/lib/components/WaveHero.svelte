@@ -128,7 +128,7 @@
   $: activeFilterCount = ($settings.waveContent && $settings.waveContent !== 'all' ? 1 : 0) +
     ($settings.waveLanguage ? 1 : 0) +
     ($settings.waveGenre ? 1 : 0) +
-    ($settings.waveAllowNeuro === false ? 1 : 0);
+    ($settings.waveAllowNeuro !== true && $settings.waveAllowNeuro !== undefined ? 1 : 0);
   $: ignoredLocalFilters = !yandexWave && (
     ($settings.waveContent && $settings.waveContent !== 'all') || Boolean($settings.waveLanguage)
   );
@@ -270,7 +270,7 @@
     settings.update((state) => ({ ...state, waveGenre: value }));
   }
 
-  function setWaveAllowNeuro(allowed: boolean) {
+  function setWaveAllowNeuro(allowed: boolean | 'only') {
     settings.update((state) => ({ ...state, waveAllowNeuro: allowed }));
   }
 
@@ -322,6 +322,8 @@
     pool = pool.filter((track) => trackMatchesWaveGenre(track, $settings));
     if ($settings.waveAllowNeuro === false) {
       pool = pool.filter((track) => !isNeuroTrack(track));
+    } else if ($settings.waveAllowNeuro === 'only') {
+      pool = pool.filter((track) => isNeuroTrack(track));
     }
     const unique = new Map<string, any>();
     for (const track of pool) {
@@ -1144,7 +1146,7 @@
       <div class="wave-tune-label">Нейротреки</div>
       <div
         class="seg-control"
-        style="--seg-count: 2; --seg-index: {$settings.waveAllowNeuro === false ? 1 : 0}"
+        style="--seg-count: 3; --seg-index: {$settings.waveAllowNeuro === 'only' ? 2 : $settings.waveAllowNeuro === false ? 1 : 0}"
         role="radiogroup"
         aria-label="Нейротреки в Моей тусне"
       >
@@ -1152,9 +1154,9 @@
         <button
           type="button"
           role="radio"
-          aria-checked={$settings.waveAllowNeuro !== false}
+          aria-checked={$settings.waveAllowNeuro !== false && $settings.waveAllowNeuro !== 'only'}
           class="seg-item"
-          class:is-active={$settings.waveAllowNeuro !== false}
+          class:is-active={$settings.waveAllowNeuro !== false && $settings.waveAllowNeuro !== 'only'}
           on:click={() => setWaveAllowNeuro(true)}
         >Вкл</button>
         <button
@@ -1165,6 +1167,14 @@
           class:is-active={$settings.waveAllowNeuro === false}
           on:click={() => setWaveAllowNeuro(false)}
         >Выкл</button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={$settings.waveAllowNeuro === 'only'}
+          class="seg-item"
+          class:is-active={$settings.waveAllowNeuro === 'only'}
+          on:click={() => setWaveAllowNeuro('only')}
+        >Только нейро</button>
       </div>
     </div>
 
@@ -1210,7 +1220,11 @@
     <div class="wave-tune-note">
       <Info size={14} aria-hidden="true" />
       <span>
-        {$settings.waveAllowNeuro === false ? 'Нейротреки исключаются из подборки. ' : ''}{yandexWave
+        {$settings.waveAllowNeuro === false
+          ? 'Нейротреки исключаются из подборки. '
+          : $settings.waveAllowNeuro === 'only'
+          ? 'В подборке остаются только нейротреки. '
+          : ''}{yandexWave
           ? 'Язык берётся из метаданных Яндекса, а при их отсутствии мягко определяется по названию. Неизвестный жанр не отбрасывает трек.'
           : 'SoundCloud фильтруется по жанру; слова и язык включатся с Яндекс Музыкой.'}
       </span>

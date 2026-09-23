@@ -27,7 +27,7 @@ export interface WaveFilterState {
   waveContent?: string;
   waveGenre?: string;
   waveLanguage?: string;
-  waveAllowNeuro?: boolean;
+  waveAllowNeuro?: boolean | 'only';
 }
 
 function normalize(value: unknown): string {
@@ -87,6 +87,7 @@ export function hasWaveFilters(state: WaveFilterState): boolean {
   return state.waveContent === 'lyrics' ||
     state.waveContent === 'instrumental' ||
     state.waveAllowNeuro === false ||
+    state.waveAllowNeuro === 'only' ||
     Boolean(normalize(state.waveGenre)) ||
     Boolean(normalize(state.waveLanguage));
 }
@@ -102,6 +103,7 @@ export function waveGenreLabel(id: string | null | undefined): string {
 export function describeWaveFilters(state: WaveFilterState): string {
   const parts: string[] = [];
   if (state.waveAllowNeuro === false) parts.push('без нейротреков');
+  if (state.waveAllowNeuro === 'only') parts.push('только нейротреки');
   if (state.waveContent === 'lyrics') parts.push('только с текстом');
   if (state.waveContent === 'instrumental') parts.push('без слов');
   const language = WAVE_LANGUAGES.find((item) => item.id === state.waveLanguage);
@@ -205,6 +207,8 @@ export function isNeuroTrack(track: any): boolean {
 export function trackMatchesWaveFilters(track: any, state: WaveFilterState): boolean {
   // Отсекаем нейротреки (генеративную музыку, ИИ-каверы, Suno, Udio), если они отключены
   if (state.waveAllowNeuro === false && isNeuroTrack(track)) return false;
+  // Оставляем только нейротреки, если выбран режим «только нейро»
+  if (state.waveAllowNeuro === 'only' && !isNeuroTrack(track)) return false;
 
   // undefined у Rotor означает, что конкретная порция не прислала lyricsInfo, а не то,
   // что текста точно нет. Отбрасываем только явное false, иначе строгий фильтр съедал

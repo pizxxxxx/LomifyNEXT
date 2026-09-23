@@ -4024,7 +4024,7 @@ body[data-perf="light"] .lyric-adlib-callout {
      Компенсация ровно повторяет её хвост: два gap, разделитель с полями, 44px кнопки и
      правую внутреннюю отбивку контейнера. */
   right: -3.875rem;
-  width: 17rem;
+  width: 19rem;
   padding: 1.25rem;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 1.15rem;
@@ -4042,7 +4042,7 @@ body[data-perf="light"] .lyric-adlib-callout {
   }
 
   .fs-settings-pop {
-    width: min(17rem, calc(100vw - 2rem));
+    width: min(19rem, calc(100vw - 2rem));
   }
 }
 

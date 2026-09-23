@@ -408,37 +408,35 @@
             {/if}
 
             <!-- Повторный поиск текста («мб найдеца») -->
-            <div class="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-white/[0.04] border border-white/[0.08] hover:border-white/[0.13] transition-colors">
-              <div class="flex min-w-0 flex-col">
-                <div class="flex items-center gap-1.5">
-                  <span class="text-white/80 font-medium text-sm">Текст трека</span>
-                  {#if lyricsSearchResult === 'found'}
-                    <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/35 tracking-wide">
-                      Найдено
-                    </span>
-                  {:else if lyricsSearchResult === 'not_found'}
-                    <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rose-500/20 text-rose-300 border border-rose-500/35 tracking-wide">
-                      Не нашлось
-                    </span>
-                  {/if}
-                </div>
-                <span class="text-white/35 text-[11px] leading-snug mt-0.5 truncate">
-                  {#if isSearchingLyrics}
-                    Ищу слова в источниках и каталогах...
-                  {:else if lyricsSearchResult === 'found'}
-                    Слова успешно загружены и синхронизированы
-                  {:else if lyricsSearchResult === 'not_found'}
-                    В базах пока нет слов для этого трека
-                  {:else if $lyricsStatus === 'found'}
-                    Обновить или поискать текст глубже
-                  {:else}
-                    Сбросить кеш и поискать слова заново
-                  {/if}
-                </span>
+            <div class="flex flex-col gap-2 p-2.5 rounded-xl bg-white/[0.04] border border-white/[0.08] hover:border-white/[0.13] transition-colors">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-white/85 font-medium text-[13px] whitespace-nowrap">Текст трека</span>
+                {#if lyricsSearchResult === 'found'}
+                  <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/35 tracking-wide whitespace-nowrap">
+                    Найдено
+                  </span>
+                {:else if lyricsSearchResult === 'not_found'}
+                  <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rose-500/20 text-rose-300 border border-rose-500/35 tracking-wide whitespace-nowrap">
+                    Не нашлось
+                  </span>
+                {/if}
               </div>
+              <span class="text-white/40 text-[11px] leading-snug">
+                {#if isSearchingLyrics}
+                  Ищу слова в источниках и каталогах...
+                {:else if lyricsSearchResult === 'found'}
+                  Слова успешно загружены и синхронизированы
+                {:else if lyricsSearchResult === 'not_found'}
+                  В базах пока нет слов для этого трека
+                {:else if $lyricsStatus === 'found'}
+                  Обновить или поискать текст глубже
+                {:else}
+                  Сбросить кеш и поискать слова заново
+                {/if}
+              </span>
               <button
                 type="button"
-                class="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all select-none cursor-pointer {
+                class="w-full mt-0.5 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all select-none cursor-pointer {
                   lyricsSearchResult === 'found'
                     ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm'
                     : lyricsSearchResult === 'not_found'
