@@ -161,13 +161,18 @@ function trackMatchesWaveLanguage(track: any, state: WaveFilterState): boolean {
 }
 
 const NEURO_PATTERNS = [
-  /\bнейро[а-яё\-]*/i,
-  /\b(?:ai|ии)\b/i,
-  /\b(?:suno|udio|diff-c|musicgen|mubert)\b/i,
-  /\b(?:generative|генеративн[а-яё]+)\b/i,
-  /\b(?:нейромузык[а-яё]*|нейросеть|нейропесн[а-яё]*|нейрокавер[а-яё]*)\b/i,
-  /\b(?:ai[\s_-]*(?:cover|кавер|remake|ремейк|track|music|song|generated|version|версия))\b/i,
-  /\b(?:ии[\s_-]*(?:кавер|трек|музыка|песня|версия))\b/i,
+  // Префиксы и слова с "нейро" (нейромузыка, нейрокавер, нейросеть, нейро-песня, нейро-кавер, нейротрек)
+  /(?:^|[^\p{L}\p{N}])нейро[а-яё\w-]*/iu,
+  // Отдельные маркеры AI / ИИ
+  /(?:^|[^\p{L}\p{N}])(?:ai|ии)(?:$|[^\p{L}\p{N}])/iu,
+  // Генеративные платформы и алгоритмы
+  /(?:^|[^\p{L}\p{N}])(?:suno|udio|diff-c|musicgen|mubert)(?:$|[^\p{L}\p{N}])/iu,
+  // Генеративная музыка
+  /(?:^|[^\p{L}\p{N}])генеративн[а-яё\w-]*/iu,
+  // Специфические фразы с ai/ии (ai cover, ии трек, ai generated, ии музыка)
+  /(?:^|[^\p{L}\p{N}])(?:ai|ии)[\s_/-]*(?:cover|кавер|remake|ремейк|track|трек|music|музыка|song|песня|generated|сгенерирован[а-яё]*|version|версия|voice|голос)/iu,
+  // Маркеры в скобках или версиях: (AI), (ИИ), [AI Cover]
+  /[([{\s](?:ai|ии|suno|udio|нейро)[)\]}\s]/iu,
 ];
 
 export function isNeuroTrack(track: any): boolean {
@@ -176,6 +181,7 @@ export function isNeuroTrack(track: any): boolean {
     track.title,
     track.artist,
     track.version,
+    track.albumTitle,
     track.album?.title,
     track.album?.name,
   ];

@@ -25,11 +25,73 @@ import { yandexWaveBatch, yandexWaveFeedback } from './yandex';
 import {
   describeWaveFilters,
   hasWaveFilters,
-  trackMatchesWaveFilters
+  trackMatchesWaveFilters,
+  isNeuroTrack
 } from './waveFilters';
 
 /** Играет ли сейчас волна. Плеер смотрит на это, чтобы докладывать порции. */
 export const waveActive = writable(false);
+
+/** Текущая станция ротора Яндекс Музыки (user:onyourwave или genre:...). */
+let activeStationId = 'user:onyourwave';
+
+function stationForState(state: any): string {
+  if (state.waveGenre) {
+    const g = `${state.waveGenre}`.toLowerCase();
+    const l = `${state.waveLanguage || ''}`.toLowerCase();
+    if (l === 'ru') {
+      if (g === 'rock') return 'genre:rusrock';
+      if (g === 'rap') return 'genre:rusrap';
+      if (g === 'pop') return 'genre:ruspop';
+      if (g === 'rnb') return 'genre:rusrnb';
+    } else if (l === 'en' || l === 'other') {
+      if (g === 'rock') return 'genre:foreignrock';
+      if (g === 'rap') return 'genre:foreignrap';
+      if (g === 'pop') return 'genre:foreignpop';
+    }
+    return `genre:${g}`;
+  }
+  return 'user:onyourwave';
+}
+
+const NEURO_SEARCH_QUERIES = [
+  'нейромузыка',
+  'нейрокавер',
+  'suno ai',
+  'нейросеть',
+  'генеративная музыка',
+  'ai cover',
+  'ии кавер',
+  'нейропесня'
+];
+
+let neuroQueryIndex = 0;
+
+async function fetchNeuroTracksFromYandex(rawToken: string, count = 10): Promise<any[]> {
+  try {
+    const api = await import('./yandex');
+    const q1 = NEURO_SEARCH_QUERIES[neuroQueryIndex % NEURO_SEARCH_QUERIES.length];
+    neuroQueryIndex++;
+    const q2 = NEURO_SEARCH_QUERIES[neuroQueryIndex % NEURO_SEARCH_QUERIES.length];
+    neuroQueryIndex++;
+
+    const [r1, r2] = await Promise.all([
+      api.searchYandex(rawToken, q1, 30).catch(() => []),
+      api.searchYandex(rawToken, q2, 30).catch(() => [])
+    ]);
+
+    const combined = [...r1, ...r2];
+    const currentDisliked = get(dislikedTracks);
+    const valid = combined
+      .filter((t: any) => t && t.id && !isTrackDisliked(currentDisliked, t) && isNeuroTrack(t))
+      .sort(() => Math.random() - 0.5);
+
+    return valid.slice(0, count);
+  } catch (e) {
+    console.warn('[волна] поиск нейротреков завершился с ошибкой', e);
+    return [];
+  }
+}
 
 /** Порция, из которой приехали треки, лежащие сейчас в очереди. */
 let batchId = '';
@@ -77,8 +139,8 @@ export function waveAvailable(state = get(settings)): boolean {
  * Идентификатор порции хранится в самом треке, а не рядом: отметку о треке надо присылать
  * именно в его порцию, а к моменту отметки текущая порция может быть уже следующей.
  */
-function mark(track: any, sourceBatchId = batchId): any {
-  return { ...track, waveBatchId: sourceBatchId };
+function mark(track: any, sourceBatchId = batchId, station = activeStationId): any {
+  return { ...track, waveBatchId: sourceBatchId, waveStation: station };
 }
 
 function occurrenceCount(track: any): number {
@@ -117,9 +179,23 @@ async function filteredWaveBatch(
   let latestBatchId = '';
   let cursor = `${prevTrackId ?? ''}`.trim();
 
+  const targetStation = stationForState(filterState);
+  activeStationId = targetStation;
+
   const scanBatches = filtered || sessionOccurrences.size > 0 || hasDislikes ? FILTER_SCAN_BATCHES : 1;
   for (let attempt = 0; attempt < scanBatches; attempt++) {
-    const batch = await yandexWaveBatch(rawToken, cursor || undefined);
+    let batch: any;
+    try {
+      batch = await yandexWaveBatch(rawToken, cursor || undefined, targetStation);
+    } catch (e) {
+      if (targetStation !== 'user:onyourwave') {
+        // Fallback к обычной волне если специфическая станция не ответила
+        batch = await yandexWaveBatch(rawToken, cursor || undefined, 'user:onyourwave');
+        activeStationId = 'user:onyourwave';
+      } else {
+        throw e;
+      }
+    }
     latestBatchId = batch.batchId || latestBatchId;
     if (batch.tracks.length === 0) break;
 
@@ -134,12 +210,26 @@ async function filteredWaveBatch(
         !trackMatchesWaveFilters(track, filterState)
       ) continue;
       seen.add(id);
-      tracks.push(mark(track, batch.batchId || latestBatchId));
+      tracks.push(mark(track, batch.batchId || latestBatchId, targetStation));
     }
 
     if (!nextCursor || nextCursor === cursor) break;
     cursor = nextCursor;
     if (tracks.length >= targetCount) break;
+  }
+
+  // Если выбран режим "только нейро" и из ротора не набралось достаточно треков,
+  // дополняем проверенными нейротреками напрямую из каталога Яндекса
+  if (filterState.waveAllowNeuro === 'only' && tracks.length < targetCount) {
+    const needed = targetCount - tracks.length + 5;
+    const neuroTracks = await fetchNeuroTracksFromYandex(rawToken, needed);
+    for (const track of neuroTracks) {
+      const id = `${track?.id ?? ''}`;
+      if (!id || seen.has(id) || occurrenceCount(track) >= MAX_TRACK_OCCURRENCES) continue;
+      seen.add(id);
+      tracks.push(mark(track, latestBatchId || 'neuro-batch', 'neuro-search'));
+      if (tracks.length >= targetCount) break;
+    }
   }
 
   return { batchId: latestBatchId, tailId: cursor, tracks };
@@ -191,7 +281,7 @@ export async function startWave(): Promise<boolean> {
   filterMissNotified = false;
 
   // Отметка о запуске станции — до первого трека, как это делают клиенты Яндекса.
-  yandexWaveFeedback(t, 'radioStarted', { batchId: tracks[0].waveBatchId || batchId });
+  yandexWaveFeedback(t, 'radioStarted', { batchId: tracks[0].waveBatchId || batchId, station: tracks[0].waveStation || activeStationId });
 
   // Очередь ставим раньше трека: реакция плеера на `currentTrack` синхронная, и к моменту,
   // когда он начнёт грузить первый трек, остальная порция должна уже лежать на месте.
@@ -215,6 +305,7 @@ export function stopWave(): void {
   startedId = '';
   pendingBatch = null;
   filterMissNotified = false;
+  activeStationId = 'user:onyourwave';
   sessionOccurrences.clear();
 }
 
@@ -243,7 +334,11 @@ function watchCurrentTrack(): void {
     const id = `${track.id}`;
     if (id === startedId) return; // повторный запуск того же трека: станции это не новость
     startedId = id;
-    yandexWaveFeedback(token(), 'trackStarted', { batchId: track.waveBatchId, trackId: track.id });
+    yandexWaveFeedback(token(), 'trackStarted', {
+      batchId: track.waveBatchId,
+      trackId: track.id,
+      station: track.waveStation || activeStationId
+    });
   });
 }
 
@@ -264,6 +359,7 @@ export function waveTrackDone(
     batchId: track.waveBatchId,
     trackId: track.id,
     playedSeconds,
+    station: track.waveStation || activeStationId
   });
 }
 

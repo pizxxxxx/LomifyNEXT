@@ -26,6 +26,7 @@ export const currentTrack = writable<{
   // отметки о треке станция принимает только вместе с ним (см. lib/wave.ts). По отсутствию
   // поля плеер и понимает, что человек включил что-то своё, и волну надо остановить.
   waveBatchId?: string;
+  waveStation?: string;
   _reboot?: number;
 } | null>(null);
 

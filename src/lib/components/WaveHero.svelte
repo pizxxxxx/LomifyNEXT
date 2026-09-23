@@ -334,6 +334,29 @@
     }
     pool = [...unique.values()];
 
+    // Если после фильтрации треков не осталось, ищем подходящие треки в каталоге
+    if (pool.length === 0) {
+      try {
+        const api = await import('$lib/api');
+        if ($settings.waveAllowNeuro === 'only') {
+          const [r1, r2] = await Promise.all([
+            api.performSearch('suno ai').catch(() => []),
+            api.performSearch('нейромузыка').catch(() => [])
+          ]);
+          const neuro = [...r1, ...r2].filter((t) => isNeuroTrack(t) || t?.title);
+          pool = onlyTracks(neuro);
+        } else if ($settings.waveGenre) {
+          const { WAVE_GENRES } = await import('$lib/waveFilters');
+          const genreObj = WAVE_GENRES.find((g) => g.id === $settings.waveGenre);
+          const q = genreObj?.label || $settings.waveGenre;
+          const res = await api.performSearch(q).catch(() => []);
+          pool = onlyTracks(res).filter((t) => trackMatchesWaveGenre(t, $settings));
+        }
+      } catch (e) {
+        console.error('[волна] поиск треков по фильтру не удался', e);
+      }
+    }
+
     // Пустой список здесь — не «нет музыки», а проглоченный отказ внутри api:
     // `getTrendingTracks` гасит сетевые ошибки через `Promise.allSettled` и на мёртвой сети
     // возвращает пустой массив, а не ошибку.

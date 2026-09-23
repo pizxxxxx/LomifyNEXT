@@ -572,6 +572,7 @@ export function mapYandexTrack(raw: any): any | null {
       ? `https://music.yandex.ru/album/${album.id}/track/${id}`
       : `https://music.yandex.ru/track/${id}`,
     genre: album?.genre ?? artistGenres[0] ?? '',
+    version: (t.version ?? '').trim(),
     // Один и тот же трек может быть в сингле, альбоме и сборнике с разными жанровыми
     // метками. Фильтр волны учитывает их все, а `genre` оставляем для старых потребителей.
     genres,
@@ -872,7 +873,8 @@ export interface YandexWaveBatch {
  */
 export async function yandexWaveBatch(
   rawToken: string,
-  prevTrackId?: string | number | null
+  prevTrackId?: string | number | null,
+  station = WAVE_STATION
 ): Promise<YandexWaveBatch> {
   const token = normalizeYandexToken(rawToken);
   if (!token) throw new Error('Яндекс Музыка не подключена — вставьте токен в настройках.');
@@ -881,7 +883,8 @@ export async function yandexWaveBatch(
   const tail = `${prevTrackId ?? ''}`.trim();
   if (tail) params.set('queue', tail);
 
-  const result = await ymJson(`${API}/rotor/station/${WAVE_STATION}/tracks?${params}`, token);
+  const targetStation = station || WAVE_STATION;
+  const result = await ymJson(`${API}/rotor/station/${targetStation}/tracks?${params}`, token);
 
   // Порция приходит как `sequence: [{ type, track, liked }]`; `mapYandexTrack` умеет
   // разворачивать такую обёртку сам (в лайках и плейлистах она такая же).
@@ -906,13 +909,14 @@ export async function yandexWaveBatch(
 export async function yandexWaveFeedback(
   rawToken: string,
   event: YandexWaveEvent,
-  opts: { batchId?: string; trackId?: string | number; playedSeconds?: number } = {}
+  opts: { batchId?: string; trackId?: string | number; playedSeconds?: number; station?: string } = {}
 ): Promise<void> {
   const token = normalizeYandexToken(rawToken);
   if (!token) return;
 
+  const targetStation = opts.station || WAVE_STATION;
   const body: Record<string, any> = { type: event, timestamp: new Date().toISOString() };
-  if (event === 'radioStarted') body.from = WAVE_FROM;
+  if (event === 'radioStarted') body.from = `radio-web-${targetStation.replace(/[:]/g, '_')}-default`;
   const trackId = `${opts.trackId ?? ''}`.trim();
   if (trackId) body.trackId = trackId;
   if (opts.playedSeconds != null && Number.isFinite(opts.playedSeconds)) {
@@ -924,7 +928,7 @@ export async function yandexWaveFeedback(
   const query = opts.batchId ? `?batch-id=${encodeURIComponent(opts.batchId)}` : '';
 
   try {
-    await ymJson(`${API}/rotor/station/${WAVE_STATION}/feedback${query}`, token, {
+    await ymJson(`${API}/rotor/station/${targetStation}/feedback${query}`, token, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
