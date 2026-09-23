@@ -30,7 +30,7 @@
   let startupAction: HTMLButtonElement;
   const changelog = getCurrentVersionChangelog();
   let selectedVersion = APP_VERSION;
-  const recentVersions = CHANGELOG_HISTORY.filter(c => ['9.4.0', '9.3.4'].includes(c.version));
+  const recentVersions = CHANGELOG_HISTORY.slice(0, 3);
   $: activeChangelog = CHANGELOG_HISTORY.find(c => c.version === selectedVersion) || changelog;
   const NOTICE_VERSION_KEY = 'lomifynext_last_seen_notice_version';
   const SESSION_NOTICE_KEY = 'lomifynext_notice_session_' + APP_VERSION;
