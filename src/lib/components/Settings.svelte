@@ -2367,6 +2367,25 @@
             Автор: @dopaminegdev
             <ExternalLink size={13} aria-hidden="true" />
           </a>
+
+          <div class="settings-autoupdate-row pt-3.5 mt-3.5 border-t border-white/[0.08] flex items-center justify-between gap-4">
+            <div>
+              <div class="setting-title !text-xs !mb-0.5">Автоматическая проверка обновлений</div>
+              <div class="setting-hint !text-[11px] !mt-0 text-neutral-400">
+                Проверять наличие новых версий при запуске и во время работы
+              </div>
+            </div>
+            <button
+              type="button"
+              aria-label="Автоматическая проверка обновлений"
+              role="switch"
+              aria-checked={$settings.autoCheckUpdates !== false}
+              class="switch"
+              on:click={() => $settings.autoCheckUpdates = !($settings.autoCheckUpdates !== false)}
+            >
+              <span class="switch-knob"></span>
+            </button>
+          </div>
         </div>
         <div class="settings-about-actions">
           <button

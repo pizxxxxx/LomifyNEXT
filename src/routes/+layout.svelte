@@ -1,7 +1,9 @@
 <script lang="ts">
   import '../app.css';
   import { settings, initStore, currentTrack, isPlaying, effectivePerformanceMode } from '$lib/stores';
+  import { get } from 'svelte/store';
   import Titlebar from '$lib/components/Titlebar.svelte';
+  import UpdateNotification from '$lib/components/UpdateNotification.svelte';
   import { onMount } from 'svelte';
   import { Check, X, ChevronDown, ChevronUp, Sparkles } from 'lucide-svelte';
   import { APP_NAME, APP_VERSION } from '$lib/version';
@@ -11,7 +13,9 @@
     updateStatus,
     updateInfo,
     downloadProgress,
-    installDownloadedUpdate
+    installDownloadedUpdate,
+    showStartupUpdateModal,
+    showTopUpdateNotification
   } from '$lib/updater';
   import { extractCoverAccent, rgbToHex } from '$lib/utils/coverAccent';
   import { lockDevTools } from '$lib/utils/devLock';
@@ -41,6 +45,8 @@
   let likesSyncTask: ReturnType<typeof setTimeout> | null = null;
   let likesSyncInterval: ReturnType<typeof setInterval> | null = null;
   let cacheCleanupTask: ReturnType<typeof setTimeout> | null = null;
+  let updateCheckInterval: ReturnType<typeof setInterval> | null = null;
+  let onWindowFocusUpdateCheck: (() => void) | null = null;
   let lastLikesSyncAt = 0;
   let lastLikesSyncToken = '';
   let logicalViewportWidth = 1920;
@@ -284,8 +290,43 @@
       window.addEventListener('focus', refreshYandexLikes);
       document.addEventListener('visibilitychange', refreshYandexLikes);
 
-      // Фоновая проверка обновлений с GitHub при запуске
-      void checkForUpdates(true);
+      // Фоновая проверка обновлений с GitHub при запуске и во время работы плеера
+      let lastUpdateCheckAt = 0;
+      const UPDATE_CHECK_INTERVAL_MS = 15 * 60_000;
+
+      async function runUpdateCheck(isStartup = false) {
+        if (typeof window === 'undefined') return;
+        if ($settings.autoCheckUpdates === false) return;
+
+        lastUpdateCheckAt = Date.now();
+        try {
+          const update = await checkForUpdates(false);
+          if (update) {
+            if (isStartup) {
+              showStartupUpdateModal.set(true);
+            } else {
+              if (!get(showStartupUpdateModal)) {
+                showTopUpdateNotification.set(true);
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('[updater] Ошибка проверки обновлений:', err);
+        }
+      }
+
+      void runUpdateCheck(true);
+
+      updateCheckInterval = setInterval(() => {
+        void runUpdateCheck(false);
+      }, UPDATE_CHECK_INTERVAL_MS);
+
+      onWindowFocusUpdateCheck = () => {
+        if (Date.now() - lastUpdateCheckAt >= UPDATE_CHECK_INTERVAL_MS) {
+          void runUpdateCheck(false);
+        }
+      };
+      window.addEventListener('focus', onWindowFocusUpdateCheck);
 
       const lastSeenNoticeVer = localStorage.getItem(NOTICE_VERSION_KEY);
       const seenThisSession = sessionStorage.getItem(SESSION_NOTICE_KEY);
@@ -293,8 +334,10 @@
       // Каждое обновление (когда версия сменилась) показываем окно обязательно,
       // даже если в старой версии стояла галочка «не показывать».
       if (!seenThisSession && (lastSeenNoticeVer !== APP_VERSION || $settings.showStartupNotice !== false)) {
-        isChangelogModalOpen.set(true);
-        dontShowAgain = true;
+        if (!get(showStartupUpdateModal)) {
+          isChangelogModalOpen.set(true);
+          dontShowAgain = true;
+        }
       }
 
       // Ссылки живут в блоке Tauri выше, а общий cleanup возвращается из onMount ниже.
@@ -317,6 +360,10 @@
       if (likesSyncTask !== null) clearTimeout(likesSyncTask);
       if (likesSyncInterval !== null) clearInterval(likesSyncInterval);
       if (cacheCleanupTask !== null) clearTimeout(cacheCleanupTask);
+      if (updateCheckInterval !== null) clearInterval(updateCheckInterval);
+      if (onWindowFocusUpdateCheck !== null) {
+        window.removeEventListener('focus', onWindowFocusUpdateCheck);
+      }
       window.removeEventListener('focus', refreshYandexLikes);
       document.removeEventListener('visibilitychange', refreshYandexLikes);
     };
@@ -415,11 +462,16 @@
     if (accent) document.body.style.setProperty('--color-primary', rgbToHex(accent));
     else document.body.style.removeProperty('--color-primary');
   }
+
+  $: if ($showStartupUpdateModal && $isChangelogModalOpen) {
+    isChangelogModalOpen.set(false);
+  }
 </script>
 
 <svelte:window on:keydown={onWindowKeydown} />
 
 <Titlebar />
+<UpdateNotification />
 <slot />
 
 {#if showStartupNotice}

@@ -168,6 +168,8 @@ const defaultSettings = {
   enableDiscordRpc: true,
   /** Показывать стартовое информационное окно со статусом версии при запуске приложения. */
   showStartupNotice: true,
+  /** Автоматическая проверка обновлений при запуске и в фоне во время работы (по умолчанию включено). */
+  autoCheckUpdates: true,
   showLyricsByDefault: false,
   enableHoverPreview: true,
   hoverPreviewDelay: 1000,

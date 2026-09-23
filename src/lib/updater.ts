@@ -45,6 +45,10 @@ export const updateInfo = writable<UpdateDetails | null>(null);
 export const downloadProgress = writable<DownloadProgressPayload>({ downloaded: 0, total: 0, percent: 0 });
 export const downloadedInstallerPath = writable<string>('');
 export const updateErrorMessage = writable<string>('');
+/** Показывать ли модальное окно/плашку при запуске о наличии новой версии. */
+export const showStartupUpdateModal = writable<boolean>(false);
+/** Показывать ли плавающее уведомление сверху с версией и кнопкой «Обновить». */
+export const showTopUpdateNotification = writable<boolean>(false);
 
 const GITHUB_RELEASES_URL = 'https://api.github.com/repos/pizxxxxx/LomifyNEXT/releases/latest';
 
@@ -74,7 +78,7 @@ let isChecking = false;
 let isDownloading = false;
 let unlistenProgress: (() => void) | null = null;
 
-export async function checkForUpdates(autoDownload = true): Promise<UpdateDetails | null> {
+export async function checkForUpdates(autoDownload = false): Promise<UpdateDetails | null> {
   if (isChecking || isDownloading) return get(updateInfo);
   isChecking = true;
   updateStatus.set('checking');

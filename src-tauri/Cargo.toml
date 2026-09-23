@@ -1,6 +1,6 @@
 [package]
 name = "lomifynext-tauri"
-version = "9.4.1"
+version = "9.4.2"
 description = "LomifyNEXT"
 authors = ["dopaminegdev"]
 license = "GPL-3.0-or-later"
