@@ -56,9 +56,38 @@ function tokenSimilarity(left: string, right: string): number {
   return (2 * overlap) / (a.size + b.size);
 }
 
+const COVER_OR_AI_PATTERNS = [
+  /\b(?:ai|ии)\b/i,
+  /\b(?:ai|ии)[\s_-]*(?:cover|кавер|remake|ремейк|version|версия|mix|микс)\b/i,
+  /\bнейро[а-яё]*/i,
+  /\b(?:suno|udio)\b/i,
+  /\b(?:cover|кавер)\b/i,
+  /\b(?:tribute|parody|пародия)\b/i,
+  /\b(?:karaoke|караоке)\b/i,
+  /\b(?:instrumental|инструментал)\b/i,
+];
+
+function hasCoverOrAiMarker(text: string): boolean {
+  if (!text) return false;
+  return COVER_OR_AI_PATTERNS.some((p) => p.test(text));
+}
+
 function scoreCandidate(seed: MusicImportSeed, candidate: any): number {
   const seedTitle = normalizeImportText(seed.title);
-  const candidateTitle = normalizeImportText(String(candidate?.title || ''));
+  const rawCandidateTitle = String(candidate?.title || '');
+  const candidateTitle = normalizeImportText(rawCandidateTitle);
+  const rawCandidateArtists = (candidate?.artists?.length ? candidate.artists : [candidate?.artist])
+    .map((artist: unknown) => String(artist || ''))
+    .join(' ');
+
+  // Никогда не подменять оригинальный трек на AI-кавер или кавер, если в исходнике его не было
+  if (
+    !hasCoverOrAiMarker(seed.title) &&
+    (hasCoverOrAiMarker(rawCandidateTitle) || hasCoverOrAiMarker(rawCandidateArtists))
+  ) {
+    return 0;
+  }
+
   let titleScore = tokenSimilarity(seedTitle, candidateTitle) * 50;
   if (seedTitle === candidateTitle) titleScore = 55;
   else if (seedTitle.includes(candidateTitle) || candidateTitle.includes(seedTitle)) {

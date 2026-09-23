@@ -14,11 +14,14 @@
     UserRound,
     HardDrive,
     RefreshCw,
-    ChevronDown
+    ChevronDown,
+    FolderDown
   } from 'lucide-svelte';
-  import { Plus as PlusIcon, Check as CheckIcon } from 'lucide';
+  import { Plus as PlusIcon, Check as CheckIcon, Play as PlayData, Pause as PauseData } from 'lucide';
   import { MorphIcon } from 'morphicons/svelte';
   import { performSearchDetailed, getSoundCloudPlaylists } from '$lib/api';
+  import { exportTrackToFile, exportingUrns } from '$lib/exportAudio';
+  import { buildTrackUrn } from '$lib/utils/trackUrn';
   import { currentTrack, isPlaying, settings, searchQuery, searchResults, searchPlaylists, queue, searchHistory, likedTracks, dislikedTracks, playlists, notify } from '$lib/stores';
   import { isTrackDisliked, toggleTrackDislike } from '$lib/dislikes';
   import { getTracks } from '$lib/db';
@@ -344,12 +347,58 @@
     isPlaying.set(true);
   }
 
+  function toggleTopResultPlayback(track: any) {
+    if (!track) return;
+    const isCurrent = $currentTrack?.title === track.title && $currentTrack?.artist === track.artist;
+    if (isCurrent) {
+      isPlaying.update(v => !v);
+      return;
+    }
+    playTrack(track);
+  }
+
   function playPlaylist(pl: any) {
     if (pl.tracks && pl.tracks.length > 0) {
       queue.set(pl.tracks.slice(1));
       currentTrack.set(pl.tracks[0]);
       isPlaying.set(true);
     }
+  }
+
+  function trackMatches(a: any, b: any): boolean {
+    if (!a || !b) return false;
+    if (a.id != null && b.id != null && `${a.id}` === `${b.id}`) return true;
+    if (a.urn && b.urn && a.urn === b.urn) return true;
+    if (a.title && b.title && a.title.trim().toLowerCase() === b.title.trim().toLowerCase()) {
+      if (!a.artist || !b.artist) return true;
+      const aArt = a.artist.trim().toLowerCase();
+      const bArt = b.artist.trim().toLowerCase();
+      return aArt === bArt || aArt.includes(bArt) || bArt.includes(aArt);
+    }
+    return false;
+  }
+
+  function isPlaylistPlaying(playlist: any, current = $currentTrack, playing = $isPlaying): boolean {
+    if (!playlist?.tracks?.length || !playing || !current) return false;
+    return playlist.tracks.some((t: any) => trackMatches(t, current));
+  }
+
+  function isPlaylistCurrent(playlist: any, current = $currentTrack): boolean {
+    if (!playlist?.tracks?.length || !current) return false;
+    return playlist.tracks.some((t: any) => trackMatches(t, current));
+  }
+
+  function togglePlaylistPlayback(playlist: any) {
+    if (!playlist?.tracks?.length) return;
+    if (isPlaylistPlaying(playlist, $currentTrack, $isPlaying)) {
+      isPlaying.set(false);
+      return;
+    }
+    if (isPlaylistCurrent(playlist, $currentTrack)) {
+      isPlaying.set(true);
+      return;
+    }
+    playPlaylist(playlist);
   }
 
   function togglePlaylistSaved(pl: any) {
@@ -542,6 +591,7 @@
     </div>
 
     {#if resultView === 'all' && topResult}
+      {@const isTopPlaying = Boolean($currentTrack && $currentTrack.title === topResult.title && $currentTrack.artist === topResult.artist && $isPlaying)}
       <section class="search-top-result">
         <div class="search-top-art">
           {#if topResult.coverUrl}
@@ -563,9 +613,23 @@
             {#if formatDuration(topResult.duration)}<span class="tnum">{formatDuration(topResult.duration)}</span>{/if}
           </div>
         </div>
-        <button type="button" class="search-top-play" on:click={() => playTrack(topResult)}>
-          <Play size={18} fill="currentColor" />
-          Слушать
+        <button
+          type="button"
+          class="search-top-play"
+          class:is-playing={isTopPlaying}
+          aria-label={isTopPlaying ? 'Пауза' : 'Слушать'}
+          on:click={() => toggleTopResultPlayback(topResult)}
+        >
+          <MorphIcon
+            icon={isTopPlaying ? PauseData : PlayData}
+            size={18}
+            strokeWidth={2.35}
+            fill="currentColor"
+            class="play-pause-morph"
+            spring="snappy"
+            reducedMotion="user"
+          />
+          <span>{isTopPlaying ? 'Пауза' : 'Слушать'}</span>
         </button>
       </section>
     {/if}
@@ -600,6 +664,7 @@
         </div>
         <div class="search-playlist-grid">
           {#each $searchPlaylists as pl (pl.id)}
+            {@const isPlayingThisPl = isPlaylistPlaying(pl, $currentTrack, $isPlaying)}
             <article class="search-playlist-card" class:is-expanded={expandedPlaylistId === pl.id}>
               <div class="search-playlist-summary">
                 <button type="button" class="search-playlist-art" on:click={() => expandedPlaylistId = expandedPlaylistId === pl.id ? null : pl.id} aria-expanded={expandedPlaylistId === pl.id}>
@@ -610,7 +675,25 @@
                   <button type="button" class="search-playlist-title" on:click={() => expandedPlaylistId = expandedPlaylistId === pl.id ? null : pl.id}>{pl.title}</button>
                   <p>{withCount(pl.tracks?.length || 0, 'трек', 'трека', 'треков')}</p>
                   <div class="search-playlist-actions">
-                    <button type="button" class="is-primary" on:click={() => playPlaylist(pl)} title="Слушать плейлист"><Play size={15} fill="currentColor" /> Слушать</button>
+                    <button
+                      type="button"
+                      class="is-primary"
+                      class:is-playing={isPlayingThisPl}
+                      on:click={() => togglePlaylistPlayback(pl)}
+                      title={isPlayingThisPl ? 'Пауза' : 'Слушать плейлист'}
+                      aria-label={isPlayingThisPl ? 'Пауза' : 'Слушать плейлист'}
+                    >
+                      <MorphIcon
+                        icon={isPlayingThisPl ? PauseData : PlayData}
+                        size={15}
+                        strokeWidth={2.35}
+                        fill="currentColor"
+                        class="play-pause-morph"
+                        spring="snappy"
+                        reducedMotion="user"
+                      />
+                      <span>{isPlayingThisPl ? 'Пауза' : 'Слушать'}</span>
+                    </button>
                     <button type="button" on:click={(e) => startPlaylistPreview(e, pl)} title="Трейлер плейлиста"><Radio size={15} /> Трейлер</button>
                     <button type="button" on:click={() => expandedPlaylistId = expandedPlaylistId === pl.id ? null : pl.id} aria-expanded={expandedPlaylistId === pl.id}>
                       <ChevronDown size={15} /> {expandedPlaylistId === pl.id ? 'Свернуть' : 'Открыть'}
@@ -681,6 +764,24 @@
                 {#if formatDuration(track.duration)}<span class="tnum">{formatDuration(track.duration)}</span>{/if}
               </div>
               <div class="track-row-actions">
+                {#if $settings.exportEnabled}
+                  {@const expUrn = buildTrackUrn(track)}
+                  {@const isExporting = $exportingUrns.has(expUrn)}
+                  <button
+                    type="button"
+                    class="track-row-action"
+                    disabled={isExporting}
+                    title={isExporting ? 'Экспортирую...' : 'Экспортировать трек в файл'}
+                    aria-label="Экспортировать трек в файл"
+                    on:click={(e) => { e.stopPropagation(); exportTrackToFile(track); }}
+                  >
+                    {#if isExporting}
+                      <Loader2 size={16} class="animate-spin text-accent" />
+                    {:else}
+                      <FolderDown size={16} />
+                    {/if}
+                  </button>
+                {/if}
                 <button type="button" aria-label={isTrackLiked($likedTracks, track) ? 'Убрать из любимых' : 'Добавить в любимые'} aria-pressed={isTrackLiked($likedTracks, track)} class="track-row-action" class:is-liked={isTrackLiked($likedTracks, track)} on:click={(e) => toggleLikeSearch(track, e)}>
                   <Heart size={17} fill={isTrackLiked($likedTracks, track) ? 'currentColor' : 'none'} />
                 </button>

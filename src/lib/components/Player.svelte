@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { startRockiumBridge } from '$lib/rockiumBridge';
+  onMount(startRockiumBridge);
   import { Volume2, SkipBack, SkipForward, Shuffle, Repeat, Mic2, Radio, Heart, ThumbsDown, Share2, Download, Check, Trash2, Loader2 } from 'lucide-svelte';
   import { MorphIcon } from 'morphicons/svelte';
   import {
@@ -663,6 +665,11 @@
     return /\b(403|410)\b/.test(text);
   }
 
+  function isDrmError(e: unknown): boolean {
+    const text = typeof e === 'string' ? e : `${(e as any)?.message ?? ''}`;
+    return text.toLowerCase().includes('drm') || text.toLowerCase().includes('защищён');
+  }
+
   /**
    * Загрузка потока с одной пересборкой подписи.
    *
@@ -700,6 +707,22 @@
     try {
       return await load(url);
     } catch (e) {
+      if (generation !== loadGeneration) throw e;
+
+      if (isDrmError(e)) {
+        console.warn('[player] поток отклонён из-за DRM, пробуем резервный вариант/превью', e);
+        try {
+          const fallback = await getAudioUrl(track, { forcePreview: true, silent: true });
+          if (fallback && fallback !== url && generation === loadGeneration) {
+            notify('SoundCloud защитил полную версию трека (DRM). Воспроизводится 30-секундный отрывок.', 'info');
+            return await load(fallback);
+          }
+        } catch (fallbackError) {
+          console.warn('[player] резервный поток тоже недоступен', fallbackError);
+        }
+        throw e;
+      }
+
       if (!isRejectedByCdn(e) || generation !== loadGeneration) throw e;
 
       let fresh: string | null = null;

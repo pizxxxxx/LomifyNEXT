@@ -1547,6 +1547,8 @@ impl TrackCacheState {
         req: CacheRequest<'_>,
         dest_path: String,
         cover_url: Option<String>,
+        title: Option<String>,
+        artist: Option<String>,
     ) -> Result<String, String> {
         let urn = req.urn.to_string();
         let dest = PathBuf::from(&dest_path);
@@ -1564,14 +1566,29 @@ impl TrackCacheState {
                     Some(u) if !u.is_empty() => self.fetch_cover(&u).await,
                     _ => None,
                 };
-                match transcode::export_with_cover(&ffmpeg, &source_path, cover.as_deref(), &dest)
-                    .await
+                match transcode::export_with_cover(
+                    &ffmpeg,
+                    &source_path,
+                    cover.as_deref(),
+                    title.as_deref(),
+                    artist.as_deref(),
+                    &dest,
+                )
+                .await
                 {
                     Ok(()) => return Ok(dest_path),
                     Err(e) if cover.is_some() => {
                         // A bad cover shouldn't sink the download — retry artless.
                         eprintln!("[TrackCache] export with cover failed ({e}), retrying without");
-                        transcode::export_with_cover(&ffmpeg, &source_path, None, &dest).await?;
+                        transcode::export_with_cover(
+                            &ffmpeg,
+                            &source_path,
+                            None,
+                            title.as_deref(),
+                            artist.as_deref(),
+                            &dest,
+                        )
+                        .await?;
                         return Ok(dest_path);
                     }
                     Err(e) => return Err(e),
@@ -1580,17 +1597,21 @@ impl TrackCacheState {
         }
 
         // No clean m4a available (ffmpeg unavailable, or the transcode failed /
-        // timed out). Re-resolve in case a concurrent transcode finished and
-        // deleted the raw path we held, then only copy if the source is already a
-        // valid m4a — never write mismatched bytes into the user's .m4a file.
+        // timed out).
         let fallback = self.resolve_path(&urn).unwrap_or(source_path);
-        if self.is_clean_path(&fallback) || transcode::is_m4a(&fallback).await {
+        let is_m4a_dest = dest
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("m4a"))
+            .unwrap_or(false);
+
+        if is_m4a_dest && (self.is_clean_path(&fallback) || transcode::is_m4a(&fallback).await) {
             tokio::fs::copy(&fallback, &dest)
                 .await
                 .map_err(|e| format!("Copy failed: {e}"))?;
             return Ok(dest_path);
         }
-        Err("Cannot export to m4a: audio transcoder is still preparing or unavailable".into())
+        Err("Не удалось экспортировать трек: аудиокодировщик ffmpeg подготавливается или недоступен".into())
     }
 
     /// Try each storage URL once (healthy hosts first), then API URLs with retries.

@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { currentTrack, currentView, previousView, settings, lyricsStatus } from '$lib/stores';
-  import { Minimize2, AlignLeft, AlignCenter, Settings2, Ghost } from 'lucide-svelte';
+  import { currentTrack, currentView, previousView, settings, lyricsStatus, lyricsReloadTrigger, notify, rebootCurrentTrack } from '$lib/stores';
+  import { Minimize2, AlignLeft, AlignCenter, Settings2, Ghost, Search, Sparkles, Loader2 } from 'lucide-svelte';
+  import { refetchLyrics } from '$lib/api';
   import { invoke } from '@tauri-apps/api/core';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { onMount, onDestroy } from 'svelte';
@@ -61,15 +62,56 @@
   $: lyricsHint = showLyrics
     ? 'Скрыть текст'
     : $lyricsStatus === 'none'
-      ? 'Текста нет — только музыка'
+      ? 'Текста нет - только музыка'
       : $lyricsStatus === 'loading'
-        ? 'Ищу текст…'
+        ? 'Ищу текст...'
         : 'Показать текст';
 
   /** Переключить текст, если его есть что показывать. */
   function toggleLyrics() {
     if (noLyrics) return;
     showLyrics = !showLyrics;
+  }
+
+  let isSearchingLyrics = false;
+  let lyricsSearchResult: 'idle' | 'found' | 'not_found' = 'idle';
+  let lyricsSearchTimeout: any = null;
+
+  $: if ($currentTrack) {
+    lyricsSearchResult = 'idle';
+  }
+
+  async function handleMbNaydetsa() {
+    if (!$currentTrack || isSearchingLyrics) return;
+    isSearchingLyrics = true;
+    lyricsSearchResult = 'idle';
+    lyricsStatus.set('loading');
+    clearTimeout(lyricsSearchTimeout);
+
+    try {
+      const text = await refetchLyrics($currentTrack);
+      if (text) {
+        lyricsSearchResult = 'found';
+        lyricsStatus.set('found');
+        lyricsReloadTrigger.update(n => n + 1);
+        showLyrics = true;
+        notify('Текст песни найден и синхронизирован!', 'success');
+      } else {
+        lyricsSearchResult = 'not_found';
+        lyricsStatus.set('none');
+        lyricsReloadTrigger.update(n => n + 1);
+        notify('Текст для этого трека пока не найден.', 'info');
+      }
+    } catch (e) {
+      lyricsSearchResult = 'not_found';
+      lyricsStatus.set('none');
+      notify('Не удалось выполнить повторный поиск текста.', 'error');
+    } finally {
+      isSearchingLyrics = false;
+      lyricsSearchTimeout = setTimeout(() => {
+        lyricsSearchResult = 'idle';
+      }, 3000);
+    }
   }
 
   /**
@@ -160,6 +202,7 @@
 
   onDestroy(() => {
     if (unlistenFft) unlistenFft();
+    if (lyricsSearchTimeout) clearTimeout(lyricsSearchTimeout);
     if (typeof window !== 'undefined') window.removeEventListener('keydown', onKeydown);
   });
 
@@ -313,6 +356,112 @@
               </button>
             </div>
 
+            <div class="flex items-center justify-between gap-3">
+              <div class="flex min-w-0 flex-col">
+                <div class="flex items-center gap-1.5">
+                  <span class="text-white/70 font-medium text-sm">damn</span>
+                  <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-400/20 text-amber-300 border border-amber-400/35 tracking-wider uppercase">Бета</span>
+                </div>
+                <span class="text-white/35 text-[11px] leading-snug mt-0.5">
+                  Выделять фоновые звуки в скобках отдельным слоем
+                </span>
+              </div>
+              <button
+                aria-label="Выделение эдлибов (damn)"
+                role="switch"
+                aria-checked={$settings.lyricsAdlibs !== false}
+                class="switch shrink-0"
+                on:click={() => {
+                  settings.update(s => ({ ...s, lyricsAdlibs: s.lyricsAdlibs === false }));
+                  rebootCurrentTrack();
+                }}
+              >
+                <span class="switch-knob"></span>
+              </button>
+            </div>
+
+            {#if $settings.lyricsAdlibs !== false}
+              <div class="pt-0.5">
+                <div class="grid grid-cols-2 gap-1 p-0.5 rounded-lg bg-white/[0.06] border border-white/[0.08]">
+                  <button
+                    type="button"
+                    class="py-1 text-center rounded text-[11px] transition-colors {$settings.lyricsAdlibStyle !== 'backdrop' ? 'bg-white/15 text-white font-medium' : 'text-white/45 hover:text-white/80'}"
+                    on:click={() => {
+                      settings.update(s => ({ ...s, lyricsAdlibStyle: 'overlay' }));
+                      rebootCurrentTrack();
+                    }}
+                  >
+                    Над текстом
+                  </button>
+                  <button
+                    type="button"
+                    class="py-1 text-center rounded text-[11px] transition-colors {$settings.lyricsAdlibStyle === 'backdrop' ? 'bg-white/15 text-white font-medium' : 'text-white/45 hover:text-white/80'}"
+                    on:click={() => {
+                      settings.update(s => ({ ...s, lyricsAdlibStyle: 'backdrop' }));
+                      rebootCurrentTrack();
+                    }}
+                  >
+                    Под текстом
+                  </button>
+                </div>
+              </div>
+            {/if}
+
+            <!-- Повторный поиск текста («мб найдеца») -->
+            <div class="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-white/[0.04] border border-white/[0.08] hover:border-white/[0.13] transition-colors">
+              <div class="flex min-w-0 flex-col">
+                <div class="flex items-center gap-1.5">
+                  <span class="text-white/80 font-medium text-sm">Текст трека</span>
+                  {#if lyricsSearchResult === 'found'}
+                    <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/35 tracking-wide">
+                      Найдено
+                    </span>
+                  {:else if lyricsSearchResult === 'not_found'}
+                    <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rose-500/20 text-rose-300 border border-rose-500/35 tracking-wide">
+                      Не нашлось
+                    </span>
+                  {/if}
+                </div>
+                <span class="text-white/35 text-[11px] leading-snug mt-0.5 truncate">
+                  {#if isSearchingLyrics}
+                    Ищу слова в источниках и каталогах...
+                  {:else if lyricsSearchResult === 'found'}
+                    Слова успешно загружены и синхронизированы
+                  {:else if lyricsSearchResult === 'not_found'}
+                    В базах пока нет слов для этого трека
+                  {:else if $lyricsStatus === 'found'}
+                    Обновить или поискать текст глубже
+                  {:else}
+                    Сбросить кеш и поискать слова заново
+                  {/if}
+                </span>
+              </div>
+              <button
+                type="button"
+                class="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all select-none cursor-pointer {
+                  lyricsSearchResult === 'found'
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm'
+                    : lyricsSearchResult === 'not_found'
+                    ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
+                    : 'bg-white/10 hover:bg-white/15 active:scale-95 text-white/90 border border-white/10 shadow-sm'
+                }"
+                disabled={isSearchingLyrics}
+                on:click={handleMbNaydetsa}
+                title="Поискать слова для текущего трека заново"
+              >
+                {#if isSearchingLyrics}
+                  <Loader2 size={13} class="animate-spin text-white/80" />
+                  <span>Ищу...</span>
+                {:else if lyricsSearchResult === 'found'}
+                  <Sparkles size={13} class="text-emerald-300" />
+                  <span>Нашлось!</span>
+                {:else}
+                  <Search size={13} class="text-white/70" />
+                  <span>мб найдеца</span>
+                {/if}
+              </button>
+            </div>
+
             <div
               class="flex flex-col gap-2 transition-opacity"
               class:opacity-35={!fullscreenLyricsSync}
@@ -327,7 +476,7 @@
                     on:click={() => $settings.lyricsOffset = 0}
                   >сброс</button>
                   <span class="text-white tnum bg-white/10 px-2 py-0.5 rounded">
-                    {fullscreenLyricsSync ? ($settings.lyricsOffset || 0) : '—'}
+                    {fullscreenLyricsSync ? ($settings.lyricsOffset || 0) : '-'}
                   </span>
                 </div>
               </div>

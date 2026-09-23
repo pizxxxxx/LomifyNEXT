@@ -1,4 +1,5 @@
 mod app;
+mod rockium;
 mod audio;
 mod auth;
 mod discord;
@@ -218,6 +219,9 @@ pub fn run() {
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![exit_app,
+            rockium::rockium_publish,
+            app::updater::check_and_download_update,
+            app::updater::install_update,
             network::server::get_server_ports,
             app::diagnostics::diagnostics_log,
             discord::commands::discord_connect,

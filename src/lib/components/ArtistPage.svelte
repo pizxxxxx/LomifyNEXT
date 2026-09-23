@@ -3,6 +3,8 @@
   import { fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { Play, Loader2, User, Info, Disc, X, ListMusic, ChevronLeft, Music2 } from 'lucide-svelte';
+  import { Play as PlayData, Pause as PauseData } from 'lucide';
+  import { MorphIcon } from 'morphicons/svelte';
   import { currentArtist, currentTrack, isPlaying, queue, settings, effectivePerformanceMode, globalVolume, notify, pageAtmosphere, type PageAtmosphere } from '$lib/stores';
   import { getArtistTracks, getAudioUrl, getArtistAlbums, getArtistProfile, getAlbumTracks, trackByArtist, type ArtistSource } from '$lib/api';
   import ArtistTag from './ArtistTag.svelte';
@@ -392,6 +394,73 @@
     currentTrack.set(list[0]);
     isPlaying.set(true);
   }
+
+  function trackMatches(a: any, b: any): boolean {
+    if (!a || !b) return false;
+    if (a.id != null && b.id != null && `${a.id}` === `${b.id}`) return true;
+    if (a.urn && b.urn && a.urn === b.urn) return true;
+    if (a.title && b.title && a.title.trim().toLowerCase() === b.title.trim().toLowerCase()) {
+      if (!a.artist || !b.artist) return true;
+      const aArt = a.artist.trim().toLowerCase();
+      const bArt = b.artist.trim().toLowerCase();
+      return aArt === bArt || aArt.includes(bArt) || bArt.includes(aArt);
+    }
+    return false;
+  }
+
+  function isTrackPlaying(track: any, current = $currentTrack, playing = $isPlaying): boolean {
+    if (!playing || !current || !track) return false;
+    return trackMatches(track, current);
+  }
+
+  function isAlbumPlaying(album: any, current = $currentTrack, playing = $isPlaying): boolean {
+    if (!album?.tracks?.length || !playing || !current) return false;
+    return album.tracks.some((t: any) => trackMatches(t, current));
+  }
+
+  function isAlbumCurrent(album: any, current = $currentTrack): boolean {
+    if (!album?.tracks?.length || !current) return false;
+    return album.tracks.some((t: any) => trackMatches(t, current));
+  }
+
+  async function toggleAlbumPlayback(album: any) {
+    if (!album) return;
+    if (isAlbumPlaying(album, $currentTrack, $isPlaying)) {
+      isPlaying.set(false);
+      return;
+    }
+    if (isAlbumCurrent(album, $currentTrack)) {
+      isPlaying.set(true);
+      return;
+    }
+    await playAlbum(album);
+  }
+
+  $: isArtistPlaying = Boolean(
+    $isPlaying &&
+    $currentTrack &&
+    tracks.length > 0 &&
+    (tracks.some(t => isTrackPlaying(t)) ||
+     ($currentArtist && $currentTrack?.artist && $currentTrack.artist.toLowerCase().includes($currentArtist.toLowerCase())))
+  );
+
+  function toggleArtistPlayback() {
+    if (!tracks.length) return;
+    if (isArtistPlaying) {
+      isPlaying.set(false);
+      return;
+    }
+    const isCurrentInTracks = tracks.some(t =>
+      (t.id && t.id === $currentTrack?.id) ||
+      (t.urn && t.urn === ($currentTrack as any)?.urn) ||
+      (t.title === $currentTrack?.title && t.artist === $currentTrack?.artist)
+    );
+    if (isCurrentInTracks && !$isPlaying) {
+      isPlaying.set(true);
+      return;
+    }
+    playTrack(tracks[0], tracks);
+  }
 </script>
 
 <div class="w-full">
@@ -509,6 +578,28 @@
           • {artistFollowers.toLocaleString('ru-RU')} {plural(artistFollowers, 'подписчик', 'подписчика', 'подписчиков')}
         {/if}
       </p>
+      <div class="artist-hero-actions mt-3 flex items-center gap-3">
+        <button
+          type="button"
+          class="artist-hero-play"
+          class:is-playing={isArtistPlaying}
+          disabled={!tracks.length}
+          on:click={toggleArtistPlayback}
+          title={isArtistPlaying ? 'Пауза' : 'Слушать'}
+          aria-label={isArtistPlaying ? 'Пауза' : 'Слушать'}
+        >
+          <MorphIcon
+            icon={isArtistPlaying ? PauseData : PlayData}
+            size={18}
+            strokeWidth={2.35}
+            fill="currentColor"
+            class="play-pause-morph"
+            spring="snappy"
+            reducedMotion="user"
+          />
+          <span>{isArtistPlaying ? 'Пауза' : 'Слушать'}</span>
+        </button>
+      </div>
     </div>
   </header>
 
@@ -614,6 +705,7 @@
       <div class="artist-pane mb-10 w-full" in:fly={{ x: 34 * navDir, duration: 340, easing: cubicOut }}>
         <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
           {#each albums as album}
+            {@const isPlayingThisAlbum = isAlbumPlaying(album, $currentTrack, $isPlaying)}
             <!-- svelte-ignore a11y-click-events-have-key-events -->
             <!-- svelte-ignore a11y-no-static-element-interactions -->
             <div
@@ -638,10 +730,20 @@
                 <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                   <button
                     class="bg-primary hover:bg-primary/80 text-black rounded-full p-3 shadow-xl transform translate-y-4 group-hover:translate-y-0 transition-all duration-300"
-                    on:click|stopPropagation={() => playAlbum(album)}
-                    title="Слушать альбом"
+                    class:is-playing={isPlayingThisAlbum}
+                    on:click|stopPropagation={() => toggleAlbumPlayback(album)}
+                    title={isPlayingThisAlbum ? 'Пауза' : 'Слушать альбом'}
+                    aria-label={isPlayingThisAlbum ? 'Пауза' : 'Слушать альбом'}
                   >
-                    <Play fill="currentColor" size={20} />
+                    <MorphIcon
+                      icon={isPlayingThisAlbum ? PauseData : PlayData}
+                      size={20}
+                      strokeWidth={2.35}
+                      fill="currentColor"
+                      class="play-pause-morph"
+                      spring="snappy"
+                      reducedMotion="user"
+                    />
                   </button>
                 </div>
               </div>
@@ -667,6 +769,7 @@
     {#if activeTab === 'albums' && expandedAlbum}
       {@const al = albums.find(a => a.id === expandedAlbum)}
       {#if al}
+        {@const isPlayingThisAlbum = isAlbumPlaying(al, $currentTrack, $isPlaying)}
         <div class="artist-pane album-detail mb-10 w-full" in:fly={{ x: 34 * navDir, duration: 340, easing: cubicOut }}>
           <button type="button" class="album-back" on:click={closeAlbum}>
             <ChevronLeft size={17} />
@@ -687,9 +790,24 @@
               <p class="album-detail-sub">
                 {withCount(al.trackCount || al.tracks?.length || 0, 'трек', 'трека', 'треков')}{#if al.year} • {al.year}{/if}
               </p>
-              <button type="button" class="album-detail-play" on:click={() => playAlbum(al)}>
-                <Play fill="currentColor" size={15} />
-                Слушать
+              <button
+                type="button"
+                class="album-detail-play"
+                class:is-playing={isPlayingThisAlbum}
+                on:click={() => toggleAlbumPlayback(al)}
+                title={isPlayingThisAlbum ? 'Пауза' : 'Слушать'}
+                aria-label={isPlayingThisAlbum ? 'Пауза' : 'Слушать'}
+              >
+                <MorphIcon
+                  icon={isPlayingThisAlbum ? PauseData : PlayData}
+                  size={15}
+                  strokeWidth={2.35}
+                  fill="currentColor"
+                  class="play-pause-morph"
+                  spring="snappy"
+                  reducedMotion="user"
+                />
+                <span>{isPlayingThisAlbum ? 'Пауза' : 'Слушать'}</span>
               </button>
             </div>
           </div>

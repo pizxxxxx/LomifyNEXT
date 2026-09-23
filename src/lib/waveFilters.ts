@@ -27,6 +27,7 @@ export interface WaveFilterState {
   waveContent?: string;
   waveGenre?: string;
   waveLanguage?: string;
+  waveAllowNeuro?: boolean;
 }
 
 function normalize(value: unknown): string {
@@ -85,6 +86,7 @@ function trackGenreValues(track: any): string[] {
 export function hasWaveFilters(state: WaveFilterState): boolean {
   return state.waveContent === 'lyrics' ||
     state.waveContent === 'instrumental' ||
+    state.waveAllowNeuro === false ||
     Boolean(normalize(state.waveGenre)) ||
     Boolean(normalize(state.waveLanguage));
 }
@@ -99,6 +101,7 @@ export function waveGenreLabel(id: string | null | undefined): string {
 
 export function describeWaveFilters(state: WaveFilterState): string {
   const parts: string[] = [];
+  if (state.waveAllowNeuro === false) parts.push('без нейротреков');
   if (state.waveContent === 'lyrics') parts.push('только с текстом');
   if (state.waveContent === 'instrumental') parts.push('без слов');
   const language = WAVE_LANGUAGES.find((item) => item.id === state.waveLanguage);
@@ -155,9 +158,56 @@ function trackMatchesWaveLanguage(track: any, state: WaveFilterState): boolean {
   return wanted === 'other' ? actual !== 'ru' && actual !== 'en' : actual === wanted;
 }
 
+const NEURO_PATTERNS = [
+  /\bнейро[а-яё\-]*/i,
+  /\b(?:ai|ии)\b/i,
+  /\b(?:suno|udio|diff-c|musicgen|mubert)\b/i,
+  /\b(?:generative|генеративн[а-яё]+)\b/i,
+  /\b(?:нейромузык[а-яё]*|нейросеть|нейропесн[а-яё]*|нейрокавер[а-яё]*)\b/i,
+  /\b(?:ai[\s_-]*(?:cover|кавер|remake|ремейк|track|music|song|generated|version|версия))\b/i,
+  /\b(?:ии[\s_-]*(?:кавер|трек|музыка|песня|версия))\b/i,
+];
+
+export function isNeuroTrack(track: any): boolean {
+  if (!track) return false;
+  const texts: string[] = [
+    track.title,
+    track.artist,
+    track.version,
+    track.album?.title,
+    track.album?.name,
+  ];
+
+  if (Array.isArray(track.artists)) {
+    for (const a of track.artists) {
+      if (typeof a === 'string') texts.push(a);
+      else if (a && typeof a === 'object') {
+        if (a.name) texts.push(a.name);
+        if (a.genre) texts.push(a.genre);
+      }
+    }
+  }
+
+  if (Array.isArray(track.tags)) {
+    for (const t of track.tags) if (typeof t === 'string') texts.push(t);
+  }
+
+  if (Array.isArray(track.genres)) {
+    for (const g of track.genres) if (typeof g === 'string') texts.push(g);
+  } else if (typeof track.genre === 'string') {
+    texts.push(track.genre);
+  }
+
+  const combined = texts.filter(Boolean).join(' ');
+  return NEURO_PATTERNS.some((pattern) => pattern.test(combined));
+}
+
 export function trackMatchesWaveFilters(track: any, state: WaveFilterState): boolean {
-  // `undefined` у Rotor означает, что конкретная порция не прислала lyricsInfo, а не то,
-  // что текста точно нет. Отбрасываем только явное `false`, иначе строгий фильтр съедал
+  // Отсекаем нейротреки (генеративную музыку, ИИ-каверы, Suno, Udio), если они отключены
+  if (state.waveAllowNeuro === false && isNeuroTrack(track)) return false;
+
+  // undefined у Rotor означает, что конкретная порция не прислала lyricsInfo, а не то,
+  // что текста точно нет. Отбрасываем только явное false, иначе строгий фильтр съедал
   // большую часть живой станции из-за неполных метаданных.
   if (state.waveContent === 'lyrics' && track?.lyricsAvailable === false) return false;
   if (state.waveContent === 'instrumental') {

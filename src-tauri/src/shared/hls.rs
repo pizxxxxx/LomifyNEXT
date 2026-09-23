@@ -20,9 +20,9 @@ use bytes::{Bytes, BytesMut};
 use reqwest::Client;
 use url::Url;
 
-/// Сколько сегментов тянем одновременно. Больше не нужно: у SC сегмент ~10 секунд, три
-/// параллельных запроса уже перекрывают запись на диск.
-const PREFETCH_SEGMENTS: usize = 3;
+/// Сколько сегментов тянем одновременно. 8 параллельных запросов быстро
+/// наполняют буфер без задержек при загрузке HLS потоков.
+const PREFETCH_SEGMENTS: usize = 8;
 
 /// Сколько уровней вложенности плейлистов разворачиваем (master → media).
 const MAX_PLAYLIST_DEPTH: usize = 2;
@@ -80,20 +80,26 @@ pub async fn assemble(
     // дойдём до медиа-плейлиста: без этого «сегментами» оказались бы вложенные .m3u8 и
     // склеенный файл был бы набором манифестов.
     for _ in 0..MAX_PLAYLIST_DEPTH {
-        if is_protected(&text) {
-            return Err(DRM_ERROR.to_string());
-        }
         if !text.contains("#EXT-X-STREAM-INF") {
             break;
         }
         let (_, variants) = parse_playlist(&text, &base);
-        let variant = variants
-            .into_iter()
-            .next()
-            .ok_or_else(|| "master playlist без вариантов".to_string())?;
-        let raw = fetch_bytes(client, &variant).await?;
-        text = String::from_utf8_lossy(&raw).into_owned();
-        base = variant;
+        let mut resolved: Option<(String, String)> = None;
+        for variant in variants {
+            if let Ok(raw) = fetch_bytes(client, &variant).await {
+                let candidate = String::from_utf8_lossy(&raw).into_owned();
+                if !is_protected(&candidate) {
+                    resolved = Some((candidate, variant));
+                    break;
+                }
+            }
+        }
+        if let Some((v_text, v_base)) = resolved {
+            text = v_text;
+            base = v_base;
+        } else {
+            return Err(DRM_ERROR.to_string());
+        }
     }
 
     if is_protected(&text) {

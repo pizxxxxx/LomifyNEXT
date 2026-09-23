@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
   import { get } from 'svelte/store';
-  import { currentTrack, isPlaying, progress, lyricsStatus } from '$lib/stores';
+  import { currentTrack, isPlaying, progress, lyricsStatus, lyricsReloadTrigger } from '$lib/stores';
   import { getLyrics } from '$lib/api';
   import { Loader2, AlignLeft } from '@lucide/svelte';
   import { invoke } from '@tauri-apps/api/core';
@@ -10,15 +10,71 @@
   /** Включена ли посимвольная караоке-подсветка. Тайминг строк работает в обоих режимах. */
   export let letterSync = true;
 
+  interface AdlibItem {
+    text: string;
+    isPrefix: boolean;
+    order: number;
+  }
+
   interface LyricLine {
     time: number;
     text: string;
+    mainText?: string;
+    adlibs?: AdlibItem[];
     pause?: boolean;
     duration?: number;
   }
 
+  function extractAdlibs(text: string): { mainText: string; adlibs: AdlibItem[] } {
+    if (!text || text === PAUSE_MARKER) return { mainText: text, adlibs: [] };
+    const adlibs: AdlibItem[] = [];
+    const regex = /\(([^)]+)\)/gu;
+    let match: RegExpExecArray | null;
+    let order = 0;
+
+    while ((match = regex.exec(text)) !== null) {
+      const content = match[1].trim();
+      if (content) {
+        const isPrefix = match.index === 0 || text.slice(0, match.index).trim().length === 0;
+        adlibs.push({
+          text: content,
+          isPrefix,
+          order: order++
+        });
+      }
+    }
+
+    if (adlibs.length === 0) {
+      return { mainText: text, adlibs: [] };
+    }
+
+    let cleaned = text.replace(/\(([^)]+)\)/gu, ' ');
+    cleaned = cleaned.replace(/\s+([,.:!?…])/gu, '$1').replace(/\s+/gu, ' ').trim();
+    return {
+      mainText: cleaned,
+      adlibs
+    };
+  }
+
   const PAUSE_MARKER = '♪♪♪';
-  const PAUSE_GAP_THRESHOLD = 4.5;
+  const PAUSE_GAP_THRESHOLD = 3.0;
+
+  const VOWELS = new Set([
+    'а', 'е', 'ё', 'и', 'о', 'у', 'ы', 'э', 'ю', 'я',
+    'a', 'e', 'i', 'o', 'u', 'y',
+    'А', 'Е', 'Ё', 'И', 'О', 'У', 'Ы', 'Э', 'Ю', 'Я',
+    'A', 'E', 'I', 'O', 'U', 'Y'
+  ]);
+  const MAJOR_PAUSE_CHARS = new Set(['.', '!', '?', '…']);
+  const MEDIUM_PAUSE_CHARS = new Set([',', ';', ':']);
+  const HYPHEN_CHARS = new Set(['-', '—', '–']);
+
+  interface CharWindow {
+    start: number;
+    end: number;
+  }
+
+  const lineWindowsCache = new Map<number, CharWindow[]>();
 
   let lyrics = '';
   let isLoading = false;
@@ -27,6 +83,7 @@
   let activeIndex = -1;
   let lineRefs: HTMLElement[] = [];
   let charRefs: HTMLElement[][] = [];
+  let adlibRefs: HTMLElement[][] = [];
   let pauseBarsRef: HTMLElement[] = [];
   let manualScroll = false;
   let lastScrollTs = 0;
@@ -45,31 +102,177 @@
   let previousLetterSync = letterSync;
   let reduceMotion = false;
 
+  let lastProgressVal = 0;
+  let lastProgressTs = 0;
+
   function clamp01(v: number) {
     return v < 0 ? 0 : v > 1 ? 1 : v;
   }
 
-  // Roughly how long a line takes to sing: a short lead-in plus ~85ms per character
-  // (≈12 chars/sec, which is a comfortable vocal pace). Never longer than the gap it
-  // has to fit into, never so short that the fill snaps.
-  function estimateSungDuration(text: string, gap: number) {
-    const chars = text.replace(/\s+/g, ' ').trim().length;
-    const est = 0.28 + chars * 0.085;
-    const ceiling = Math.max(0.9, gap - 1.0);
-    return Math.min(Math.max(est, 0.9), ceiling);
+  /**
+   * Естественный расчет вокальной длительности строки.
+   * Учитывает темп песни (размер интервала gap), количество слогов (гласных)
+   * и число слов/дефисных токенов. Не сжимает короткие фразы («хоп-хоп-хоп»)
+   * в 1 секунду посреди 4-секундного такта, распределяя их размеренно по такту с паузами.
+   */
+  function calculateSungDuration(text: string, gap: number): number {
+    const clean = text.replace(/\[.*?\]/g, '').trim();
+    if (!clean) return Math.min(gap, 1.0);
+
+    const allChars = Array.from(clean);
+    let vowelCount = 0;
+    for (const ch of allChars) {
+      if (VOWELS.has(ch)) vowelCount++;
+    }
+    const words = clean.split(/[\s\-—–]+/).filter(Boolean).length;
+    const syllables = Math.max(1, vowelCount);
+
+    // Пауза на вдох в конце строки перед следующим вступлением:
+    const breathPause = gap > 2.5
+      ? Math.min(0.8, Math.max(0.3, gap * 0.18))
+      : Math.min(0.3, Math.max(0.1, gap * 0.12));
+    const maxSungDur = Math.max(0.4, gap - breathPause);
+
+    // Базовый темп: слог тянется 180-260 мс, токены 160 мс
+    const naturalPace = syllables * 0.22 + words * 0.16 + 0.25;
+
+    // В музыке короткая фраза в длинном такте звучит не быстрее 75% доступного такта:
+    const minMusicalDur = maxSungDur * 0.75;
+    const planned = Math.max(naturalPace, minMusicalDur);
+
+    return Math.min(maxSungDur, Math.max(0.5, planned));
+  }
+
+  function getLineThresholdWindows(lineIndex: number, lineText: string, animatedCount: number): CharWindow[] {
+    const cached = lineWindowsCache.get(lineIndex);
+    if (cached && cached.length === animatedCount) return cached;
+
+    if (animatedCount <= 0) return [];
+    const allChars = Array.from(lineText);
+
+    const anim: { ch: string; origIdx: number }[] = [];
+    for (let i = 0; i < allChars.length; i++) {
+      const ch = allChars[i];
+      if (!/^\s$/u.test(ch)) {
+        anim.push({ ch, origIdx: i });
+      }
+    }
+
+    const count = anim.length;
+    if (count === 0) return [];
+
+    const weights: number[] = [];
+    const pauses: number[] = [];
+
+    for (let c = 0; c < count; c++) {
+      const ch = anim[c].ch;
+
+      let w = 0.85;
+      if (VOWELS.has(ch)) {
+        w = 1.35;
+      } else if (HYPHEN_CHARS.has(ch) || MAJOR_PAUSE_CHARS.has(ch) || MEDIUM_PAUSE_CHARS.has(ch) || /['"«»()[\]{}…♪]/u.test(ch)) {
+        w = 0.3; // Знаки препинания и дефисы не пропеваются, они быстро подсвечиваются
+      }
+      weights.push(w);
+
+      if (c === count - 1) {
+        pauses.push(0.0);
+      } else {
+        const nextCh = anim[c + 1].ch;
+        const between = allChars.slice(anim[c].origIdx + 1, anim[c + 1].origIdx).join('');
+
+        let pause = 0.0;
+        // 1. Дефис между ритмическими частями (как в «хоп-хоп-хоп», «ай-ай-ай»)
+        if (HYPHEN_CHARS.has(ch) || HYPHEN_CHARS.has(nextCh) || /[-—–]/u.test(between)) {
+          pause = 2.4; // Заметное плато удержания между повторяющимися словами
+        }
+        // 2. Крупные знаки препинания (конец предложения)
+        else if (MAJOR_PAUSE_CHARS.has(ch) || /[.!?…]/u.test(between)) {
+          pause = 3.8;
+        }
+        // 3. Запятые, двоеточия, точки с запятой
+        else if (MEDIUM_PAUSE_CHARS.has(ch) || /[,;:]/u.test(between)) {
+          pause = 2.4;
+        }
+        // 4. Пробел между словами
+        else if (/^\s+$/u.test(between) || between.length > 0) {
+          pause = 1.4; // Естественная микропауза на вдох между словами
+        }
+        // 5. Внутри одного слова (между буквами)
+        else {
+          pause = 0.0;
+        }
+
+        pauses.push(pause);
+      }
+    }
+
+    const totalWeight = weights.reduce((s, v) => s + v, 0) + pauses.reduce((s, v) => s + v, 0);
+    const safeTotal = totalWeight > 0 ? totalWeight : 1;
+
+    const windows: CharWindow[] = [];
+    let current = 0;
+
+    for (let c = 0; c < count; c++) {
+      const start = current / safeTotal;
+      current += weights[c];
+      const end = current / safeTotal;
+      windows.push({ start, end });
+      current += pauses[c];
+    }
+
+    lineWindowsCache.set(lineIndex, windows);
+    return windows;
+  }
+
+  $: adlibsEnabled = $settings.lyricsAdlibs !== false;
+  $: adlibStyle = $settings.lyricsAdlibStyle || 'overlay';
+  let previousAdlibsEnabled = adlibsEnabled;
+  let previousAdlibStyle = adlibStyle;
+  $: if (adlibsEnabled !== previousAdlibsEnabled || adlibStyle !== previousAdlibStyle) {
+    previousAdlibsEnabled = adlibsEnabled;
+    previousAdlibStyle = adlibStyle;
+    void handleLetterModeChange();
+  }
+
+  function getEffectiveLineText(line: LyricLine | undefined): string {
+    if (!line) return '';
+    if (adlibsEnabled && line.mainText !== undefined) {
+      return line.mainText;
+    }
+    return line.text;
+  }
+
+  function getLineAdlibs(line: LyricLine | undefined): AdlibItem[] {
+    if (!line || !adlibsEnabled || !line.adlibs) return [];
+    return line.adlibs;
   }
 
   function buildDisplayLines(rawText: string) {
-    const parsed: { time: number; text: string }[] = [];
+    const parsed: LyricLine[] = [];
     const lines = rawText.split('\n');
     for (const l of lines) {
       const match = l.match(/\[(\d+):(\d+\.\d+)\]\s*(.*)/);
       if (match) {
         const mins = parseInt(match[1]);
         const secs = parseFloat(match[2]);
-        parsed.push({ time: mins * 60 + secs, text: match[3] || '♪' });
+        const raw = match[3] || '♪';
+        const { mainText, adlibs } = extractAdlibs(raw);
+        parsed.push({
+          time: mins * 60 + secs,
+          text: raw,
+          mainText,
+          adlibs
+        });
       } else if (l.trim() && !l.startsWith('[')) {
-        parsed.push({ time: -1, text: l.trim() });
+        const raw = l.trim();
+        const { mainText, adlibs } = extractAdlibs(raw);
+        parsed.push({
+          time: -1,
+          text: raw,
+          mainText,
+          adlibs
+        });
       }
     }
 
@@ -91,7 +294,7 @@
           // 0.5s after `prev` therefore told the animation to sing a whole line in half
           // a second, which is why the text raced right before the ♪♪♪ row. Estimate how
           // long the line is actually sung instead, and park the marker after it.
-          const sung = estimateSungDuration(prev.text, gap);
+          const sung = calculateSungDuration(getEffectiveLineText(prev), gap);
           out.push({
             time: prev.time + sung,
             text: PAUSE_MARKER,
@@ -113,11 +316,12 @@
   }
 
   $: hasTimedLyrics = displayLines.length > 0 && displayLines.every((line) => line.time >= 0);
-  // В построчном режиме ручной оффсет выключен в интерфейсе, поэтому не оставляем скрытое
-  // старое значение влиять на строки. Базовая компенсация задержки аудио остаётся общей.
-  $: lyricsOffsetSecs = (letterSync ? ($settings.lyricsOffset || 0) / 1000 : 0) - 0.4;
+  // Базовое физическое опережение (80 мс): компенсирует буфер вывода звуковой карты и рендер
+  // CSS-перехода. Пользовательский оффсет lyricsOffset накладывается поверх.
+  const BASELINE_AUDIO_LATENCY_SECS = 0.08;
+  $: lyricsOffsetSecs = (letterSync ? ($settings.lyricsOffset || 0) / 1000 : 0) - BASELINE_AUDIO_LATENCY_SECS;
 
-  $: if ($currentTrack) {
+  $: if ($currentTrack || $lyricsReloadTrigger) {
     loadLyrics();
   }
 
@@ -127,6 +331,8 @@
     lyrics = '';
     displayLines = [];
     charRefs = [];
+    adlibRefs = [];
+    lineWindowsCache.clear();
     activeIndex = -1;
     
     const text = await getLyrics($currentTrack.title, $currentTrack.artist, $currentTrack);
@@ -139,7 +345,7 @@
       isLoading = false;
       await tick();
       syncActiveLine(get(progress), true, 'auto');
-      if (letterSync && hasTimedLyrics) setupRaf();
+      if (hasTimedLyrics) setupRaf();
     } else {
       lyrics = 'Текста пока нет';
       displayLines = [];
@@ -226,23 +432,65 @@
     
     // Only update line progress if it changed significantly
     const prevValue = parseFloat(el.dataset.progress || '-1');
-    if (Math.abs(prevValue - value) > 0.005 || value === 0 || value === 1) {
+    if (Math.abs(prevValue - value) > 0.004 || value === 0 || value === 1) {
       el.dataset.progress = value.toString();
       el.style.setProperty('--lyric-progress', `${(value * 100).toFixed(2)}%`);
       el.style.setProperty('--lyric-progress-value', value.toFixed(4));
     }
 
+    const line = displayLines[i];
+    const lineText = getEffectiveLineText(line);
+
+    // Dynamic adlib timing and velocity-dependent appearance
+    const adlibs = getLineAdlibs(line);
+    if (adlibs.length > 0 && adlibRefs[i]) {
+      const nextLine = displayLines[i + 1];
+      const dur = Math.max(0.4, (nextLine?.time ?? line.time + 2.6) - line.time);
+      const singingDur = line.pause
+        ? (line.duration ?? dur)
+        : Math.min(dur, Math.max(0.5, calculateSungDuration(lineText, dur)));
+      const charCount = Math.max(1, lineText.replace(/\s+/gu, '').length);
+      const speed = charCount / Math.max(0.4, singingDur);
+      const appearSpeedMs = Math.round(Math.min(650, Math.max(90, 2200 / Math.max(3.0, Math.min(25.0, speed)))));
+      const lifecycleMs = Math.round(Math.min(5200, Math.max(2800, appearSpeedMs * 14)));
+
+      for (let a = 0; a < adlibs.length; a++) {
+        const node = adlibRefs[i][a];
+        if (!node) continue;
+        const adlib = adlibs[a];
+        // Если эдлиб в самом начале строки (до слов) — зажигаем сразу (0.0).
+        const triggerThreshold = adlib.isPrefix ? 0.0 : Math.min(1.0, 0.94 + adlib.order * 0.03);
+        const isLineActive = (i === activeIndex);
+        const isTriggered = isLineActive ? (value >= triggerThreshold) : (i < activeIndex && node.dataset.triggered === 'true');
+        const trigStr = isTriggered ? 'true' : 'false';
+        if (node.dataset.triggered !== trigStr) {
+          node.dataset.triggered = trigStr;
+          node.style.setProperty('--adlib-speed', `${appearSpeedMs}ms`);
+          node.style.setProperty('--adlib-lifecycle', `${lifecycleMs}ms`);
+        }
+      }
+    }
+
     const chars = charRefs[i];
     if (chars && chars.length > 0) {
       const total = chars.length;
-      const head = value * total;
+      const windows = getLineThresholdWindows(i, lineText, total);
+
       for (let c = 0; c < total; c++) {
         if (!chars[c]) continue;
-        const local = clamp01((head - c + 0.6) / 1.4);
+        const win = windows[c] || { start: 0, end: 1 };
+        const span = Math.max(0.0001, win.end - win.start);
+
+        let local = 0;
+        if (value >= win.end) {
+          local = 1;
+        } else if (value > win.start) {
+          local = (value - win.start) / span;
+        }
+
         const eased = local * local * (3 - 2 * local);
         const easedStr = eased.toFixed(3);
-        
-        // Cache to avoid unnecessary DOM writes
+
         if (chars[c].dataset.progress !== easedStr) {
           chars[c].dataset.progress = easedStr;
           chars[c].style.setProperty('--char-progress', easedStr);
@@ -250,7 +498,6 @@
       }
     }
 
-    const line = displayLines[i];
     const bar = pauseBarsRef[i];
     if (bar && line.pause) {
       if (bar.dataset.progress !== value.toString()) {
@@ -262,16 +509,11 @@
 
   function setupRaf() {
     if (rafId) cancelAnimationFrame(rafId);
-    if (!letterSync || !hasTimedLyrics) {
+    if (!hasTimedLyrics) {
       rafId = 0;
       return;
     }
     let lastFrameTs = 0;
-    // The old loop deliberately skipped every second display refresh (33 ms), so even a
-    // healthy 60 Hz screen could only show ~30 lyric frames. Keep the exact same smoothing
-    // speed in wall-clock time, but feed it from every rAF: the animation stays visually the
-    // same while short lines can now move at the display refresh rate.
-    const LEGACY_FRAME_MS = 33;
 
     const tickFrame = (ts: number) => {
       if (document.visibilityState === 'hidden') {
@@ -281,28 +523,44 @@
       rafId = requestAnimationFrame(tickFrame);
       const frameMs = lastFrameTs === 0 ? 1000 / 60 : Math.min(100, Math.max(1, ts - lastFrameTs));
       lastFrameTs = ts;
-      if (!get(isPlaying)) return;
+      if (!get(isPlaying)) {
+        lastProgressTs = ts;
+        return;
+      }
 
       const idx = activeIndex;
       if (idx < 0 || idx >= displayLines.length) return;
       const cur = displayLines[idx];
       const next = displayLines[idx + 1];
-      
+
+      // Субпиксельная экстраполяция текущего времени трека между 100-мс тиками бэкенда:
+      let currentAudioPos = lastProgressVal;
+      if (lastProgressTs > 0) {
+        const deltaSec = (ts - lastProgressTs) / 1000;
+        // Ограничиваем экстраполяцию до 150 мс, чтобы при остановке плеер не забегал вперёд
+        currentAudioPos = lastProgressVal + Math.min(0.15, Math.max(0, deltaSec));
+      }
+
       const offsetSecs = lyricsOffsetSecs;
-      // `get(progress)` instead of `$progress`: the auto-subscription invalidated this
-      // component 10x/s (the backend tick rate) and forced a full flush + fragment
-      // diff, even though the value is only ever read here inside the rAF loop. This
-      // frame already runs at most every 33 ms and writes to the DOM directly.
-      const adjustedProgress = Math.max(0, get(progress) - offsetSecs);
+      const adjustedProgress = Math.max(0, currentAudioPos - offsetSecs);
       
       const dur = Math.max(0.4, (next?.time ?? cur.time + 2.6) - cur.time);
-      const target = clamp01((adjustedProgress - cur.time) / dur);
+      const lineText = getEffectiveLineText(cur);
+      const singingDur = cur.pause
+        ? (cur.duration ?? dur)
+        : Math.min(dur, Math.max(0.5, calculateSungDuration(lineText, dur)));
+      const target = clamp01((adjustedProgress - cur.time) / singingDur);
 
       const prev = lineProgress;
       const diff = target - prev;
-      const legacyAlpha = diff > 0.18 || target > 0.92 ? 0.7 : 0.32;
-      const frameAlpha = 1 - Math.pow(1 - legacyAlpha, frameMs / LEGACY_FRAME_MS);
-      const smoothed = diff < 0 ? target : prev + diff * frameAlpha;
+
+      // Отзывчивое следование:
+      // При смене строки или перемотке (diff < 0 или diff > 0.35) мгновенно фиксируем позицию
+      // При непрерывном пении плавно следуем без задержки
+      const smoothed = (diff < 0 || diff > 0.35)
+        ? target
+        : prev + diff * Math.min(1, frameMs / 35);
+
       lineProgress = smoothed;
       writeLineProgress(idx, smoothed);
     };
@@ -313,14 +571,14 @@
     if (rafId) cancelAnimationFrame(rafId);
     rafId = 0;
 
-    // Внутренний keyed-блок пересоздаёт строки при смене режима. Ссылки очищаем до `tick`,
-    // а после него сразу восстанавливаем активную строку из текущей позиции плеера.
     lineRefs = [];
     charRefs = [];
+    adlibRefs = [];
     pauseBarsRef = [];
+    lineWindowsCache.clear();
     await tick();
     syncActiveLine(get(progress), true, 'auto');
-    if (letterSync && hasTimedLyrics) setupRaf();
+    if (hasTimedLyrics) setupRaf();
   }
 
   $: if (letterSync !== previousLetterSync) {
@@ -356,10 +614,14 @@
 
     // Подписка вызывает callback сразу и затем на каждом `audio:tick`, поэтому после
     // переключения режима или seek строка восстанавливается без ожидания отдельного IPC.
-    const unsubscribeProgress = progress.subscribe((position) => syncActiveLine(position));
+    const unsubscribeProgress = progress.subscribe((position) => {
+      lastProgressVal = Number(position) || 0;
+      lastProgressTs = performance.now();
+      syncActiveLine(lastProgressVal);
+    });
 
     const onVisibility = () => {
-      if (letterSync && hasTimedLyrics && document.visibilityState !== 'hidden' && !rafId) {
+      if (hasTimedLyrics && document.visibilityState !== 'hidden' && !rafId) {
         setupRaf();
       }
     };
@@ -385,8 +647,12 @@
     const groups = [];
     let cur: {ch: string, animated: boolean}[] = [];
     let curKind: boolean | null = null;
-    for (const c of cells) {
-      if (c.animated !== curKind) {
+    for (let i = 0; i < cells.length; i++) {
+      const c = cells[i];
+      // Если предыдущий символ был дефисом, закрываем текущую группу, чтобы следующее слово
+      // («хоп-хоп-хоп») было отдельным токеном .lyric-word и могло при необходимости переноситься
+      const prevWasHyphen = i > 0 && HYPHEN_CHARS.has(cells[i - 1].ch);
+      if (c.animated !== curKind || (c.animated && prevWasHyphen)) {
         if (cur.length) groups.push(cur);
         cur = [c];
         curKind = c.animated;
@@ -406,7 +672,9 @@
       lastSeekTime = now;
       cancelFollowResume();
       manualScroll = false;
-      const targetPosition = Math.max(0, time + lyricsOffsetSecs);
+      const targetPosition = Math.max(0, time);
+      lastProgressVal = targetPosition;
+      lastProgressTs = now;
       syncActiveLine(targetPosition, true, 'auto');
       invoke('audio_seek', { position: targetPosition }).catch(e => console.error(e));
     }
@@ -442,6 +710,24 @@
     };
   }
 
+  function registerAdlib(node: HTMLElement, { lineIndex, adlibIndex }: { lineIndex: number; adlibIndex: number }) {
+    if (!adlibRefs[lineIndex]) adlibRefs[lineIndex] = [];
+    adlibRefs[lineIndex][adlibIndex] = node;
+    return {
+      destroy() {
+        if (adlibRefs[lineIndex]) {
+          delete adlibRefs[lineIndex][adlibIndex];
+        }
+      }
+    };
+  }
+
+  interface PlainLineBlock {
+    text: string;
+    isBreak: boolean;
+    adlibs?: AdlibItem[];
+  }
+
   /**
    * Текст без синхронизации приходит одним блоком, и раньше его так и выводили —
    * `whitespace-pre-wrap` + `leading-loose`: строки растягивались во всю ширину панели,
@@ -449,24 +735,36 @@
    * остаётся строкой, а любая пачка пустых строк сворачивается в один межстрофный
    * отступ. `displayLines` для этого не годится — там пустые строки уже потеряны.
    */
-  function toPlainBlocks(text: string): { text: string; isBreak: boolean }[] {
-    const blocks: { text: string; isBreak: boolean }[] = [];
+  function toPlainBlocks(text: string, withAdlibs: boolean): PlainLineBlock[] {
+    const blocks: PlainLineBlock[] = [];
     for (const raw of (text || '').split('\n')) {
       const line = raw.trim();
-      if (line) blocks.push({ text: line, isBreak: false });
-      else if (blocks.length && !blocks[blocks.length - 1].isBreak) blocks.push({ text: '', isBreak: true });
+      if (line) {
+        if (withAdlibs) {
+          const { mainText, adlibs } = extractAdlibs(line);
+          blocks.push({
+            text: mainText || (adlibs.length > 0 ? '\u00A0' : line),
+            isBreak: false,
+            adlibs
+          });
+        } else {
+          blocks.push({ text: line, isBreak: false, adlibs: [] });
+        }
+      } else if (blocks.length && !blocks[blocks.length - 1].isBreak) {
+        blocks.push({ text: '', isBreak: true });
+      }
     }
     // Отступ в самом конце — такой же мусор, как лишняя пустая строка в источнике.
     if (blocks.length && blocks[blocks.length - 1].isBreak) blocks.pop();
     return blocks;
   }
 
-  $: plainBlocks = toPlainBlocks(lyrics);
+  $: plainBlocks = toPlainBlocks(lyrics, adlibsEnabled);
 </script>
 
 <!-- svelte-ignore a11y-no-static-element-interactions -->
 <div 
-  class="h-full w-full flex-1 overflow-y-auto scrollbar-hide px-12 py-16 relative {!$isPlaying ? 'lyrics-paused' : ''}"
+  class="h-full w-full flex-1 overflow-y-auto overflow-x-hidden scrollbar-hide px-12 py-16 relative {!$isPlaying ? 'lyrics-paused' : ''}"
   bind:this={containerRef}
   style="mask-image: linear-gradient(transparent 0%, black 10%, black 90%, transparent 100%); -webkit-mask-image: linear-gradient(transparent 0%, black 10%, black 90%, transparent 100%);"
   on:wheel|passive={markManual}
@@ -502,30 +800,61 @@
             <div
               bind:this={lineRefs[i]}
               class="lyric-line"
+              class:has-adlibs={getLineAdlibs(line).length > 0}
               on:click={() => handleSeek(line.time)}
             >
+              {#if getLineAdlibs(line).length > 0}
+                <div
+                  class="lyric-adlib-overlay"
+                  class:is-backdrop={adlibStyle === 'backdrop'}
+                  class:is-overlay={adlibStyle !== 'backdrop'}
+                  aria-label="Ad-libs"
+                >
+                  {#each getLineAdlibs(line) as adlib, adlibIdx}
+                    <span
+                      class="lyric-adlib-callout"
+                      class:is-backdrop={adlibStyle === 'backdrop'}
+                      class:is-overlay={adlibStyle !== 'backdrop'}
+                      class:is-long={adlib.text.length > 14}
+                      use:registerAdlib={{ lineIndex: i, adlibIndex: adlibIdx }}
+                      data-triggered="false"
+                    >
+                      <span class="lyric-adlib-halo" aria-hidden="true"></span>
+                      <span class="lyric-adlib-text">{adlib.text}</span>
+                    </span>
+                  {/each}
+                </div>
+              {/if}
+
               <!-- Keep this condition inline: Svelte then tracks `activeIndex` as a template
                    dependency and swaps the three character-based lines at the exact line
                    change. Hiding that dependency inside a helper can leave the fragment
                    static in legacy reactivity mode. -->
               {#if letterSync && activeIndex >= 0 && Math.abs(i - activeIndex) <= 1}
-                {@const cells = splitChars(line.text)}
-                {@const groups = splitWordsForChars(cells)}
-                <span class="lyric-fill">
-                  {#each groups as group}
-                    {#if !group[0].animated}
-                      <span>{group.map(c => c.ch).join('')}</span>
-                    {:else}
-                      <span class="lyric-word">
-                        {#each group as c}
-                          <span class="lyric-char" use:registerChar={{ lineIndex: i }}>{c.ch}</span>
-                        {/each}
-                      </span>
-                    {/if}
-                  {/each}
-                </span>
+                {@const effText = getEffectiveLineText(line)}
+                {#if effText}
+                  {@const cells = splitChars(effText)}
+                  {@const groups = splitWordsForChars(cells)}
+                  <span class="lyric-fill">
+                    {#each groups as group}
+                      {#if !group[0].animated}
+                        <span>{group.map(c => c.ch).join('')}</span>
+                      {:else}
+                        <span class="lyric-word">
+                          {#each group as c}
+                            <span class="lyric-char" use:registerChar={{ lineIndex: i }}>{c.ch}</span>
+                          {/each}
+                        </span>
+                      {/if}
+                    {/each}
+                  </span>
+                {:else}
+                  <span class="lyric-fill lyric-empty">&nbsp;</span>
+                {/if}
               {:else}
-                <span class="lyric-line-text" class:lyric-line-static={letterSync}>{line.text}</span>
+                <span class="lyric-line-text" class:lyric-line-static={letterSync}>
+                  {getEffectiveLineText(line) || '\u00A0'}
+                </span>
               {/if}
             </div>
           {/if}
@@ -544,7 +873,30 @@
         {#if block.isBreak}
           <div class="lyrics-plain-break" aria-hidden="true"></div>
         {:else}
-          <p class="lyrics-plain-line">{block.text}</p>
+          <div class="lyrics-plain-row">
+            {#if block.adlibs && block.adlibs.length > 0}
+              <div
+                class="lyric-adlib-overlay"
+                class:is-backdrop={adlibStyle === 'backdrop'}
+                class:is-overlay={adlibStyle !== 'backdrop'}
+                aria-label="Ad-libs"
+              >
+                {#each block.adlibs as adlib}
+                  <span
+                    class="lyric-adlib-callout"
+                    class:is-backdrop={adlibStyle === 'backdrop'}
+                    class:is-overlay={adlibStyle !== 'backdrop'}
+                    class:is-long={adlib.text.length > 14}
+                    data-triggered="true"
+                  >
+                    <span class="lyric-adlib-halo" aria-hidden="true"></span>
+                    <span class="lyric-adlib-text">{adlib.text}</span>
+                  </span>
+                {/each}
+              </div>
+            {/if}
+            <p class="lyrics-plain-line">{block.text}</p>
+          </div>
         {/if}
       {/each}
     </div>

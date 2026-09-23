@@ -2548,6 +2548,8 @@ textarea:focus-visible,
 
 .track-row-card.has-open-menu {
   z-index: 100;
+  content-visibility: visible !important;
+  contain: none !important;
   background-color: rgba(255, 255, 255, 0.052);
   border-color: rgba(255, 255, 255, 0.04);
 }
@@ -2826,6 +2828,11 @@ textarea:focus-visible,
   bottom: calc(100% + 0.5rem);
 }
 
+.track-row-card > .track-row-info-pop {
+  position: absolute !important;
+  z-index: 120 !important;
+}
+
 /* Aurora использует более тёмное стекло и акцент только как отражение по кромке. Так
    список совпадает с плеером и боковой панелью, но не превращается в фиолетовую сетку. */
 body[data-design="aurora"] .track-row-card {
@@ -3039,6 +3046,7 @@ body[data-design="aurora"] .track-row-card > .track-status {
 
 /* Lyrics CSS Ported from SC Desktop */
 .lyric-line {
+  position: relative;
   cursor: pointer;
   font-family: var(--font-lyrics);
   /* Was `padding: 10px 0; line-height: 1.32; font-weight: 700` — at 28px the block read
@@ -3179,6 +3187,7 @@ body[data-design="aurora"] .track-row-card > .track-status {
 
 .lyric-fill {
   position: relative;
+  z-index: 2;
   display: inline-block;
   max-width: 100%;
   white-space: pre-wrap;
@@ -3187,6 +3196,8 @@ body[data-design="aurora"] .track-row-card > .track-status {
 }
 
 .lyric-line-text {
+  position: relative;
+  z-index: 2;
   display: inline-block;
   max-width: 100%;
   white-space: pre-wrap;
@@ -3270,6 +3281,342 @@ body[data-design="aurora"] .track-row-card > .track-status {
 
 .lyrics-paused .lyric-line[data-state="active"] .lyric-char {
   transition-duration: 0ms;
+}
+
+/* ── Lyrics Ad-libs (damn) ───────────────────────────────────────────────────
+   Динамическое отображение фоновых звуков и эдлибов из скобок.
+   Поддерживает два режима:
+   1) is-overlay: парящий слой над текстом строки с мягким белым свечением.
+   2) is-backdrop: огромная подложка под текстом во всю ширину экрана с плавным
+      растворением через размытие и прозрачность.
+   Строка текста всегда остается на верхнем слое (z-index: 2). */
+.lyric-adlib-overlay {
+  pointer-events: none;
+}
+
+/* В активной строке и строке past-near оверлей виден */
+.lyric-line[data-state="active"] .lyric-adlib-overlay,
+.lyric-line[data-state="past-near"] .lyric-adlib-overlay {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* В давних прошедших строках плавно скрываем оверлей */
+.lyric-line[data-state="past"] .lyric-adlib-overlay {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 1.8s ease-out, visibility 1.8s ease-out;
+}
+
+/* ── Режим 1: Над текстом (парящий) ── */
+.lyric-adlib-overlay.is-overlay {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% - 6px);
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  z-index: 25;
+}
+
+.lyric-adlib-callout.is-overlay {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+  opacity: 0;
+  transform: translateY(8px) scale(0.92);
+  filter: blur(12px);
+  pointer-events: none;
+  visibility: hidden;
+  will-change: transform, opacity, filter;
+  transition:
+    opacity 320ms ease-out,
+    transform 380ms cubic-bezier(0.16, 1, 0.3, 1),
+    filter 320ms ease-out,
+    visibility 320ms ease-out;
+}
+
+/* Активное появление при наступлении времени в строке */
+.lyric-line[data-state="active"] .lyric-adlib-callout.is-overlay[data-triggered="true"] {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  filter: blur(0px);
+  visibility: visible;
+  transition:
+    opacity var(--adlib-speed, 260ms) ease-out,
+    transform var(--adlib-speed, 320ms) cubic-bezier(0.16, 1, 0.3, 1),
+    filter var(--adlib-speed, 260ms) ease-out;
+}
+
+.lyric-adlib-callout.is-overlay .lyric-adlib-text {
+  position: relative;
+  display: inline-block;
+  font-family: var(--font-lyrics, inherit);
+  font-size: clamp(22px, 2.1rem, 38px);
+  font-weight: 900;
+  font-style: italic;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #ffffff;
+  text-shadow:
+    0 0 14px rgba(255, 255, 255, 0.72),
+    0 0 32px rgba(255, 255, 255, 0.38),
+    0 2px 8px rgba(0, 0, 0, 0.9);
+  transform-origin: left bottom;
+}
+
+.lyric-adlib-callout.is-overlay.is-long .lyric-adlib-text {
+  font-size: clamp(16px, 1.45rem, 26px);
+  letter-spacing: 0.03em;
+}
+
+.lyric-adlib-callout.is-overlay .lyric-adlib-halo {
+  position: absolute;
+  inset: -10px -22px;
+  border-radius: 9999px;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(255, 255, 255, 0.22) 0%,
+    rgba(255, 255, 255, 0.06) 50%,
+    transparent 75%
+  );
+  filter: blur(12px);
+  pointer-events: none;
+  z-index: -1;
+  opacity: 0.9;
+}
+
+/* ── Режим 2: Под текстом (во весь экран) ── */
+.lyric-adlib-overlay.is-backdrop {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: max-content;
+  max-width: min(92vw, 920px);
+  z-index: 0;
+  bottom: auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.lyric-adlib-callout.is-backdrop {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  line-height: 0.92;
+  opacity: 0;
+  transform: translateY(-50%) scale(0.92);
+  filter: blur(28px);
+  pointer-events: none;
+  visibility: hidden;
+  will-change: transform, opacity, filter;
+  transition:
+    opacity 360ms ease-out,
+    transform 420ms cubic-bezier(0.16, 1, 0.3, 1),
+    filter 360ms ease-out,
+    visibility 360ms ease-out;
+}
+
+/* Активное появление в режиме подложки */
+.lyric-line[data-state="active"] .lyric-adlib-callout.is-backdrop[data-triggered="true"] {
+  opacity: 0.34;
+  transform: translateY(-50%) scale(1);
+  filter: blur(0px);
+  visibility: visible;
+  transition:
+    opacity var(--adlib-speed, 280ms) ease-out,
+    transform var(--adlib-speed, 350ms) cubic-bezier(0.16, 1, 0.3, 1),
+    filter var(--adlib-speed, 280ms) ease-out;
+}
+
+.lyric-adlib-callout.is-backdrop .lyric-adlib-text {
+  position: relative;
+  display: inline-block;
+  font-family: var(--font-lyrics, inherit);
+  font-size: clamp(38px, 8.5vw, 112px);
+  font-weight: 900;
+  font-style: italic;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #ffffff;
+  text-shadow:
+    0 0 36px rgba(255, 255, 255, 0.45),
+    0 0 80px rgba(255, 255, 255, 0.22),
+    0 4px 16px rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+  transform-origin: center center;
+}
+
+/* Безопасная адаптация для длинных фраз в скобках */
+.lyric-adlib-callout.is-backdrop.is-long .lyric-adlib-text {
+  font-size: clamp(20px, 4.4vw, 54px);
+  letter-spacing: 0.02em;
+  white-space: normal;
+  word-break: break-word;
+  max-width: min(85vw, 750px);
+  line-height: 1.05;
+}
+
+.lyric-adlib-callout.is-backdrop .lyric-adlib-halo {
+  position: absolute;
+  inset: -24px -48px;
+  border-radius: 9999px;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(255, 255, 255, 0.2) 0%,
+    rgba(255, 255, 255, 0.05) 50%,
+    transparent 80%
+  );
+  filter: blur(32px);
+  pointer-events: none;
+  z-index: -1;
+  opacity: 0.6;
+}
+
+/* ── Плавное размытие, когда играет другая / другие строки ── */
+
+/* Когда заиграла следующая строка (past-near):
+   строка естественным образом уходит вверх в скролле текста,
+   а эдлиб без резких рывков мягко начинает размываться и снижать яркость */
+.lyric-line[data-state="past-near"] .lyric-adlib-callout.is-overlay {
+  opacity: 0.38 !important;
+  transform: translateY(0) scale(1) !important;
+  filter: blur(10px) !important;
+  visibility: visible !important;
+  transition:
+    filter 1.8s cubic-bezier(0.25, 1, 0.5, 1),
+    opacity 1.8s ease-out,
+    transform 1.8s cubic-bezier(0.25, 1, 0.5, 1) !important;
+}
+
+.lyric-line[data-state="past-near"] .lyric-adlib-callout.is-backdrop {
+  opacity: 0.16 !important;
+  transform: translateY(-50%) scale(1.02) !important;
+  filter: blur(14px) !important;
+  visibility: visible !important;
+  transition:
+    filter 1.8s cubic-bezier(0.25, 1, 0.5, 1),
+    opacity 1.8s ease-out,
+    transform 1.8s cubic-bezier(0.25, 1, 0.5, 1) !important;
+}
+
+/* Когда играют более давние строки (past):
+   эдлиб плавно, как дымка, полностью размывается и исчезает */
+.lyric-line[data-state="past"] .lyric-adlib-callout.is-overlay {
+  opacity: 0 !important;
+  transform: translateY(0) scale(1) !important;
+  filter: blur(28px) !important;
+  visibility: hidden !important;
+  transition:
+    filter 2.0s cubic-bezier(0.25, 1, 0.5, 1),
+    opacity 2.0s ease-out,
+    transform 2.0s cubic-bezier(0.25, 1, 0.5, 1),
+    visibility 2.0s ease-out !important;
+}
+
+.lyric-line[data-state="past"] .lyric-adlib-callout.is-backdrop {
+  opacity: 0 !important;
+  transform: translateY(-50%) scale(1.06) !important;
+  filter: blur(44px) !important;
+  visibility: hidden !important;
+  transition:
+    filter 2.2s cubic-bezier(0.25, 1, 0.5, 1),
+    opacity 2.2s ease-out,
+    transform 2.2s cubic-bezier(0.25, 1, 0.5, 1),
+    visibility 2.2s ease-out !important;
+}
+
+/* Будущие строки: полностью скрыты без задержек */
+.lyric-line[data-state="next"] .lyric-adlib-overlay,
+.lyric-line[data-state="next-near"] .lyric-adlib-overlay,
+.lyric-line[data-state="next"] .lyric-adlib-callout,
+.lyric-line[data-state="next-near"] .lyric-adlib-callout {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  filter: blur(14px) !important;
+  transform: none !important;
+  transition: none !important;
+}
+
+/* ── Несинхронизированный текст ── */
+.lyrics-plain-row {
+  position: relative;
+  margin-bottom: 8px;
+}
+
+.lyrics-plain-row .lyric-adlib-overlay.is-overlay {
+  position: relative;
+  bottom: auto;
+  left: auto;
+  opacity: 0.9;
+  visibility: visible;
+  transform: none;
+  margin-bottom: 3px;
+}
+
+.lyrics-plain-row .lyric-adlib-overlay.is-backdrop {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  opacity: 0.22;
+  visibility: visible;
+  filter: none;
+  z-index: 0;
+}
+
+.lyrics-plain-row .lyric-adlib-callout {
+  opacity: 0.9;
+  transform: none;
+  filter: none;
+  animation: none !important;
+}
+
+.lyrics-plain-row .lyric-adlib-callout.is-backdrop {
+  opacity: 0.22;
+  filter: none;
+}
+
+.lyrics-plain-row .lyric-adlib-text {
+  font-size: clamp(16px, 1.35rem, 22px);
+}
+
+.lyrics-plain-row .lyric-adlib-callout.is-backdrop .lyric-adlib-text {
+  font-size: clamp(24px, 3.2vw, 42px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lyric-adlib-callout {
+    animation: none !important;
+    transform: none !important;
+    filter: none !important;
+    transition: opacity var(--adlib-speed, 220ms) ease !important;
+  }
+  .lyric-line[data-state="active"] .lyric-adlib-callout.is-overlay[data-triggered="true"] {
+    opacity: 0.95 !important;
+  }
+  .lyric-line[data-state="active"] .lyric-adlib-callout.is-backdrop[data-triggered="true"] {
+    opacity: 0.3 !important;
+  }
+}
+
+body[data-perf="light"] .lyric-adlib-halo {
+  display: none;
+}
+
+body[data-perf="light"] .lyric-adlib-text {
+  text-shadow: none;
+  filter: none;
+}
+
+body[data-perf="light"] .lyric-adlib-callout {
+  filter: none !important;
 }
 
 /* ── Unsynced lyrics ─────────────────────────────────────────────────────────
@@ -4043,8 +4390,11 @@ body[data-design="aurora"] .track-row-card > .track-status {
    for it, and the artwork gets the depth (shadow + hairline) instead of the text. */
 .track-tile {
   isolation: isolate;
-  /* Карточки независимы по геометрии и стилям. Containment не меняет покраску, зато
-     перестройка сердечка/активного трека не заставляет движок заново обходить всю сетку. */
+  /* Карточки независимы по геометрии и стилям. Chromium не рендерит карточки далеко
+     за пределами экрана (content-visibility: auto), не сжигая память GPU и циклы отрисовки.
+     contain-intrinsic-size держит расчетный размер, чтобы полоса прокрутки не прыгала. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 240px;
   contain: layout style;
   min-width: 0;
   padding: 0.5rem 0.5rem 0.65rem;
@@ -4514,8 +4864,10 @@ body[data-design="aurora"] .track-row-card > .track-status {
   display: none !important;
 }
 
-.library-track-tile.has-open-menu {
+.library-track-tile.has-open-menu,
+.track-tile.has-open-menu {
   z-index: 100;
+  content-visibility: visible;
 }
 
 .library-track-tile.is-banned {
@@ -4566,15 +4918,15 @@ body[data-design="aurora"] .track-row-card > .track-status {
 
 .library-tile-actions {
   position: absolute;
-  right: 0.55rem;
-  bottom: 0.55rem;
-  left: 0.55rem;
+  right: 0.35rem;
+  bottom: 0.45rem;
+  left: 0.35rem;
   z-index: 10;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 2px;
-  padding: 4px;
+  padding: 3px 4px;
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 999px;
   background: rgba(8, 9, 13, 0.58);
@@ -4586,11 +4938,19 @@ body[data-design="aurora"] .track-row-card > .track-status {
   transition: opacity 160ms var(--ease-out), transform 190ms var(--ease-out);
 }
 
+.library-tile-actions.has-export {
+  right: 0.25rem;
+  left: 0.25rem;
+  gap: 1.5px;
+  padding: 2.5px 3px;
+}
+
 .library-tile-action {
   display: grid;
-  width: 30px;
-  height: 30px;
-  flex: 0 0 30px;
+  width: 28px;
+  height: 28px;
+  flex: 0 1 28px;
+  min-width: 20px;
   place-items: center;
   padding: 0;
   border: 0;
@@ -4599,6 +4959,34 @@ body[data-design="aurora"] .track-row-card > .track-status {
   background: transparent;
   cursor: pointer;
   transition: color 150ms var(--ease-out), background-color 150ms var(--ease-out), transform 150ms var(--ease-out);
+}
+
+.library-tile-actions.has-export .library-tile-action {
+  width: 26px;
+  height: 26px;
+  flex: 0 1 26px;
+}
+
+.library-tile-actions .pl-menu {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 1 28px;
+  min-width: 20px;
+}
+
+.library-tile-actions.has-export .pl-menu {
+  width: 26px;
+  height: 26px;
+  flex: 0 1 26px;
+}
+
+.library-tile-actions .pl-menu .library-tile-action {
+  width: 100%;
+  height: 100%;
+  flex: 1 1 auto;
 }
 
 .library-tile-action:hover,
@@ -6186,12 +6574,65 @@ body[data-fx-press="off"] .sidebar-profile-arrow {
   border-radius: 999px;
   background: var(--color-primary);
   box-shadow: 0 14px 28px -18px color-mix(in srgb, var(--color-primary) 70%, transparent);
-  transition: filter 160ms var(--ease-out), transform 160ms var(--ease-out);
+  transition: filter 160ms var(--ease-out), transform 160ms var(--ease-out), box-shadow 160ms var(--ease-out);
+  cursor: pointer;
+  user-select: none;
 }
 
 .search-top-play:hover {
   filter: brightness(1.08);
-  transform: translateY(-1px);
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 18px 32px -14px color-mix(in srgb, var(--color-primary) 85%, transparent);
+}
+
+.search-top-play:active {
+  transform: translateY(0) scale(0.96);
+  filter: brightness(0.95);
+}
+
+.search-top-play.is-playing {
+  box-shadow: 0 16px 32px -12px color-mix(in srgb, var(--color-primary) 90%, transparent);
+}
+
+.artist-hero-play {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 118px;
+  min-height: 40px;
+  gap: 8px;
+  padding: 0 20px;
+  color: var(--contrast-text, #050505);
+  font-size: 13px;
+  font-weight: 720;
+  border: 0;
+  border-radius: 9999px;
+  background: var(--color-primary);
+  box-shadow: 0 14px 28px -18px color-mix(in srgb, var(--color-primary) 70%, transparent);
+  transition: filter 160ms var(--ease-out), transform 160ms var(--ease-out), box-shadow 160ms var(--ease-out);
+  cursor: pointer;
+  user-select: none;
+}
+
+.artist-hero-play:hover {
+  filter: brightness(1.08);
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 18px 32px -14px color-mix(in srgb, var(--color-primary) 85%, transparent);
+}
+
+.artist-hero-play:active {
+  transform: translateY(0) scale(0.96);
+  filter: brightness(0.95);
+}
+
+.artist-hero-play.is-playing {
+  box-shadow: 0 16px 32px -12px color-mix(in srgb, var(--color-primary) 90%, transparent);
+}
+
+.artist-hero-play:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  transform: none;
 }
 
 .search-artist-grid {
@@ -6201,6 +6642,8 @@ body[data-fx-press="off"] .sidebar-profile-arrow {
 }
 
 .search-artist-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 80px;
   display: grid;
   grid-template-columns: 46px minmax(0, 1fr) auto;
   align-items: center;
@@ -6276,6 +6719,8 @@ body[data-fx-press="off"] .sidebar-profile-arrow {
 }
 
 .search-playlist-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 140px;
   min-width: 0;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.055);
@@ -6284,6 +6729,7 @@ body[data-fx-press="off"] .sidebar-profile-arrow {
 }
 
 .search-playlist-card.is-expanded {
+  content-visibility: visible;
   grid-column: 1 / -1;
   border-color: color-mix(in srgb, var(--color-primary) 16%, rgba(255, 255, 255, 0.055));
 }
@@ -6407,6 +6853,29 @@ body[data-fx-press="off"] .sidebar-profile-arrow {
   color: var(--contrast-text, #050505);
   border-color: transparent;
   background: var(--color-primary);
+  box-shadow: 0 10px 22px -14px color-mix(in srgb, var(--color-primary) 70%, transparent);
+  transition: filter 160ms var(--ease-out),
+              transform 160ms var(--ease-out),
+              box-shadow 160ms var(--ease-out),
+              background-color 160ms var(--ease-out);
+}
+
+.search-playlist-actions button.is-primary:hover {
+  color: var(--contrast-text, #050505);
+  border-color: transparent;
+  background: var(--color-primary);
+  filter: brightness(1.08);
+  transform: translateY(-1px) scale(1.02);
+  box-shadow: 0 14px 26px -10px color-mix(in srgb, var(--color-primary) 85%, transparent);
+}
+
+.search-playlist-actions button.is-primary:active {
+  transform: translateY(0) scale(0.96);
+  filter: brightness(0.95);
+}
+
+.search-playlist-actions button.is-primary.is-playing {
+  box-shadow: 0 12px 24px -8px color-mix(in srgb, var(--color-primary) 90%, transparent);
 }
 
 .search-playlist-detail {
@@ -9623,7 +10092,8 @@ body[data-perf="light"] .spotify-progress-track > span {
   cursor: pointer;
   transition: color 160ms var(--ease-out, ease),
               background-color 160ms var(--ease-out, ease),
-              border-color 160ms var(--ease-out, ease);
+              border-color 160ms var(--ease-out, ease),
+              transform 160ms var(--ease-out, ease);
 }
 
 .library-playlist-actions button:hover {
@@ -9632,14 +10102,37 @@ body[data-perf="light"] .spotify-progress-track > span {
   color: white;
 }
 
+.library-playlist-actions button:active {
+  transform: scale(0.94);
+}
+
 .library-playlist-actions button.is-primary {
   border-color: color-mix(in srgb, var(--color-primary) 62%, transparent);
   background: var(--color-primary);
-  color: #0f0c0d;
+  color: var(--contrast-text, #050505);
+  box-shadow: 0 10px 22px -14px color-mix(in srgb, var(--color-primary) 70%, transparent);
+  transition: filter 160ms var(--ease-out, ease),
+              transform 160ms var(--ease-out, ease),
+              box-shadow 160ms var(--ease-out, ease),
+              background-color 160ms var(--ease-out, ease);
 }
 
 .library-playlist-actions button.is-primary:hover {
-  background: color-mix(in srgb, var(--color-primary) 86%, white);
+  border-color: color-mix(in srgb, var(--color-primary) 80%, transparent);
+  background: var(--color-primary);
+  color: var(--contrast-text, #050505);
+  filter: brightness(1.1);
+  transform: translateY(-2px) scale(1.06);
+  box-shadow: 0 14px 26px -10px color-mix(in srgb, var(--color-primary) 85%, transparent);
+}
+
+.library-playlist-actions button.is-primary:active {
+  transform: translateY(0) scale(0.94);
+  filter: brightness(0.95);
+}
+
+.library-playlist-actions button.is-primary.is-playing {
+  box-shadow: 0 12px 24px -8px color-mix(in srgb, var(--color-primary) 90%, transparent);
 }
 
 .library-playlist-actions button.is-danger:hover {
@@ -9820,10 +10313,38 @@ body[data-perf="light"] .spotify-progress-track > span {
   color: white;
 }
 
+.library-playlist-detail-actions button:active,
+.library-playlist-detail-empty button:active {
+  transform: scale(0.96);
+}
+
 .library-playlist-detail-actions button.is-primary {
   border-color: transparent;
   background: var(--color-primary);
-  color: #100d0e;
+  color: var(--contrast-text, #050505);
+  box-shadow: 0 14px 28px -18px color-mix(in srgb, var(--color-primary) 70%, transparent);
+  transition: filter 160ms var(--ease-out, ease),
+              transform 160ms var(--ease-out, ease),
+              box-shadow 160ms var(--ease-out, ease),
+              background-color 160ms var(--ease-out, ease);
+}
+
+.library-playlist-detail-actions button.is-primary:hover {
+  border-color: transparent;
+  background: var(--color-primary);
+  color: var(--contrast-text, #050505);
+  filter: brightness(1.08);
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 18px 32px -14px color-mix(in srgb, var(--color-primary) 85%, transparent);
+}
+
+.library-playlist-detail-actions button.is-primary:active {
+  transform: translateY(0) scale(0.96);
+  filter: brightness(0.95);
+}
+
+.library-playlist-detail-actions button.is-primary.is-playing {
+  box-shadow: 0 16px 32px -12px color-mix(in srgb, var(--color-primary) 90%, transparent);
 }
 
 .library-playlist-detail-actions button.is-danger {
@@ -10479,6 +11000,15 @@ body[data-perf="light"] .playlist-create-dialog {
   transform: translateY(-1px);
 }
 
+.album-detail-play:active {
+  transform: translateY(0) scale(0.96);
+  filter: brightness(0.95);
+}
+
+.album-detail-play.is-playing {
+  box-shadow: 0 14px 28px -12px color-mix(in srgb, var(--color-primary) 85%, transparent);
+}
+
 .album-detail-play:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: 3px;
@@ -10547,6 +11077,7 @@ body[data-perf="light"] .playlist-create-dialog {
      страницы, а шапка лежит внутри `<main>` и прокручивается. Подсказка держит его на
      своём слое композитора, чтобы размытая картинка не пересобиралась покадрово. */
   will-change: transform;
+  contain: strict;
 
   /* Маска висит на контейнере, а не на самой картинке, и это принципиально: картинка
      внутри увеличена, поэтому её собственные края лежат за пределами контейнера —
@@ -12456,6 +12987,103 @@ body[data-ui-style="style2"] .sidebar-shell {
   border-radius: 9999px;
   background: currentColor;
   box-shadow: 0 0 8px currentColor;
+}
+
+.settings-version-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+}
+
+.settings-version-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.32rem 0.7rem;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.6);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.settings-version-status .version-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.settings-version-status.is-up-to-date {
+  color: #86efac;
+  background: rgba(34, 197, 94, 0.08);
+  border-color: rgba(34, 197, 94, 0.22);
+}
+
+.settings-version-status.is-up-to-date .version-status-dot {
+  background: #4ade80;
+  box-shadow: 0 0 8px rgba(74, 222, 128, 0.6);
+}
+
+.settings-version-status.is-update {
+  color: #fdba74;
+  background: rgba(249, 115, 22, 0.08);
+  border-color: rgba(249, 115, 22, 0.22);
+}
+
+.settings-version-status.is-update .version-status-dot {
+  background: #fb923c;
+  box-shadow: 0 0 8px rgba(251, 146, 60, 0.6);
+}
+
+.settings-version-status.is-checking {
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.08);
+  border-color: rgba(59, 130, 246, 0.2);
+}
+
+.settings-version-status.is-checking .version-status-dot {
+  background: #60a5fa;
+  box-shadow: 0 0 8px rgba(96, 165, 250, 0.6);
+}
+
+.settings-version-status.is-error {
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.2);
+}
+
+.settings-version-status.is-error .version-status-dot {
+  background: #f87171;
+}
+
+.settings-changelog-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.32rem 0.7rem;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.035);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, transform 120ms ease;
+}
+
+.settings-changelog-trigger:hover {
+  background: rgba(255, 255, 255, 0.075);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.settings-changelog-trigger:active {
+  transform: scale(0.97);
 }
 
 /* ── Design switcher ─────────────────────────────────────────────────────────

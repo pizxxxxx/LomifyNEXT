@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { X, Play, Heart, Music } from 'lucide-svelte';
+  import { Play as PlayData, Pause as PauseData } from 'lucide';
+  import { MorphIcon } from 'morphicons/svelte';
   import { fade, slide } from 'svelte/transition';
   import { getAudioUrl } from '$lib/api';
   import { currentTrack, queue, isPlaying, currentView, playlists, globalVolume } from '$lib/stores';
@@ -133,6 +135,24 @@
     const sec = s % 60;
     return `${m}:${sec < 10 ? '0' : ''}${sec}`;
   }
+
+  $: isFullPlaying = Boolean(
+    $isPlaying &&
+    $currentTrack &&
+    tracks.some((t: any) =>
+      (t.id && t.id === $currentTrack?.id) ||
+      (t.urn && t.urn === ($currentTrack as any)?.urn) ||
+      (t.title === $currentTrack?.title && t.artist === $currentTrack?.artist)
+    )
+  );
+
+  function togglePlayFull() {
+    if (isFullPlaying) {
+      isPlaying.set(false);
+      return;
+    }
+    playFull();
+  }
 </script>
 
 <!-- svelte-ignore a11y-click-events-have-key-events -->
@@ -244,9 +264,22 @@
 
     <!-- Footer Actions -->
     <div class="p-4 bg-white/5 flex gap-3">
-      <button class="flex-1 py-3 px-4 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold flex items-center justify-center gap-2 transition-colors" on:click={playFull}>
-        <Play fill="currentColor" size={16} />
-        Слушать полностью
+      <button
+        class="flex-1 py-3 px-4 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold flex items-center justify-center gap-2 transition-colors"
+        on:click={togglePlayFull}
+        title={isFullPlaying ? 'Пауза' : 'Слушать полностью'}
+        aria-label={isFullPlaying ? 'Пауза' : 'Слушать полностью'}
+      >
+        <MorphIcon
+          icon={isFullPlaying ? PauseData : PlayData}
+          size={16}
+          strokeWidth={2.35}
+          fill="currentColor"
+          class="play-pause-morph"
+          spring="snappy"
+          reducedMotion="user"
+        />
+        <span>{isFullPlaying ? 'Пауза' : 'Слушать полностью'}</span>
       </button>
       <button class="flex-1 py-3 px-4 rounded-xl bg-white/5 hover:bg-white/10 text-white font-bold transition-colors" on:click={goToPlaylist}>
         Перейти

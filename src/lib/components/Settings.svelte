@@ -1,8 +1,10 @@
 <script lang="ts">
-  import { settings, automaticPerformanceMode, playlists, listenStats, notify, dislikedTracks, currentView, activeLibraryTab } from '$lib/stores';
+  import { settings, automaticPerformanceMode, playlists, listenStats, notify, dislikedTracks, currentView, activeLibraryTab, rebootCurrentTrack } from '$lib/stores';
   import { clearAllDislikes } from '$lib/dislikes';
   import {
     Download,
+    FolderDown,
+    Folder,
     Loader2,
     Check,
     Music,
@@ -22,12 +24,21 @@
     ShieldCheck,
     Sparkles
   } from 'lucide-svelte';
+  import { chooseExportDirectory, getDefaultMusicDirectory } from '$lib/exportAudio';
   import { enable, isEnabled, disable } from '@tauri-apps/plugin-autostart';
   import { appDataDir, appLocalDataDir } from '@tauri-apps/api/path';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { onMount, tick } from 'svelte';
   import { withCount } from '$lib/utils/plural';
   import { APP_NAME, APP_VERSION, APP_CHANNEL } from '$lib/version';
+  import { isChangelogModalOpen } from '$lib/changelog';
+  import {
+    updateStatus,
+    updateInfo,
+    downloadProgress,
+    checkForUpdates,
+    installDownloadedUpdate
+  } from '$lib/updater';
   import { listOutputs, applyOutput, type AudioOutput } from '$lib/audioOutput';
   import SelectMenu from './SelectMenu.svelte';
   import SpotifyImport from './SpotifyImport.svelte';
@@ -123,6 +134,30 @@
 
   function openReleases() {
     return openExternalPage(RELEASES_URL, 'Не удалось открыть страницу обновлений');
+  }
+
+  async function handleCheckUpdates(event?: MouseEvent) {
+    if (event && (event.ctrlKey || event.shiftKey)) {
+      void openReleases();
+      return;
+    }
+    if ($updateStatus === 'ready') {
+      await installDownloadedUpdate();
+      return;
+    }
+    if ($updateStatus === 'checking' || $updateStatus === 'downloading') {
+      return;
+    }
+    notify('Проверяю наличие новой версии на GitHub...', 'info');
+    const update = await checkForUpdates(true);
+    if (!update && $updateStatus === 'up_to_date') {
+      notify(`У вас установлена последняя версия v${APP_VERSION}.`, 'success');
+    } else if (update) {
+      notify(`Найдено обновление v${update.version}. Загрузка установщика...`, 'info');
+    } else if ($updateStatus === 'error') {
+      notify('Не удалось проверить обновление. Открываю страницу релизов.', 'error');
+      void openReleases();
+    }
   }
 
   function portalToBody(node: HTMLElement) {
@@ -236,6 +271,15 @@
     currentView.set('library');
   }
 
+  let defaultMusicFolder = '';
+
+  async function handleChooseExportDir() {
+    const dir = await chooseExportDirectory();
+    if (dir) {
+      $settings.exportDirectory = dir;
+    }
+  }
+
   onMount(() => {
     if ($settings.uiStyle === 'style3') {
       $settings.uiStyle = 'style1';
@@ -246,9 +290,13 @@
           autostartEnabled = await isEnabled();
           dataPath = await appDataDir();
           localDataPath = await appLocalDataDir();
+          defaultMusicFolder = await getDefaultMusicDirectory();
         }
       } catch(e) {
         console.error("Failed to load settings data", e);
+      }
+      if ($updateStatus === 'idle') {
+        void checkForUpdates(false);
       }
     })();
     // Список устройств перечитывается на каждом открытии вкладки (компонент здесь
@@ -337,9 +385,33 @@
     if (!scInputUrl) return;
     scLoading = true;
     try {
-      const { resolveSoundCloudProfile, getUserPlaylists } = await import('$lib/api');
-      let url = scInputUrl;
+      let url = scInputUrl.trim();
       if (!url.startsWith('http')) url = 'https://soundcloud.com/' + url;
+
+      if (url.includes('/sets/')) {
+        notify('Обнаружена ссылка на плейлист SoundCloud. Импортирую...', 'info');
+        try {
+          const { importSoundCloudPlaylistByUrl } = await import('$lib/api');
+          const pl = await importSoundCloudPlaylistByUrl(url);
+          playlists.update(existing => {
+            const idx = existing.findIndex(p => p.id === pl.id || (p.title === pl.title && String(p.id).startsWith('sc_playlist_')));
+            if (idx !== -1) {
+              const copy = [...existing];
+              copy[idx] = pl;
+              return copy;
+            }
+            return [pl, ...existing];
+          });
+          notify(`Плейлист «${pl.title}» импортирован (${withCount(pl.tracks.length, 'трек', 'трека', 'треков')}).`, 'success');
+          scInputUrl = '';
+        } catch (err: any) {
+          notify(err?.message || 'Не удалось импортировать плейлист.', 'error');
+        }
+        scLoading = false;
+        return;
+      }
+
+      const { resolveSoundCloudProfile, getUserPlaylists } = await import('$lib/api');
       const user = await resolveSoundCloudProfile(url);
       if (!user) {
         notify('Профиль не найден. Проверь ссылку или имя пользователя.', 'error');
@@ -353,8 +425,10 @@
       const userPlaylists = await getUserPlaylists(user.id);
       if (userPlaylists.length > 0) {
         playlists.update(p => {
-          const fresh = userPlaylists.filter((up: any) => !p.some((existing: any) => existing.id === up.id));
-          return [...fresh, ...p];
+          const updatedMap = new Map(userPlaylists.map((up: any) => [up.id, up]));
+          const updatedExisting = p.map((existing: any) => updatedMap.get(existing.id) || existing);
+          const brandNew = userPlaylists.filter((up: any) => !p.some((existing: any) => existing.id === up.id));
+          return [...brandNew, ...updatedExisting];
         });
         notify(`Импортировано ${withCount(userPlaylists.length, 'плейлист', 'плейлиста', 'плейлистов')}.`, 'success');
       }
@@ -384,6 +458,56 @@
       notify('Не удалось обновить лайки SoundCloud. Попробуй ещё раз.', 'error');
     }
     scLoading = false;
+  }
+
+  /** Обновить плейлисты SoundCloud по кнопке. */
+  async function refreshSCPlaylists() {
+    if (!$settings.scUser) return;
+    scLoading = true;
+    try {
+      const { getUserPlaylists } = await import('$lib/api');
+      const userPlaylists = await getUserPlaylists($settings.scUser.id);
+      if (userPlaylists.length > 0) {
+        playlists.update(p => {
+          const updatedMap = new Map(userPlaylists.map((up: any) => [up.id, up]));
+          const updatedExisting = p.map((existing: any) => updatedMap.get(existing.id) || existing);
+          const brandNew = userPlaylists.filter((up: any) => !p.some((existing: any) => existing.id === up.id));
+          return [...brandNew, ...updatedExisting];
+        });
+        notify(`Обновлено ${withCount(userPlaylists.length, 'плейлист', 'плейлиста', 'плейлистов')}.`, 'success');
+      } else {
+        notify('Плейлисты не найдены или уже актуальны.', 'info');
+      }
+    } catch (e) {
+      notify('Не удалось обновить плейлисты SoundCloud. Попробуй ещё раз.', 'error');
+    }
+    scLoading = false;
+  }
+
+  let scPlaylistInputUrl = '';
+  let scPlaylistLoading = false;
+  async function importSCPlaylist() {
+    const url = scPlaylistInputUrl.trim();
+    if (!url || scPlaylistLoading) return;
+    scPlaylistLoading = true;
+    try {
+      const { importSoundCloudPlaylistByUrl } = await import('$lib/api');
+      const pl = await importSoundCloudPlaylistByUrl(url);
+      playlists.update(existing => {
+        const idx = existing.findIndex(p => p.id === pl.id || (p.title === pl.title && String(p.id).startsWith('sc_playlist_')));
+        if (idx !== -1) {
+          const copy = [...existing];
+          copy[idx] = pl;
+          return copy;
+        }
+        return [pl, ...existing];
+      });
+      notify(`Плейлист «${pl.title}» импортирован (${withCount(pl.tracks.length, 'трек', 'трека', 'треков')}).`, 'success');
+      scPlaylistInputUrl = '';
+    } catch (e: any) {
+      notify(e?.message || 'Не удалось импортировать плейлист.', 'error');
+    }
+    scPlaylistLoading = false;
   }
 
   /**
@@ -1213,6 +1337,42 @@
               </span>
             </button>
           </div>
+
+          <div class="setting-row mt-4 pt-4 border-t border-white/[0.06]">
+            <div>
+              <div class="setting-title">Синхронизация любимых треков</div>
+              <div class="setting-hint">
+                Синхронизировать отметки «Мне нравится» с Яндекс Музыкой и SoundCloud (что лайкнуто там - появляется здесь, и наоборот). Если выключено - медиатека сохраняется только локально.
+              </div>
+            </div>
+            <button
+              aria-label="Синхронизация любимых треков"
+              role="switch"
+              aria-checked={$settings.syncPlatformsLikes !== false}
+              class="switch"
+              on:click={() => $settings.syncPlatformsLikes = $settings.syncPlatformsLikes === false}
+            >
+              <span class="switch-knob"></span>
+            </button>
+          </div>
+
+          <div class="setting-row mt-4 pt-4 border-t border-white/[0.06]">
+            <div>
+              <div class="setting-title">Автоподбор двойников на второй площадке</div>
+              <div class="setting-hint">
+                Искать альтернативную версию трека на второй площадке для лучшего звучания. Если выключено - треки воспроизводятся строго из исходного сервиса без автоподмены.
+              </div>
+            </div>
+            <button
+              aria-label="Автоподбор двойников на второй площадке"
+              role="switch"
+              aria-checked={$settings.crossPlatformSync !== false}
+              class="switch"
+              on:click={() => $settings.crossPlatformSync = $settings.crossPlatformSync === false}
+            >
+              <span class="switch-knob"></span>
+            </button>
+          </div>
         </div>
 
         <!-- Подключения провайдеров используют ту же иерархию, что Spotify ниже:
@@ -1251,6 +1411,9 @@
                     {#if scLoading}<Loader2 class="animate-spin w-4 h-4" aria-hidden="true" />{/if}
                     {scLoading ? 'Сверяю…' : 'Сверить лайки'}
                   </button>
+                  <button type="button" class="is-secondary" on:click={refreshSCPlaylists} disabled={scLoading}>
+                    Обновить плейлисты
+                  </button>
                   <button type="button" class="is-danger" on:click={() => $settings.scUser = null}>Отвязать</button>
                 </div>
               </div>
@@ -1284,6 +1447,32 @@
               <p class="provider-import-note">Вход и пароль не нужны: читаются только публичные данные профиля.</p>
             </div>
           {/if}
+
+          <div class="provider-import-body border-t border-white/[0.06] pt-4 mt-2">
+            <label for="soundcloud-playlist-url">Импорт отдельного плейлиста по ссылке</label>
+            <div class="provider-import-field">
+              <ExternalLink size={16} aria-hidden="true" />
+              <input
+                id="soundcloud-playlist-url"
+                type="text"
+                bind:value={scPlaylistInputUrl}
+                placeholder="https://soundcloud.com/никнейм/sets/плейлист"
+                autocomplete="off"
+                spellcheck="false"
+                disabled={scPlaylistLoading}
+                on:keydown={(e) => e.key === 'Enter' && importSCPlaylist()}
+              />
+              <button type="button" class="is-secondary" on:click={importSCPlaylist} disabled={scPlaylistLoading || !scPlaylistInputUrl.trim()}>
+                {#if scPlaylistLoading}
+                  <Loader2 class="animate-spin w-4 h-4" aria-hidden="true" />
+                  Импорт...
+                {:else}
+                  Импортировать
+                {/if}
+              </button>
+            </div>
+            <p class="provider-import-note">Вставь ссылку на любой публичный плейлист SoundCloud, чтобы добавить его в медиатеку.</p>
+          </div>
         </div>
 
         <!-- Yandex Music Integration -->
@@ -1679,6 +1868,71 @@
             </button>
           </div>
 
+          <div class="setting-row mb-4">
+            <div>
+              <div class="flex items-center gap-2">
+                <div class="setting-title">damn</div>
+                <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-400/20 text-amber-300 border border-amber-400/35 tracking-wider uppercase">Бета</span>
+              </div>
+              <div class="setting-hint">
+                Выделять фоновые звуки в скобках (damn, йоу, yeah) отдельным слоем, убирая их из основного текста строки.
+              </div>
+            </div>
+            <button
+              aria-label="Выделение фоновых звуков (damn)"
+              role="switch"
+              aria-checked={$settings.lyricsAdlibs !== false}
+              class="switch"
+              on:click={() => {
+                $settings.lyricsAdlibs = $settings.lyricsAdlibs === false;
+                rebootCurrentTrack();
+              }}
+            >
+              <span class="switch-knob"></span>
+            </button>
+          </div>
+
+          {#if $settings.lyricsAdlibs !== false}
+            <div class="mb-8 pt-3 border-t border-white/[0.06]">
+              <div class="grid grid-cols-2 gap-3 max-w-md">
+                <button
+                  type="button"
+                  class="settings-choice"
+                  class:is-active={$settings.lyricsAdlibStyle !== 'backdrop'}
+                  on:click={() => {
+                    $settings.lyricsAdlibStyle = 'overlay';
+                    rebootCurrentTrack();
+                  }}
+                >
+                  <span class="settings-choice-copy">
+                    <strong>Над текстом</strong>
+                    <small>Парящий слой прямо над строкой</small>
+                  </span>
+                  <span class="settings-choice-check" aria-hidden="true">
+                    {#if $settings.lyricsAdlibStyle !== 'backdrop'}<Check size={14} />{/if}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  class="settings-choice"
+                  class:is-active={$settings.lyricsAdlibStyle === 'backdrop'}
+                  on:click={() => {
+                    $settings.lyricsAdlibStyle = 'backdrop';
+                    rebootCurrentTrack();
+                  }}
+                >
+                  <span class="settings-choice-copy">
+                    <strong>Под текстом</strong>
+                    <small>Подложка во весь экран с размытием</small>
+                  </span>
+                  <span class="settings-choice-check" aria-hidden="true">
+                    {#if $settings.lyricsAdlibStyle === 'backdrop'}<Check size={14} />{/if}
+                  </span>
+                </button>
+              </div>
+            </div>
+          {/if}
+
           <div>
             <div class="flex justify-between items-center mb-4">
               <h4 class="setting-title !text-[15px]">Смещение текста</h4>
@@ -1887,6 +2141,99 @@
         </div>
         <p class="settings-cache-status" aria-live="polite">{cacheCleanupMessage}</p>
       </div>
+
+      <div class="plate p-8 mt-6">
+        <div class="flex items-start justify-between gap-4 mb-4">
+          <div class="flex items-start gap-3">
+            <span class="settings-cache-icon" aria-hidden="true"><FolderDown size={21} /></span>
+            <div>
+              <h3 class="section-title">Экспорт треков (MP3 / WAV)</h3>
+              <p class="setting-hint !mt-1.5 !whitespace-normal">
+                Сохранение треков отдельными файлами на диск или флешку для магнитолы или внешнего плеера.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            aria-label="Включить экспорт треков"
+            role="switch"
+            aria-checked={$settings.exportEnabled}
+            class="switch"
+            on:click={() => $settings.exportEnabled = !$settings.exportEnabled}
+          >
+            <span class="switch-knob"></span>
+          </button>
+        </div>
+
+        <p class="text-xs text-neutral-400 mb-5 italic max-w-[64ch] leading-relaxed">
+          если ты например илья и ты живешь в туле и тебе надо скачать отцу в машину на флешку треков да таких чтобы при их прослушивании он не разъебался об первый столб
+        </p>
+
+        {#if $settings.exportEnabled}
+          <div class="space-y-5 pt-4 border-t border-white/[0.06]">
+            <div>
+              <div class="setting-title mb-2">Формат аудиофайлов</div>
+              <div class="grid grid-cols-2 gap-3 max-w-md">
+                <button
+                  type="button"
+                  class="settings-choice"
+                  class:is-active={$settings.exportFormat !== 'wav'}
+                  on:click={() => $settings.exportFormat = 'mp3'}
+                >
+                  <span class="settings-choice-copy">
+                    <strong>MP3 (320 kbps)</strong>
+                    <small>Совместим с любыми авто и флешками, с обложкой и тегами</small>
+                  </span>
+                  <span class="settings-choice-check" aria-hidden="true">
+                    {#if $settings.exportFormat !== 'wav'}<Check size={14} />{/if}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  class="settings-choice"
+                  class:is-active={$settings.exportFormat === 'wav'}
+                  on:click={() => $settings.exportFormat = 'wav'}
+                >
+                  <span class="settings-choice-copy">
+                    <strong>WAV (16-bit PCM)</strong>
+                    <small>Чистый звук без сжатия (большой размер)</small>
+                  </span>
+                  <span class="settings-choice-check" aria-hidden="true">
+                    {#if $settings.exportFormat === 'wav'}<Check size={14} />{/if}
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <div class="setting-title mb-1.5">Папка для сохранения</div>
+              <p class="setting-hint !mt-0 mb-3">По умолчанию используется стандартная системная папка Музыка.</p>
+              <div class="flex items-center gap-3">
+                <div class="flex-1 px-3.5 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.08] text-sm text-neutral-200 truncate select-all font-mono text-xs">
+                  {$settings.exportDirectory || defaultMusicFolder || 'Стандартная папка Музыка'}
+                </div>
+                <button
+                  type="button"
+                  class="settings-action-button"
+                  on:click={handleChooseExportDir}
+                >
+                  <Folder size={15} /> Выбрать папку
+                </button>
+                {#if $settings.exportDirectory}
+                  <button
+                    type="button"
+                    class="settings-action-button text-neutral-400 hover:text-white"
+                    on:click={() => $settings.exportDirectory = ''}
+                    title="Сбросить на стандартную папку Музыка"
+                  >
+                    Сбросить
+                  </button>
+                {/if}
+              </div>
+            </div>
+          </div>
+        {/if}
+      </div>
     </section>
 
     <!-- ── Опасная зона ────────────────────────────────────────────────────── -->
@@ -1978,6 +2325,44 @@
               <img src="/app-icon-full.png?v=1" alt="" aria-hidden="true" />
             </button>
           </div>
+          <div class="settings-version-status-row">
+            <div
+              class="settings-version-status"
+              class:is-up-to-date={$updateStatus === 'up_to_date'}
+              class:is-update={$updateStatus === 'available' || $updateStatus === 'downloading' || $updateStatus === 'ready'}
+              class:is-checking={$updateStatus === 'checking'}
+              class:is-error={$updateStatus === 'error'}
+            >
+              <span class="version-status-dot"></span>
+              <span class="version-status-text">
+                {#if $updateStatus === 'up_to_date'}
+                  Версия актуальна
+                {:else if $updateStatus === 'ready'}
+                  Доступно обновление v{$updateInfo?.version || ''} (готово к установке)
+                {:else if $updateStatus === 'downloading'}
+                  Загрузка обновления v{$updateInfo?.version || ''} ({$downloadProgress.percent}%)
+                {:else if $updateStatus === 'available'}
+                  Доступно обновление v{$updateInfo?.version || ''}
+                {:else if $updateStatus === 'checking'}
+                  Проверка актуальности...
+                {:else if $updateStatus === 'error'}
+                  Ошибка проверки
+                {:else}
+                  Статус: нажмите для проверки
+                {/if}
+              </span>
+            </div>
+
+            <button
+              type="button"
+              class="settings-changelog-trigger"
+              title="Посмотреть список изменений"
+              on:click={() => isChangelogModalOpen.set(true)}
+            >
+              <Sparkles size={12} aria-hidden="true" />
+              <span>Что нового в v{APP_VERSION}</span>
+            </button>
+          </div>
           <a href="https://t.me/dopaminegdev" target="_blank" class="settings-about-author">
             Автор: @dopaminegdev
             <ExternalLink size={13} aria-hidden="true" />
@@ -1987,15 +2372,38 @@
           <button
             type="button"
             class="settings-about-action is-update"
-            aria-label="Проверить обновления в GitHub Releases"
-            on:click={openReleases}
+            aria-label="Проверить обновления"
+            disabled={$updateStatus === 'checking' || $updateStatus === 'downloading'}
+            on:click={handleCheckUpdates}
           >
             <span class="settings-about-action-icon" aria-hidden="true">
-              <RefreshCw size={19} />
+              {#if $updateStatus === 'checking'}
+                <Loader2 size={19} class="animate-spin" />
+              {:else if $updateStatus === 'downloading'}
+                <Download size={19} class="animate-pulse" />
+              {:else if $updateStatus === 'ready'}
+                <Check size={19} style="color: #4ade80;" />
+              {:else}
+                <RefreshCw size={19} />
+              {/if}
             </span>
             <span class="settings-about-action-copy">
-              <strong>Проверить обновления</strong>
-              <span>GitHub Releases</span>
+              {#if $updateStatus === 'checking'}
+                <strong>Проверка...</strong>
+                <span>GitHub Releases</span>
+              {:else if $updateStatus === 'downloading'}
+                <strong>Загрузка {$downloadProgress.percent}%</strong>
+                <span>v{$updateInfo?.version || ''} ({formatBytes($downloadProgress.downloaded)})</span>
+              {:else if $updateStatus === 'ready'}
+                <strong style="color: #4ade80;">Установить обновление</strong>
+                <span>v{$updateInfo?.version || ''} готово к установке</span>
+              {:else if $updateStatus === 'up_to_date'}
+                <strong>Последняя версия</strong>
+                <span>v{APP_VERSION} актуальна</span>
+              {:else}
+                <strong>Проверить обновления</strong>
+                <span>GitHub Releases</span>
+              {/if}
             </span>
             <ExternalLink size={15} class="settings-about-action-arrow" aria-hidden="true" />
           </button>

@@ -169,6 +169,9 @@ export function toggleTrackLike(track: any): boolean {
 
 /** Запомнить намерение и, если источник умеет принимать отметки, отправить его. */
 function rememberIntent(track: any, liked: boolean): void {
+  const currentConfig = get(settings);
+  if (currentConfig.syncPlatformsLikes === false) return;
+
   const id = trackId(track);
   if (!id) return;
 
@@ -322,6 +325,9 @@ export function syncLikes(opts: { silent?: boolean; only?: SourceKey } = {}): Pr
 async function runSync(opts: { silent?: boolean; only?: SourceKey }): Promise<LikesSyncResult> {
   const result: LikesSyncResult = { added: 0, removed: 0, ran: false, failed: [], partial: [] };
   const config = get(settings);
+  if (!opts.only && config.syncPlatformsLikes === false) {
+    return result;
+  }
   const wanted = (source: SourceKey) => !opts.only || opts.only === source;
 
   const sides: Side[] = [];

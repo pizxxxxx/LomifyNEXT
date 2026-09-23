@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { cubicOut } from 'svelte/easing';
   import { Play, Loader2, ChevronLeft, ChevronRight, WifiOff } from 'lucide-svelte';
   import Sidebar from '$lib/components/Sidebar.svelte';
@@ -306,11 +306,20 @@
   let mainEl: HTMLElement | null = null;
   let atmosShift = 0;
   let mainScrollTop = 0;
+  let atmosRaf = 0;
 
   function syncAtmosShift() {
-    mainScrollTop = mainEl?.scrollTop ?? 0;
-    atmosShift = Math.min(mainScrollTop, ATMOS_HEIGHT);
+    if (atmosRaf) return;
+    atmosRaf = requestAnimationFrame(() => {
+      atmosRaf = 0;
+      mainScrollTop = mainEl?.scrollTop ?? 0;
+      atmosShift = Math.min(mainScrollTop, ATMOS_HEIGHT);
+    });
   }
+
+  onDestroy(() => {
+    if (atmosRaf) cancelAnimationFrame(atmosRaf);
+  });
 
   // `<main>` один на все разделы, и переключение раздела его прокрутку не сбрасывает —
   // значит новая подложка обязана встать с учётом того, где страница уже стоит.

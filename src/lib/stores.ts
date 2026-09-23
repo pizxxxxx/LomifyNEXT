@@ -1,4 +1,4 @@
-import { derived, readable, writable } from 'svelte/store';
+import { derived, readable, writable, get } from 'svelte/store';
 
 // Global app state
 export const currentTrack = writable<{
@@ -26,6 +26,7 @@ export const currentTrack = writable<{
   // отметки о треке станция принимает только вместе с ним (см. lib/wave.ts). По отсутствию
   // поля плеер и понимает, что человек включил что-то своё, и волну надо остановить.
   waveBatchId?: string;
+  _reboot?: number;
 } | null>(null);
 
 export const isPlaying = writable(false);
@@ -40,6 +41,19 @@ const defaultSettings = {
   accentFromCover: true, // Pull the accent colour out of the current cover art
 
   searchSource: 'soundcloud', // 'soundcloud' | 'yandex'
+  /**
+   * Синхронизация любимых треков с площадками (SoundCloud и Яндекс Музыка).
+   * Когда включено - отметки синхронизируются с аккаунтами (что лайкнуто там - появляется здесь, и наоборот).
+   * Когда выключено - медиатека сохраняется только локально.
+   */
+  syncPlatformsLikes: true,
+
+  /**
+   * Автоподбор треков на второй площадке (двойники).
+   * Когда включено - плеер может подбирать более качественный аудиопоток на альтернативной площадке.
+   * Когда выключено - каждый трек воспроизводится строго из своего сервиса без автоподмены.
+   */
+  crossPlatformSync: true,
   yandexToken: '', // OAuth token for Yandex Music
   // Кто привязан. Лежит рядом с токеном, чтобы настройки показывали аккаунт сразу, не
   // дёргая /account/status при каждом открытии — сеть тут только для проверки при вводе.
@@ -55,6 +69,10 @@ const defaultSettings = {
   spotifyUser: null as { id: string, accountId: string, displayName: string, avatarUrl: string, externalUrl: string } | null,
   lyricsAlignment: 'right', // 'left' | 'right' | 'fullscreen'
   lyricsOffset: 0, // ms offset for synced lyrics
+  /** Выделение эдлибов и бэк-вокала (damn): звуки в скобках выносятся отдельным слоем. По умолчанию true. */
+  lyricsAdlibs: true,
+  /** Вариант отображения эдлибов: 'overlay' (парящий над текстом) или 'backdrop' (кинематографичный слой под текстом во весь экран). */
+  lyricsAdlibStyle: 'overlay' as 'overlay' | 'backdrop',
   uiStyle: 'style1', // 'style1' | 'style2'
   // Оконная рамка Tauri выключена, поэтому оба варианта рисуются самим Lomify.
   // Windows — компактные управляющие кнопки справа; macOS — цветные точки слева.
@@ -112,6 +130,12 @@ const defaultSettings = {
   cacheMaxMb: 2048,
   /** Epoch milliseconds of the last successful automatic or manual smart sweep. */
   lastCacheCleanupAt: 0,
+  /** Включен ли экспорт треков в аудиофайлы на диск (MP3 / WAV). По умолчанию выключен. */
+  exportEnabled: false,
+  /** Формат экспорта аудио: 'mp3' (320 kbps) или 'wav' (16-bit PCM). */
+  exportFormat: 'mp3' as 'mp3' | 'wav',
+  /** Папка для экспорта на диск. Пустая строка означает системную папку «Музыка». */
+  exportDirectory: '',
   /**
    * Готовить следующий трек за три секунды до конца текущего (см. `PRELOAD_LEAD_SECS` в
    * Player.svelte). Выключатель нужен не ради экономии: подготовка тратит один запрос
@@ -177,6 +201,8 @@ const defaultSettings = {
   waveLanguage: '', // '' | 'ru' | 'en' | 'other'
   /** Пустая строка — любой жанр; остальные значения описаны в lib/waveFilters.ts. */
   waveGenre: '',
+  /** Разрешены ли нейротреки (AI, Suno, Udio, нейрокаверы) в «Моей волне». По умолчанию true (вкл). */
+  waveAllowNeuro: true,
   /**
    * Режим производительности: снимает всё, что стоит кадров, а не только размытие панелей.
    * Живое `backdrop-filter` везде, крупные декоративные размытия (атмосферная подложка,
@@ -274,7 +300,21 @@ function scheduleListenStatsPersist(value: typeof defaultStats) {
 export const currentView = writable<'home' | 'search' | 'library' | 'settings' | 'lyrics' | 'equalizer' | 'fullscreen' | 'profile' | 'artist'>('home');
 export const previousView = writable<'home' | 'search' | 'library' | 'settings' | 'lyrics' | 'equalizer' | 'fullscreen' | 'profile' | 'artist'>('home');
 export type LibraryTab = 'liked' | 'playlists' | 'artists' | 'local' | 'disliked';
-export const activeLibraryTab = writable<LibraryTab>('liked');
+const VALID_LIBRARY_TABS: LibraryTab[] = ['liked', 'playlists', 'artists', 'local', 'disliked'];
+
+function getInitialLibraryTab(): LibraryTab {
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const stored = localStorage.getItem('lomifynext_active_library_tab') as LibraryTab | null;
+      if (stored && VALID_LIBRARY_TABS.includes(stored)) {
+        return stored;
+      }
+    } catch (e) {}
+  }
+  return 'liked';
+}
+
+export const activeLibraryTab = writable<LibraryTab>(getInitialLibraryTab());
 export const activeEqualizerPreset = writable<string>('flat');
 
 /**
@@ -288,6 +328,7 @@ export const activeEqualizerPreset = writable<string>('flat');
  */
 export type LyricsStatus = 'unknown' | 'loading' | 'found' | 'none';
 export const lyricsStatus = writable<LyricsStatus>('unknown');
+export const lyricsReloadTrigger = writable<number>(0);
 
 export interface NavState {
   view: string;
@@ -442,8 +483,35 @@ export function initStore() {
     searchHistory.subscribe(val => {
       localStorage.setItem('lomifynext_search_history', JSON.stringify(val));
     });
+
+    const storedActiveTab = localStorage.getItem('lomifynext_active_library_tab') as LibraryTab | null;
+    if (storedActiveTab && VALID_LIBRARY_TABS.includes(storedActiveTab)) {
+      activeLibraryTab.set(storedActiveTab);
+    }
+    activeLibraryTab.subscribe(val => {
+      try {
+        localStorage.setItem('lomifynext_active_library_tab', val);
+      } catch (e) {}
+    });
   }
 }
 
 // Equalizer state (10 bands: 32, 64, 125, 250, 500, 1k, 2k, 4k, 8k, 16k)
 export const equalizerBands = writable([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+
+/**
+ * Перезапуск текущего трека с начала (0:00) с полным сбросом прогресса и повторной загрузкой текста.
+ */
+export function rebootCurrentTrack() {
+  const track = get(currentTrack);
+  if (!track) return;
+  try {
+    import('@tauri-apps/api/core').then(({ invoke }) => {
+      invoke('audio_seek', { position: 0 }).catch(() => {});
+      invoke('audio_play').catch(() => {});
+    });
+  } catch (e) {}
+  progress.set(0);
+  currentTrack.set({ ...track, _reboot: Date.now() });
+  isPlaying.set(true);
+}

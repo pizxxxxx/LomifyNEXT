@@ -6,8 +6,10 @@ node_modules/
 .svelte-kit/
 build/
 build_output/
+build-rockium/
 dist/
 .output/
+rockium-dev.conf.json
 
 # Tauri & Rust build artifacts
 src-tauri/target/

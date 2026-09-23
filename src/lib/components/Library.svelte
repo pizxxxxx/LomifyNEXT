@@ -2,7 +2,8 @@
   import { onMount, tick } from 'svelte';
   import { fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
-  import { Play, FolderOpen, Heart, ThumbsDown, User, Music, Trash2, ListMusic, Plus, ExternalLink, Check, Download, Info, Radio, X, Loader2, ArrowLeft, Pencil } from 'lucide-svelte';
+  import { Play, FolderOpen, Heart, ThumbsDown, User, Music, Trash2, ListMusic, Plus, ExternalLink, Check, Download, FolderDown, Info, Radio, X, Loader2, ArrowLeft, Pencil, Link } from 'lucide-svelte';
+  import { exportTrackToFile, exportingUrns } from '$lib/exportAudio';
   import { LayoutGrid as LayoutGridIcon, List as ListIcon, Pause as PauseIcon, Play as PlayIcon } from 'lucide';
   import { MorphIcon } from 'morphicons/svelte';
   import ArtistTag from './ArtistTag.svelte';
@@ -24,12 +25,48 @@
       перехода: вправо, если ушли к следующей вкладке, влево — если к предыдущей. */
   const TAB_ORDER: LibraryTab[] = ['liked', 'playlists', 'artists', 'local', 'disliked'];
 
-  let activeTab: LibraryTab = 'liked';
+  let activeTab: LibraryTab = $activeLibraryTab && TAB_ORDER.includes($activeLibraryTab) ? $activeLibraryTab : 'liked';
   let navDir = 1;
-  $: tabIndex = TAB_ORDER.indexOf(activeTab);
+  $: tabIndex = Math.max(0, TAB_ORDER.indexOf(activeTab));
 
   $: if ($activeLibraryTab && $activeLibraryTab !== activeTab && TAB_ORDER.includes($activeLibraryTab)) {
     setTab($activeLibraryTab);
+  }
+
+  function trackMatches(a: any, b: any): boolean {
+    if (!a || !b) return false;
+    if (a.id != null && b.id != null && `${a.id}` === `${b.id}`) return true;
+    if (a.urn && b.urn && a.urn === b.urn) return true;
+    if (a.title && b.title && a.title.trim().toLowerCase() === b.title.trim().toLowerCase()) {
+      if (!a.artist || !b.artist) return true;
+      const aArt = a.artist.trim().toLowerCase();
+      const bArt = b.artist.trim().toLowerCase();
+      return aArt === bArt || aArt.includes(bArt) || bArt.includes(aArt);
+    }
+    return false;
+  }
+
+  function isPlaylistPlaying(playlist: any, current = $currentTrack, playing = $isPlaying): boolean {
+    if (!playlist?.tracks?.length || !playing || !current) return false;
+    return playlist.tracks.some((t: any) => trackMatches(t, current));
+  }
+
+  function isPlaylistCurrent(playlist: any, current = $currentTrack): boolean {
+    if (!playlist?.tracks?.length || !current) return false;
+    return playlist.tracks.some((t: any) => trackMatches(t, current));
+  }
+
+  function togglePlaylistPlayback(playlist: any) {
+    if (!playlist?.tracks?.length) return;
+    if (isPlaylistPlaying(playlist, $currentTrack, $isPlaying)) {
+      isPlaying.set(false);
+      return;
+    }
+    if (isPlaylistCurrent(playlist, $currentTrack)) {
+      isPlaying.set(true);
+      return;
+    }
+    playTrackList(playlist.tracks[0], playlist.tracks);
   }
 
   let localTracks: any[] = [];
@@ -42,6 +79,9 @@
   $: openedPlaylist = expandedPlaylist
     ? $playlists.find(playlist => playlist.id === expandedPlaylist) ?? null
     : null;
+
+  $: tileActionIconSize = $settings.exportEnabled ? 14 : 15;
+  $: tileActionTrashIconSize = $settings.exportEnabled ? 13 : 14;
 
   type LikedView = 'list' | 'grid';
   const LIKED_VIEW_KEY = 'lomify-library-liked-view';
@@ -62,8 +102,8 @@
    * вхолостую — её просто не было видно. Первый кадр теперь заведомо дешёвый, а остальное
    * появляется только при приближении к низу уже отрисованной части.
    */
-  const ROWS_FIRST_PAINT = 18;
-  const ROWS_STEP = 40;
+  const ROWS_FIRST_PAINT = 36;
+  const ROWS_STEP = 72;
   let rowBudget = ROWS_FIRST_PAINT;
 
   /** Оба всплывающих слоя строки принадлежат одному состоянию: это не даёт информации и
@@ -99,6 +139,8 @@
     if (event.key !== 'Escape') return;
     if (renamingPlaylistId !== null) {
       closeRenamePlaylistDialog();
+    } else if (showImportPlaylistModal) {
+      closeImportPlaylistDialog();
     } else if (showCreatePlaylistModal) {
       closeCreatePlaylistDialog();
     } else if (expandedPlaylist) {
@@ -151,9 +193,14 @@
     }
 
     const observer = new IntersectionObserver((entries) => {
-      if (!entries.some((entry) => entry.isIntersecting)) return;
-      rowBudget = Math.min(rowsNeeded, rowBudget + ROWS_STEP);
-    }, { rootMargin: '700px 0px' });
+      const match = entries.find((entry) => entry.isIntersecting);
+      if (!match) return;
+      // Если человек листает быстро и уже приблизился к нижней границе,
+      // берем увеличенную порцию, чтобы снизу не мелькала пустота.
+      const isUrgent = match.boundingClientRect.top < (typeof window !== 'undefined' ? window.innerHeight * 1.3 : 1200);
+      const step = isUrgent ? ROWS_STEP * 2 : ROWS_STEP;
+      rowBudget = Math.min(rowsNeeded, rowBudget + step);
+    }, { rootMargin: '1800px 0px' });
 
     observer.observe(node);
     return { destroy: () => observer.disconnect() };
@@ -248,6 +295,52 @@
       };
       if (typeof window === 'undefined') finish();
       else window.setTimeout(finish, 80);
+    }
+  }
+
+  // Playlist import by link
+  let showImportPlaylistModal = false;
+  let importPlaylistUrl = '';
+  let isImportingPlaylist = false;
+  let importPlaylistTrigger: HTMLButtonElement;
+
+  function openImportPlaylistDialog() {
+    importPlaylistUrl = '';
+    showImportPlaylistModal = true;
+  }
+
+  function closeImportPlaylistDialog(restoreFocus = true) {
+    if (isImportingPlaylist) return;
+    showImportPlaylistModal = false;
+    importPlaylistUrl = '';
+    if (restoreFocus) void tick().then(() => importPlaylistTrigger?.focus());
+  }
+
+  async function handleImportPlaylistSubmit() {
+    const url = importPlaylistUrl.trim();
+    if (!url || isImportingPlaylist) return;
+    isImportingPlaylist = true;
+    try {
+      const { importSoundCloudPlaylistByUrl } = await import('$lib/api');
+      const pl = await importSoundCloudPlaylistByUrl(url);
+      playlists.update(existing => {
+        const idx = existing.findIndex(p => p.id === pl.id || (p.title === pl.title && String(p.id).startsWith('sc_playlist_')));
+        if (idx !== -1) {
+          const copy = [...existing];
+          copy[idx] = pl;
+          return copy;
+        }
+        return [pl, ...existing];
+      });
+      notify(`Плейлист «${pl.title}» импортирован (${withCount(pl.tracks.length, 'трек', 'трека', 'треков')}).`, 'success');
+      showImportPlaylistModal = false;
+      importPlaylistUrl = '';
+      openPlaylistDetail(pl.id);
+    } catch (err: any) {
+      console.error('Failed to import playlist by URL:', err);
+      notify(err?.message || 'Не удалось импортировать плейлист.', 'error');
+    } finally {
+      isImportingPlaylist = false;
     }
   }
 
@@ -842,6 +935,24 @@
                 <span class="track-row-artist"><ArtistTag artist={track.artist} artists={track.artists} /></span>
               </div>
               <div class="track-row-actions">
+                {#if $settings.exportEnabled}
+                  {@const expUrn = trackUrn(track)}
+                  {@const isExporting = $exportingUrns.has(expUrn)}
+                  <button
+                    type="button"
+                    class="track-row-action"
+                    disabled={isExporting}
+                    title={isExporting ? 'Экспортирую...' : 'Экспортировать трек в файл'}
+                    aria-label="Экспортировать трек в файл"
+                    on:click|stopPropagation={() => exportTrackToFile(track)}
+                  >
+                    {#if isExporting}
+                      <Loader2 size={18} class="animate-spin text-accent" />
+                    {:else}
+                      <FolderDown size={18} />
+                    {/if}
+                  </button>
+                {/if}
                 {#if !cached}
                   <button
                     class="track-row-action"
@@ -962,19 +1073,15 @@
                         aria-label={isActive && $isPlaying ? `Поставить «${track.title}» на паузу` : `Воспроизвести «${track.title}»`}
                         on:click={(e) => toggleTrackPlayback(e, track, $likedTracks)}
                       >
-                        {#if isActive}
-                          <MorphIcon
-                            icon={$isPlaying ? PauseIcon : PlayIcon}
-                            size={20}
-                            strokeWidth={2.3}
-                            fill="currentColor"
-                            class="play-pause-morph"
-                            spring="snappy"
-                            reducedMotion="user"
-                          />
-                        {:else}
-                          <Play fill="currentColor" size={20} />
-                        {/if}
+                        <MorphIcon
+                          icon={isActive && $isPlaying ? PauseIcon : PlayIcon}
+                          size={20}
+                          strokeWidth={2.35}
+                          fill="currentColor"
+                          class="play-pause-morph"
+                          spring="snappy"
+                          reducedMotion="user"
+                        />
                       </button>
                     </div>
                   </div>
@@ -985,7 +1092,25 @@
                     </span>
                   {/if}
 
-                  <div class="library-tile-actions">
+                  <div class="library-tile-actions" class:has-export={$settings.exportEnabled}>
+                    {#if $settings.exportEnabled}
+                      {@const expUrn = trackUrn(track)}
+                      {@const isExporting = $exportingUrns.has(expUrn)}
+                      <button
+                        type="button"
+                        class="library-tile-action"
+                        disabled={isExporting}
+                        title={isExporting ? 'Экспортирую...' : 'Экспортировать трек в файл'}
+                        aria-label="Экспортировать трек в файл"
+                        on:click|stopPropagation={() => exportTrackToFile(track)}
+                      >
+                        {#if isExporting}
+                          <Loader2 size={tileActionIconSize} class="animate-spin text-accent" />
+                        {:else}
+                          <FolderDown size={tileActionIconSize} />
+                        {/if}
+                      </button>
+                    {/if}
                     {#if !cached}
                       <button
                         type="button"
@@ -994,7 +1119,7 @@
                         title="Скачать"
                         on:click|stopPropagation={(e) => downloadTrack(e, track)}
                       >
-                        <Download size={16} />
+                        <Download size={tileActionIconSize} />
                       </button>
                     {:else}
                       <button
@@ -1007,10 +1132,10 @@
                         on:click|stopPropagation={(e) => removeDownloadedTrack(e, track)}
                       >
                         {#if isRemovingCachedTrack(track)}
-                          <Loader2 size={15} class="animate-spin" />
+                          <Loader2 size={tileActionTrashIconSize} class="animate-spin" />
                         {:else}
-                          <span class="cache-state-saved"><Check size={16} /></span>
-                          <span class="cache-state-remove"><Trash2 size={15} /></span>
+                          <span class="cache-state-saved"><Check size={tileActionIconSize} /></span>
+                          <span class="cache-state-remove"><Trash2 size={tileActionTrashIconSize} /></span>
                         {/if}
                       </button>
                     {/if}
@@ -1025,14 +1150,14 @@
                       aria-expanded={activeTrackMenu?.row === i && activeTrackMenu?.kind === 'info'}
                       on:click={(event) => toggleInfoMenu(event, i)}
                     >
-                      <Info size={16} />
+                      <Info size={tileActionIconSize} />
                     </button>
 
                     <PlaylistMenu
                       {track}
                       placement={i >= visibleLiked.length - 5 ? 'top' : 'bottom'}
                       align="right"
-                      iconSize={16}
+                      iconSize={tileActionIconSize}
                       buttonClass="library-tile-action"
                       open={activeTrackMenu?.row === i && activeTrackMenu?.kind === 'playlist'}
                       on:toggle={(event) => handlePlaylistMenuToggle(i, event)}
@@ -1045,7 +1170,7 @@
                       title="Убрать из любимых"
                       on:click|stopPropagation={(e) => removeLikedTrack(e, track)}
                     >
-                      <Heart size={16} fill="currentColor" />
+                      <Heart size={tileActionIconSize} fill="currentColor" />
                     </button>
                   </div>
                 </div>
@@ -1132,6 +1257,7 @@
     {:else if activeTab === 'playlists'}
       {#if openedPlaylist}
         {@const hasTracks = Boolean(openedPlaylist.tracks?.length)}
+        {@const isPlayingThis = isPlaylistPlaying(openedPlaylist, $currentTrack, $isPlaying)}
         <section class="library-playlist-detail" aria-labelledby="library-playlist-detail-title">
           <button type="button" class="library-playlist-back" on:click={closePlaylistDetail}>
             <ArrowLeft size={16} aria-hidden="true" />
@@ -1156,17 +1282,22 @@
                 <button
                   type="button"
                   class="is-primary"
+                  class:is-playing={isPlayingThis}
                   disabled={!hasTracks}
-                  on:click={() => {
-                    if (hasTracks) {
-                      queue.set(openedPlaylist.tracks.slice(1));
-                      currentTrack.set(openedPlaylist.tracks[0]);
-                      isPlaying.set(true);
-                    }
-                  }}
+                  on:click={() => togglePlaylistPlayback(openedPlaylist)}
+                  title={isPlayingThis ? 'Пауза' : 'Слушать'}
+                  aria-label={isPlayingThis ? 'Пауза' : 'Слушать'}
                 >
-                  <Play fill="currentColor" size={16} aria-hidden="true" />
-                  Слушать
+                  <MorphIcon
+                    icon={isPlayingThis ? PauseIcon : PlayIcon}
+                    size={16}
+                    strokeWidth={2.35}
+                    fill="currentColor"
+                    class="play-pause-morph"
+                    spring="snappy"
+                    reducedMotion="user"
+                  />
+                  <span>{isPlayingThis ? 'Пауза' : 'Слушать'}</span>
                 </button>
                 <button type="button" disabled={!hasTracks} on:click={(event) => startPlaylistPreview(event, openedPlaylist)}>
                   <Radio size={16} aria-hidden="true" />
@@ -1310,8 +1441,22 @@
               </span>
             </button>
 
+            <button
+              type="button"
+              class="library-playlist-create is-import"
+              bind:this={importPlaylistTrigger}
+              on:click={openImportPlaylistDialog}
+            >
+              <span class="library-playlist-create-icon"><Link size={23} aria-hidden="true" /></span>
+              <span>
+                <strong>Импорт по ссылке</strong>
+                <small>SoundCloud плейлист</small>
+              </span>
+            </button>
+
             {#each visiblePlaylists as pl}
               {@const hasTracks = Boolean(pl.tracks?.length)}
+              {@const isPlayingThisPl = isPlaylistPlaying(pl, $currentTrack, $isPlaying)}
               <article class="library-playlist-card">
                 <div class="library-playlist-art-shell">
                   <button
@@ -1345,18 +1490,21 @@
                     <button
                       type="button"
                       class="is-primary"
-                      on:click={() => {
-                        if (hasTracks) {
-                          queue.set(pl.tracks.slice(1));
-                          currentTrack.set(pl.tracks[0]);
-                          isPlaying.set(true);
-                        }
-                      }}
-                      aria-label={`Включить плейлист ${pl.title}`}
-                      title="Слушать"
+                      class:is-playing={isPlayingThisPl}
+                      on:click={() => togglePlaylistPlayback(pl)}
+                      aria-label={isPlayingThisPl ? `Поставить «${pl.title}» на паузу` : `Включить плейлист «${pl.title}»`}
+                      title={isPlayingThisPl ? 'Пауза' : 'Слушать'}
                       disabled={!hasTracks}
                     >
-                      <Play fill="currentColor" size={17} aria-hidden="true" />
+                      <MorphIcon
+                        icon={isPlayingThisPl ? PauseIcon : PlayIcon}
+                        size={17}
+                        strokeWidth={2.35}
+                        fill="currentColor"
+                        class="play-pause-morph"
+                        spring="snappy"
+                        reducedMotion="user"
+                      />
                     </button>
                     <button
                       type="button"
@@ -1553,6 +1701,67 @@
         <button type="button" class="is-primary" on:click={handleCreatePlaylistSubmit} disabled={!newPlaylistName.trim()}>
           <Plus size={17} aria-hidden="true" />
           Создать
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if showImportPlaylistModal}
+  <!-- svelte-ignore a11y-click-events-have-key-events -->
+  <!-- svelte-ignore a11y-no-static-element-interactions -->
+  <div class="playlist-create-backdrop" on:pointerdown|self={() => closeImportPlaylistDialog()}>
+    <div
+      class="playlist-create-dialog"
+      role="dialog"
+      tabindex="-1"
+      aria-modal="true"
+      aria-labelledby="playlist-import-title"
+      aria-describedby="playlist-import-help"
+      on:click|stopPropagation
+    >
+      <button
+        type="button"
+        class="playlist-create-close"
+        aria-label="Закрыть импорт плейлиста"
+        disabled={isImportingPlaylist}
+        on:click={() => closeImportPlaylistDialog()}
+      >
+        <X size={18} aria-hidden="true" />
+      </button>
+
+      <span class="playlist-create-mark"><Link size={24} aria-hidden="true" /></span>
+      <span class="playlist-create-kicker">SoundCloud</span>
+      <h2 id="playlist-import-title">Импорт по ссылке</h2>
+      <p id="playlist-import-help">Вставь ссылку на любой публичный плейлист SoundCloud.</p>
+
+      <label for="playlist-import-url">Ссылка на плейлист</label>
+      <div class="playlist-create-field">
+        <ExternalLink size={17} aria-hidden="true" />
+        <!-- svelte-ignore a11y-autofocus -->
+        <input
+          id="playlist-import-url"
+          type="text"
+          bind:value={importPlaylistUrl}
+          placeholder="https://soundcloud.com/никнейм/sets/плейлист"
+          autocomplete="off"
+          spellcheck="false"
+          disabled={isImportingPlaylist}
+          on:keydown={(event) => event.key === 'Enter' && handleImportPlaylistSubmit()}
+          autofocus
+        />
+      </div>
+
+      <div class="playlist-create-actions">
+        <button type="button" class="is-secondary" disabled={isImportingPlaylist} on:click={() => closeImportPlaylistDialog()}>Отмена</button>
+        <button type="button" class="is-primary" on:click={handleImportPlaylistSubmit} disabled={!importPlaylistUrl.trim() || isImportingPlaylist}>
+          {#if isImportingPlaylist}
+            <Loader2 size={17} class="animate-spin" aria-hidden="true" />
+            Импортирую...
+          {:else}
+            <Download size={17} aria-hidden="true" />
+            Импортировать
+          {/if}
         </button>
       </div>
     </div>

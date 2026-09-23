@@ -246,6 +246,8 @@ pub async fn export_with_cover(
     ffmpeg: &Path,
     audio: &Path,
     cover: Option<&[u8]>,
+    title: Option<&str>,
+    artist: Option<&str>,
     dest: &Path,
 ) -> Result<(), String> {
     let dest_dir = dest.parent().ok_or("export: dest has no parent dir")?;
@@ -253,7 +255,12 @@ pub async fn export_with_cover(
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("export");
-    let tmp = temp_sibling(dest_dir, stem);
+    let ext = dest
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("mp3")
+        .to_ascii_lowercase();
+    let tmp = dest_dir.join(format!("{stem}.{}.part.{ext}", nonce()));
 
     // The cover is staged next to the temp so ffmpeg can read it as a 2nd input.
     let cover_tmp = match cover {
@@ -270,24 +277,60 @@ pub async fn export_with_cover(
 
     let mut cmd = base_command(ffmpeg);
     cmd.arg("-i").arg(audio);
-    if let Some(ref cover_path) = cover_tmp {
-        cmd.arg("-i").arg(cover_path).args([
-            "-map",
-            "0:a",
-            "-map",
-            "1:v",
-            "-c:a",
-            "copy",
-            "-c:v",
-            "copy",
-            "-disposition:v:0",
-            "attached_pic",
-            "-movflags",
-            "+faststart",
-        ]);
+
+    if ext == "mp3" {
+        if let Some(ref cover_path) = cover_tmp {
+            cmd.arg("-i").arg(cover_path).args([
+                "-map",
+                "0:a",
+                "-map",
+                "1:v",
+                "-c:a",
+                "mp3",
+                "-b:a",
+                "320k",
+                "-c:v",
+                "copy",
+                "-id3v2_version",
+                "3",
+                "-metadata:s:v",
+                "title=Album cover",
+                "-metadata:s:v",
+                "comment=Cover (front)",
+            ]);
+        } else {
+            cmd.args(["-map", "0:a", "-c:a", "mp3", "-b:a", "320k"]);
+        }
+    } else if ext == "wav" {
+        cmd.args(["-map", "0:a", "-c:a", "pcm_s16le"]);
     } else {
-        cmd.args(["-map", "0:a", "-c:a", "copy", "-movflags", "+faststart"]);
+        if let Some(ref cover_path) = cover_tmp {
+            cmd.arg("-i").arg(cover_path).args([
+                "-map",
+                "0:a",
+                "-map",
+                "1:v",
+                "-c:a",
+                "copy",
+                "-c:v",
+                "copy",
+                "-disposition:v:0",
+                "attached_pic",
+                "-movflags",
+                "+faststart",
+            ]);
+        } else {
+            cmd.args(["-map", "0:a", "-c:a", "copy", "-movflags", "+faststart"]);
+        }
     }
+
+    if let Some(t) = title.filter(|s| !s.trim().is_empty()) {
+        cmd.args(["-metadata", &format!("title={t}")]);
+    }
+    if let Some(a) = artist.filter(|s| !s.trim().is_empty()) {
+        cmd.args(["-metadata", &format!("artist={a}")]);
+    }
+
     cmd.arg(&tmp);
 
     let result = run(cmd, "export").await;

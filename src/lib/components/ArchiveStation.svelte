@@ -4,7 +4,7 @@
   import { cubicOut } from 'svelte/easing';
   import { currentTrack, isPlaying, queue, globalVolume, likedTracks, settings, effectivePerformanceMode, playlists, notify } from '$lib/stores';
   import { Play, Pause, Info, ListMusic, Radio, Heart } from 'lucide-svelte';
-  import { Plus as PlusIcon, Check as CheckIcon } from 'lucide';
+  import { Plus as PlusIcon, Check as CheckIcon, Play as PlayData, Pause as PauseData } from 'lucide';
   import { MorphIcon } from 'morphicons/svelte';
   import ArtistTag from './ArtistTag.svelte';
   import PlaylistTrailer from './PlaylistTrailer.svelte';
@@ -39,6 +39,44 @@
   $: likedKeys = new Set(($likedTracks || []).map(likedKey));
   function isLiked(track: any) {
     return likedKeys.has(likedKey(track));
+  }
+
+  function trackMatches(a: any, b: any): boolean {
+    if (!a || !b) return false;
+    if (a.id != null && b.id != null && `${a.id}` === `${b.id}`) return true;
+    if (a.urn && b.urn && a.urn === b.urn) return true;
+    if (a.title && b.title && a.title.trim().toLowerCase() === b.title.trim().toLowerCase()) {
+      if (!a.artist || !b.artist) return true;
+      const aArt = a.artist.trim().toLowerCase();
+      const bArt = b.artist.trim().toLowerCase();
+      return aArt === bArt || aArt.includes(bArt) || bArt.includes(aArt);
+    }
+    return false;
+  }
+
+  function isPlaylistPlaying(playlist: any, current = $currentTrack, playing = $isPlaying): boolean {
+    if (!playlist?.tracks?.length || !playing || !current) return false;
+    return playlist.tracks.some((t: any) => trackMatches(t, current));
+  }
+
+  function isPlaylistCurrent(playlist: any, current = $currentTrack): boolean {
+    if (!playlist?.tracks?.length || !current) return false;
+    return playlist.tracks.some((t: any) => trackMatches(t, current));
+  }
+
+  function togglePlaylistPlayback(playlist: any) {
+    if (!playlist?.tracks?.length) return;
+    if (isPlaylistPlaying(playlist, $currentTrack, $isPlaying)) {
+      isPlaying.set(false);
+      return;
+    }
+    if (isPlaylistCurrent(playlist, $currentTrack)) {
+      isPlaying.set(true);
+      return;
+    }
+    queue.set(playlist.tracks.slice(1));
+    currentTrack.set(playlist.tracks[0]);
+    isPlaying.set(true);
   }
 
   /**
@@ -160,6 +198,7 @@
       {#each tracks as track, index (trackKey(track, index))}
         {#if track.tracks}
           {@const isOpen = expandedPlaylistId === track.id}
+          {@const isPlayingThisPl = isPlaylistPlaying(track, $currentTrack, $isPlaying)}
           <!-- Playlist Tile -->
           <!-- svelte-ignore a11y-click-events-have-key-events -->
           <!-- svelte-ignore a11y-no-static-element-interactions -->
@@ -206,16 +245,20 @@
                 </button>
                 <button
                   class="bg-primary hover:bg-primary/80 text-black rounded-full p-3 shadow-xl transform translate-y-4 group-hover:translate-y-0 transition-all duration-300 delay-75"
-                  on:click|stopPropagation={() => {
-                    if (track.tracks && track.tracks.length > 0) {
-                      queue.set(track.tracks.slice(1));
-                      currentTrack.set(track.tracks[0]);
-                      isPlaying.set(true);
-                    }
-                  }}
-                  title="Слушать"
+                  class:is-playing={isPlayingThisPl}
+                  on:click|stopPropagation={() => togglePlaylistPlayback(track)}
+                  title={isPlayingThisPl ? 'Пауза' : 'Слушать'}
+                  aria-label={isPlayingThisPl ? 'Пауза' : 'Слушать'}
                 >
-                  <Play fill="currentColor" size={20} />
+                  <MorphIcon
+                    icon={isPlayingThisPl ? PauseData : PlayData}
+                    size={20}
+                    strokeWidth={2.35}
+                    fill="currentColor"
+                    class="play-pause-morph"
+                    spring="snappy"
+                    reducedMotion="user"
+                  />
                 </button>
               </div>
             </div>
@@ -244,16 +287,21 @@
                 <div class="flex items-center gap-4 mb-6">
                   <button
                     class="bg-primary hover:bg-primary/80 text-black px-6 py-3 rounded-full font-bold shadow-[0_0_20px_var(--color-primary)] transition-all flex items-center gap-2 transform hover:scale-105"
-                    on:click|stopPropagation={() => {
-                      if (track.tracks && track.tracks.length > 0) {
-                        queue.set(track.tracks.slice(1));
-                        currentTrack.set(track.tracks[0]);
-                        isPlaying.set(true);
-                      }
-                    }}
+                    class:is-playing={isPlayingThisPl}
+                    on:click|stopPropagation={() => togglePlaylistPlayback(track)}
+                    title={isPlayingThisPl ? 'Пауза' : 'Слушать все'}
+                    aria-label={isPlayingThisPl ? 'Пауза' : 'Слушать все'}
                   >
-                    <Play fill="currentColor" size={20} />
-                    Слушать все
+                    <MorphIcon
+                      icon={isPlayingThisPl ? PauseData : PlayData}
+                      size={20}
+                      strokeWidth={2.35}
+                      fill="currentColor"
+                      class="play-pause-morph"
+                      spring="snappy"
+                      reducedMotion="user"
+                    />
+                    <span>{isPlayingThisPl ? 'Пауза' : 'Слушать все'}</span>
                   </button>
                   <button
                     class="bg-white/10 hover:bg-white/20 text-white px-6 py-3 rounded-full font-bold transition-all flex items-center gap-2"
@@ -386,11 +434,15 @@
                   class="tile-play-button {track.isBanned ? 'is-muted' : ''}"
                   aria-label={$currentTrack?.title === track.title && $isPlaying ? `Поставить «${track.title}» на паузу` : `Воспроизвести «${track.title}»`}
                 >
-                  {#if $currentTrack?.title === track.title && $isPlaying}
-                    <Pause fill="currentColor" size={20} />
-                  {:else}
-                    <Play fill="currentColor" size={20} />
-                  {/if}
+                  <MorphIcon
+                    icon={$currentTrack?.title === track.title && $isPlaying ? PauseData : PlayData}
+                    size={20}
+                    strokeWidth={2.35}
+                    fill="currentColor"
+                    class="play-pause-morph"
+                    spring="snappy"
+                    reducedMotion="user"
+                  />
                 </button>
                 <button 
                   type="button"

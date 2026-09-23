@@ -19,46 +19,120 @@ import {
   getCachedLastFmTasteArtists
 } from './lastfm';
 
+const DEFAULT_BROWSER_HEADERS: Record<string, string> = {
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'Accept-Language': 'ru,en-US;q=0.9,en;q=0.8',
+  'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+  'Sec-Ch-Ua-Mobile': '?0',
+  'Sec-Ch-Ua-Platform': '"Windows"',
+};
+
 export async function safeFetch(url: string, options?: any) {
+  const isSoundCloud = url.includes('soundcloud.com') || url.includes('sndcdn.com');
+  const finalOptions = options ? { ...options } : {};
+  if (isSoundCloud) {
+    finalOptions.headers = {
+      ...DEFAULT_BROWSER_HEADERS,
+      Referer: 'https://soundcloud.com/',
+      Origin: 'https://soundcloud.com',
+      ...(finalOptions.headers || {})
+    };
+  }
+
   try {
-    if (window && '__TAURI_INTERNALS__' in window) {
-      return await tauriFetch(url, options);
+    if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+      return await tauriFetch(url, finalOptions);
     }
   } catch (err) {
     console.warn("Tauri fetch unavailable or failed, falling back to window.fetch", err);
   }
   
   try {
-    const res = await window.fetch(url, options);
-    if (!res.ok) throw new Error("Fetch failed");
+    const res = await window.fetch(url, finalOptions);
+    if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
     return res;
   } catch (e) {
     const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
-    return window.fetch(proxyUrl, options);
+    return window.fetch(proxyUrl, finalOptions);
   }
 }
 
+const SC_CLIENT_ID_STORAGE_KEY = 'lomifynext_sc_client_id_cache';
+const SC_CLIENT_ID_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
+
 let soundcloudClientId: string | null = null;
 
-export async function getSoundCloudClientId() {
-  if (soundcloudClientId) return soundcloudClientId;
+export function invalidateSoundCloudClientId() {
+  soundcloudClientId = null;
+  if (typeof window !== 'undefined' && window.localStorage) {
+    localStorage.removeItem(SC_CLIENT_ID_STORAGE_KEY);
+  }
+}
+
+export async function getSoundCloudClientId(forceRefresh = false): Promise<string> {
+  if (!forceRefresh && soundcloudClientId) return soundcloudClientId;
+
+  if (!forceRefresh && typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const raw = localStorage.getItem(SC_CLIENT_ID_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (typeof parsed?.clientId === 'string' && parsed.clientId && Date.now() - (parsed.timestamp || 0) < SC_CLIENT_ID_TTL_MS) {
+          soundcloudClientId = parsed.clientId;
+          return parsed.clientId;
+        }
+      }
+    } catch {
+      // ignore JSON parse error
+    }
+  }
+
   try {
     const res = await safeFetch('https://soundcloud.com');
     const text = await res.text();
+
+    // 1. Извлекаем client_id напрямую из встроенной гидратации window.__sc_hydration
+    const hydrationMatch =
+      text.match(/"hydratable"\s*:\s*"apiClient"\s*,\s*"data"\s*:\s*\{\s*"id"\s*:\s*"([a-zA-Z0-9_-]{32})"/i) ||
+      text.match(/client_id[\s:=]+["']([a-zA-Z0-9_-]{32})["']/i);
+
+    if (hydrationMatch) {
+      soundcloudClientId = hydrationMatch[1];
+      if (typeof window !== 'undefined' && window.localStorage) {
+        localStorage.setItem(
+          SC_CLIENT_ID_STORAGE_KEY,
+          JSON.stringify({ clientId: soundcloudClientId, timestamp: Date.now() })
+        );
+      }
+      return soundcloudClientId;
+    }
+
+    // 2. Если в HTML нет, ищем в последних JS-скриптах (бандлах)
     const scriptUrls = [...text.matchAll(/src="(https:\/\/[^"]+\.sndcdn\.com\/assets\/[^"]+\.js)"/g)].map(m => m[1]);
-    
-    for (const url of scriptUrls.reverse()) { 
-      const scriptRes = await safeFetch(url);
-      const scriptText = await scriptRes.text();
-      const match = scriptText.match(/client_id[\s:=]+["']([a-zA-Z0-9_-]{32})["']/i) || scriptText.match(/client_id=([a-zA-Z0-9_-]{32})/i);
-      if (match) {
-        soundcloudClientId = match[1];
-        return soundcloudClientId;
+    for (const url of scriptUrls.slice(-4).reverse()) { 
+      try {
+        const scriptRes = await safeFetch(url);
+        const scriptText = await scriptRes.text();
+        const match = scriptText.match(/client_id[\s:=]+["']([a-zA-Z0-9_-]{32})["']/i) || scriptText.match(/client_id=([a-zA-Z0-9_-]{32})/i);
+        if (match) {
+          soundcloudClientId = match[1];
+          if (typeof window !== 'undefined' && window.localStorage) {
+            localStorage.setItem(
+              SC_CLIENT_ID_STORAGE_KEY,
+              JSON.stringify({ clientId: soundcloudClientId, timestamp: Date.now() })
+            );
+          }
+          return soundcloudClientId;
+        }
+      } catch {
+        // продолжаем к следующему скрипту
       }
     }
   } catch (err) {
     console.error("Failed to get SC client ID:", err);
   }
+
   return 'a3e059563d7fd3372b49b37f00a00bcf'; // final fallback
 }
 
@@ -79,13 +153,27 @@ export async function getSoundCloudClientId() {
  * FairPlay, расшифровать нечем, а по факту такая ссылка отдаёт манифест, который дальше
  * притворяется битым аудио.
  */
+const DRM_STREAM_MARKERS = [
+  'encrypted-hls',
+  '/cbcs/',
+  '/cenc/',
+  'cbcs-encrypted',
+  'cenc-encrypted',
+  '/encrypted',
+];
+
+function isDrmUrl(url: string): boolean {
+  const path = (url.split('?')[0] || '').toLowerCase();
+  return DRM_STREAM_MARKERS.some((marker) => path.includes(marker));
+}
+
 const PROTOCOL_RANK: Array<[marker: string, rank: number]> = [
-  ['encrypted-hls', -1],  // DRM — не пробуем совсем
   ['/progressive', 0],    // один файл: играет сразу, без сборки сегментов
   ['/hls', 1],            // плейлист: собирается в Rust (shared/hls.rs)
 ];
 
 function streamUrlRank(url: string): number {
+  if (isDrmUrl(url)) return -1;
   const path = (url.split('?')[0] || '').toLowerCase();
   let rank = 1.5; // незнакомый хвост — пробуем, но после понятных
   for (const [marker, value] of PROTOCOL_RANK) {
@@ -94,7 +182,6 @@ function streamUrlRank(url: string): number {
       break;
     }
   }
-  if (rank < 0) return rank;
   // У треков с `policy: SNIP` доступен только 30-секундный отрывок, и его transcoding'и
   // помечены `/preview/`. Полноценной замены им нет, поэтому оставляем в самом конце: лучше
   // отрывок, чем молчание, но только когда ничего другого нет.
@@ -265,6 +352,123 @@ export async function getTrackInfo(trackId: string | number) {
   return null;
 }
 
+export async function fetchTracksByIdsWithRetry(
+  ids: (number | string)[],
+  clientId: string
+): Promise<any[]> {
+  const chunkSize = 50;
+  const allTracks: any[] = [];
+
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const chunk = ids.slice(i, i + chunkSize);
+    const retryDelays = [1000, 2500, 5000, 9000];
+
+    for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
+      try {
+        const tracksUrl = `https://api-v2.soundcloud.com/tracks?ids=${chunk.join(',')}&client_id=${clientId}`;
+        const tracksRes = await safeFetch(tracksUrl, { method: 'GET' });
+
+        if (tracksRes.ok) {
+          const chunkData = await tracksRes.json();
+          if (Array.isArray(chunkData)) {
+            allTracks.push(...chunkData);
+          }
+          break;
+        } else if (tracksRes.status === 401 || tracksRes.status === 403) {
+          clientId = await getSoundCloudClientId(true);
+        } else if (tracksRes.status === 429) {
+          console.warn(`[soundcloud] 429 rate limit on tracks chunk attempt ${attempt}, waiting before retry...`);
+        }
+      } catch (err) {
+        console.warn(`[soundcloud] Error fetching track chunk attempt ${attempt}:`, err);
+      }
+
+      if (attempt < retryDelays.length) {
+        await new Promise((r) => setTimeout(r, retryDelays[attempt]));
+      }
+    }
+
+    if (i + chunkSize < ids.length) {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
+
+  return allTracks;
+}
+
+export async function resolvePlaylistTracks(p: any, clientId: string): Promise<any[]> {
+  let tracksToUse = p.tracks || [];
+  const expectedCount = Number(p.track_count) || tracksToUse.length;
+
+  // Если в краткой сводке плейлиста треков меньше, чем в самом плейлисте (например, 140 из 240),
+  // запрашиваем плейлист целиком по его id, чтобы получить все ID треков
+  if (expectedCount > tracksToUse.length && p.id) {
+    try {
+      const playlistUrl = `https://api-v2.soundcloud.com/playlists/${p.id}?client_id=${clientId}&representation=full`;
+      const plRes = await safeFetch(playlistUrl, { method: 'GET' });
+      if (plRes.ok) {
+        const fullPl = await plRes.json();
+        if (fullPl && Array.isArray(fullPl.tracks) && fullPl.tracks.length > tracksToUse.length) {
+          tracksToUse = fullPl.tracks;
+        }
+      }
+    } catch (e) {
+      console.warn(`[soundcloud] failed to fetch full playlist ${p.id}:`, e);
+    }
+  }
+
+  // Если треков все еще меньше ожидаемого, пробуем найти полный объект плейлиста через поиск
+  if (expectedCount > tracksToUse.length && p.title) {
+    try {
+      const searchUrl = `https://api-v2.soundcloud.com/search/playlists_without_albums?q=${encodeURIComponent(p.title)}&client_id=${clientId}&limit=5&representation=full`;
+      const sRes = await safeFetch(searchUrl, { method: 'GET' });
+      if (sRes.ok) {
+        const sData = await sRes.json();
+        const collection = sData.collection || [];
+        for (const found of collection) {
+          if (
+            (p.id && String(found.id) === String(p.id)) ||
+            (p.permalink && found.permalink === p.permalink) ||
+            (found.title && found.title.toLowerCase() === p.title.toLowerCase())
+          ) {
+            if (Array.isArray(found.tracks) && found.tracks.length > tracksToUse.length) {
+              tracksToUse = found.tracks;
+              break;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn(`[soundcloud] search fallback failed for playlist ${p.id}:`, e);
+    }
+  }
+
+  const missingIds = tracksToUse.filter((t: any) => !t.title && t.id).map((t: any) => t.id);
+  if (missingIds.length > 0) {
+    const fetchedTracks = await fetchTracksByIdsWithRetry(missingIds, clientId);
+    const trackMap = new Map(fetchedTracks.map((ft: any) => [String(ft.id), ft]));
+    tracksToUse = tracksToUse.map((t: any) => {
+      const full = trackMap.get(String(t.id));
+      return full || t;
+    });
+
+    // Второй проход, если какие-то треки всё ещё без названий (например, из-за 429 на одном из чанков)
+    const stillMissing = tracksToUse.filter((t: any) => !t.title && t.id).map((t: any) => t.id);
+    if (stillMissing.length > 0 && stillMissing.length < missingIds.length) {
+      console.warn(`[soundcloud] retrying ${stillMissing.length} still missing tracks...`);
+      await new Promise(r => setTimeout(r, 600));
+      const secondPass = await fetchTracksByIdsWithRetry(stillMissing, clientId);
+      const secondMap = new Map(secondPass.map((ft: any) => [String(ft.id), ft]));
+      tracksToUse = tracksToUse.map((t: any) => {
+        const full = secondMap.get(String(t.id));
+        return full || t;
+      });
+    }
+  }
+
+  return tracksToUse;
+}
+
 export async function getSoundCloudPlaylists(query: string = 'phonk', limit: number = 3, strict = false) {
   try {
     const clientId = await getSoundCloudClientId();
@@ -274,26 +478,7 @@ export async function getSoundCloudPlaylists(query: string = 'phonk', limit: num
       const data = await res.json();
       const playlists = [];
       for (const p of data.collection) {
-        let tracksToUse = p.tracks || [];
-        const missingIds = tracksToUse.filter((t: any) => !t.title).map((t: any) => t.id);
-        
-        if (missingIds.length > 0) {
-          const chunkSize = 50;
-          let fetchedTracks: any[] = [];
-          for (let i = 0; i < missingIds.length; i += chunkSize) {
-            const chunk = missingIds.slice(i, i + chunkSize);
-            const tracksUrl = `https://api-v2.soundcloud.com/tracks?ids=${chunk.join(',')}&client_id=${clientId}`;
-            const tracksRes = await safeFetch(tracksUrl, { method: 'GET' });
-            if (tracksRes.ok) {
-              const chunkData = await tracksRes.json();
-              fetchedTracks = fetchedTracks.concat(chunkData);
-            }
-          }
-          tracksToUse = tracksToUse.map((t: any) => {
-            const fullTrack = fetchedTracks.find((ft: any) => ft.id === t.id);
-            return fullTrack ? fullTrack : t;
-          });
-        }
+        const tracksToUse = await resolvePlaylistTracks(p, clientId);
         
         const validTracks = tracksToUse.map((t: any) => {
           const cover = t.artwork_url ? t.artwork_url.replace('large', 't500x500') : (p.artwork_url ? p.artwork_url.replace('large', 't500x500') : '');
@@ -714,6 +899,22 @@ export async function performSearch(query: string) {
   return (await performSearchDetailed(query)).tracks;
 }
 
+const COVER_OR_AI_PATTERNS = [
+  /\b(?:ai|ии)\b/i,
+  /\b(?:ai|ии)[\s_-]*(?:cover|кавер|remake|ремейк|version|версия|mix|микс)\b/i,
+  /\bнейро[а-яё]*/i,
+  /\b(?:suno|udio)\b/i,
+  /\b(?:cover|кавер)\b/i,
+  /\b(?:tribute|parody|пародия)\b/i,
+  /\b(?:karaoke|караоке)\b/i,
+  /\b(?:instrumental|инструментал)\b/i,
+];
+
+function hasCoverOrAiMarker(text: string): boolean {
+  if (!text) return false;
+  return COVER_OR_AI_PATTERNS.some((p) => p.test(text));
+}
+
 /**
  * Соответствия «трек, найденный в SoundCloud → id того же трека в Яндекс Музыке».
  *
@@ -727,7 +928,7 @@ export async function performSearch(query: string) {
  * иначе каждый запуск трека, которого в Музыке нет, снова стоил бы поиска.
  */
 const yandexTwins = new Map<string, string | null>();
-const YANDEX_TWINS_KEY = 'lomifynext_yandex_twins';
+const YANDEX_TWINS_KEY = 'lomifynext_yandex_twins_v2';
 
 if (typeof window !== 'undefined' && window.localStorage) {
   try {
@@ -787,6 +988,11 @@ function matchNorm(v: string): string {
  * короткое слово вложенностью не считается.
  */
 function namesMatch(a: string, b: string, strict: boolean): boolean {
+  // Если у одной стороны есть пометка AI/кавера, а у другой нет — это принципиально разные треки
+  if (hasCoverOrAiMarker(a) !== hasCoverOrAiMarker(b)) {
+    return false;
+  }
+
   const x = matchNorm(a);
   const y = matchNorm(b);
   if (!x || !y) return false;
@@ -842,6 +1048,9 @@ async function findYandexTwin(
       if (!c?.id || c.isBanned) return false;
       if (!namesMatch(track.title, c.title, strict)) return false;
       if (!namesMatch(track.artist, c.artist, strict)) return false;
+      if (!hasCoverOrAiMarker(track.title) && (hasCoverOrAiMarker(c.title) || hasCoverOrAiMarker(c.artist || ''))) {
+        return false;
+      }
       const other = Number(c.duration) || 0;
       // Длительности нет — не повод отбрасывать: остаются название и исполнитель. Допуск в
       // 7 секунд закрывает разницу в тишине на концах и в сведении, но не версию трека.
@@ -866,7 +1075,7 @@ async function findYandexTwin(
  * мыши, и уведомление про 30-секундный отрывок превратилось бы в поток всплывашек. Само
  * ограничение при этом никуда не денется — про него скажут при обычном запуске.
  */
-export async function getAudioUrl(track: any, opts: { silent?: boolean } = {}) {
+export async function getAudioUrl(track: any, opts: { silent?: boolean; forcePreview?: boolean } = {}) {
   if (!track) return null;
   if (track.isLocal || track.source === 'local' || track.source === 'Локальный') {
     return convertFileSrc(track.audioUrl);
@@ -889,7 +1098,7 @@ export async function getAudioUrl(track: any, opts: { silent?: boolean } = {}) {
    * уже известное соответствие, если оно есть, и не ищем новое. Отрывок для наведения и так
    * достаточен, он затем и нужен.
    */
-  const yandexIsHost = current.searchSource === 'yandex' && Boolean(current.yandexToken);
+  const yandexIsHost = current.crossPlatformSync !== false && current.searchSource === 'yandex' && Boolean(current.yandexToken);
   let yandexMissedTrack = false;
   if (yandexIsHost && track.source !== 'yandex') {
     const twinId = await findYandexTwin(track, current.yandexToken, !opts.silent);
@@ -928,16 +1137,37 @@ export async function getAudioUrl(track: any, opts: { silent?: boolean } = {}) {
     const explain = (text: string) =>
       yandexMissedTrack ? `В Яндекс Музыке этого трека нет. ${text}` : text;
 
-    const clientId = await getSoundCloudClientId();
+    let clientId = await getSoundCloudClientId();
     const { ranked, dropped } = rankStreamUrls([
       ...(track.audioUrl ? [track.audioUrl] : []),
       ...(track.transcodings || []),
     ]);
 
+    // Если запрошен отрывок или у трека ограничения policy/access, ставим preview-потоки первыми
+    if (opts.forcePreview || track.policy === 'SNIP' || track.access === 'preview') {
+      ranked.sort((a, b) => (isPreviewUrl(b) ? 1 : 0) - (isPreviewUrl(a) ? 1 : 0));
+    }
+
     if (ranked.length === 0) {
-      // Разделяем два разных «нет ссылки»: защищённый трек и трек вообще без потоков.
-      // Раньше оба возвращали `null`, и человек видел одно и то же «источник не отдал
-      // ссылку» — по которому нельзя понять, ждать ли толку от повтора.
+      // Прежде чем падать с ошибкой DRM: если у пользователя подключена Яндекс Музыка
+      // и включена синхронизация площадок, проверим, нет ли трека там!
+      if (current.crossPlatformSync !== false && current.yandexToken) {
+        try {
+          const twinId = await findYandexTwin(track, current.yandexToken, !opts.silent);
+          if (twinId) {
+            const yUrl = await getYandexStreamUrl(current.yandexToken, twinId);
+            if (yUrl) {
+              if (!opts.silent) {
+                notify('Трек в SoundCloud защищён DRM — включена версия из Яндекс Музыки', 'info');
+              }
+              return yUrl;
+            }
+          }
+        } catch (e) {
+          console.warn('[yandex] резервный поиск в Яндекс Музыке не удался', e);
+        }
+      }
+
       if (dropped > 0) {
         throw new Error(explain('Трек защищён (DRM) — SoundCloud не отдаёт его для прослушивания.'));
       }
@@ -947,7 +1177,11 @@ export async function getAudioUrl(track: any, opts: { silent?: boolean } = {}) {
     let lastStatus = '';
     for (const tUrl of ranked) {
       try {
-        const res = await safeFetch(`${tUrl}?client_id=${clientId}`, { method: 'GET' });
+        let res = await safeFetch(`${tUrl}?client_id=${clientId}`, { method: 'GET' });
+        if (res.status === 401 || res.status === 403) {
+          clientId = await getSoundCloudClientId(true);
+          res = await safeFetch(`${tUrl}?client_id=${clientId}`, { method: 'GET' });
+        }
         if (res.ok) {
           const data = await res.json();
           if (data && data.url) {
@@ -965,6 +1199,22 @@ export async function getAudioUrl(track: any, opts: { silent?: boolean } = {}) {
         lastStatus = e instanceof Error ? e.message : String(e);
         console.warn(`SC stream fetch failed for ${tUrl}`, e);
       }
+    }
+
+    // Если все потоки SoundCloud отпали, но включена синхронизация и есть Яндекс Музыка:
+    if (current.crossPlatformSync !== false && current.yandexToken) {
+      try {
+        const twinId = await findYandexTwin(track, current.yandexToken, !opts.silent);
+        if (twinId) {
+          const yUrl = await getYandexStreamUrl(current.yandexToken, twinId);
+          if (yUrl) {
+            if (!opts.silent) {
+              notify('Поток SoundCloud недоступен — включена версия из Яндекс Музыки', 'info');
+            }
+            return yUrl;
+          }
+        }
+      } catch (e) {}
     }
 
     // Здесь важен именно `dropped`: у части треков незашифрованные пресеты числятся в
@@ -1030,11 +1280,20 @@ function lyricsFieldsMatch(a: string, b: string) {
   return x.includes(y) || y.includes(x);
 }
 
-export async function getLyrics(title: string, artist: string, track?: any) {
+export async function getLyrics(title: string, artist: string, track?: any, forceRefresh: boolean = false) {
   const cacheKey = `${title}-${artist}`;
   const current = get(settings);
   const yandexTrackId = track?.source === 'yandex' && track?.id ? `${track.id}` : '';
   const yandexCacheKey = yandexTrackId ? `yandex:${yandexTrackId}` : '';
+
+  if (forceRefresh) {
+    lyricsCache.delete(cacheKey);
+    if (yandexCacheKey) {
+      lyricsCache.delete(yandexCacheKey);
+      yandexLyricsMisses.delete(yandexCacheKey);
+    }
+    saveLyricsCache();
+  }
 
   if (typeof window !== 'undefined' && window.localStorage) {
     if (!localStorage.getItem('lomifynext_lyrics_cache')) {
@@ -1044,12 +1303,12 @@ export async function getLyrics(title: string, artist: string, track?: any) {
 
   // У яндекс-трека первым источником всегда остаётся сам Яндекс. Старый кеш LRCLIB по
   // названию не должен перехватывать запрос до того, как мы спросили правообладателя.
-  if (yandexCacheKey && lyricsCache.has(yandexCacheKey)) {
+  if (!forceRefresh && yandexCacheKey && lyricsCache.has(yandexCacheKey)) {
     const cached = lyricsCache.get(yandexCacheKey);
     return cached === 'NOT_FOUND' ? null : cached;
   }
 
-  if (yandexTrackId && current.yandexToken && !yandexLyricsMisses.has(yandexCacheKey)) {
+  if (yandexTrackId && current.yandexToken && (forceRefresh || !yandexLyricsMisses.has(yandexCacheKey))) {
     const fromYandex = await getYandexLyrics(current.yandexToken, yandexTrackId).catch(() => null);
     if (fromYandex) {
       lyricsCache.set(yandexCacheKey, fromYandex);
@@ -1061,7 +1320,7 @@ export async function getLyrics(title: string, artist: string, track?: any) {
     yandexLyricsMisses.add(yandexCacheKey);
   }
 
-  if (lyricsCache.has(cacheKey)) {
+  if (!forceRefresh && lyricsCache.has(cacheKey)) {
     const cached = lyricsCache.get(cacheKey);
     return cached === 'NOT_FOUND' ? null : cached;
   }
@@ -1101,6 +1360,72 @@ export async function getLyrics(title: string, artist: string, track?: any) {
         return result;
       }
     }
+
+    // Дополнительный глубокий поиск: очищаем название от шума (feat, ft, prod, remix, скобки)
+    // и проверяем, не указан ли исполнитель в начале названия через дефис (часто на SoundCloud).
+    let deepTitle = title
+      .replace(/\s*[\(\[](?:feat\.?|ft\.?|prod\.?|official\s+video|official\s+audio|official|lyrics?|audio|video|slowed|sped\s*up|remix|edit).*?[\)\]]/gi, '')
+      .trim();
+
+    if (deepTitle.includes(' - ')) {
+      const parts = deepTitle.split(' - ');
+      if (parts.length >= 2 && lyricsFieldsMatch(parts[0], artist)) {
+        deepTitle = parts.slice(1).join(' - ').trim();
+      }
+    }
+
+    const primaryArtist = artist
+      .split(/[,&/]|(?:\s+feat\.?|\s+ft\.?)/i)[0]
+      .trim();
+
+    if (deepTitle && (deepTitle !== cleanTitle || primaryArtist !== artist)) {
+      const deepGetUrl = `https://lrclib.net/api/get?track_name=${encodeURIComponent(deepTitle)}&artist_name=${encodeURIComponent(primaryArtist)}`;
+      const deepGetRes = await safeFetch(deepGetUrl, { method: 'GET' });
+      if (deepGetRes.ok) {
+        const deepData = await deepGetRes.json();
+        if (deepData && (deepData.syncedLyrics || deepData.plainLyrics)) {
+          const result = deepData.syncedLyrics || deepData.plainLyrics;
+          lyricsCache.set(cacheKey, result);
+          saveLyricsCache();
+          return result;
+        }
+      }
+
+      const deepSearchUrl = `https://lrclib.net/api/search?track_name=${encodeURIComponent(deepTitle)}&artist_name=${encodeURIComponent(primaryArtist)}`;
+      const deepSearchRes = await safeFetch(deepSearchUrl, { method: 'GET' });
+      const deepData = await deepSearchRes.json();
+      if (deepData && deepData.length > 0) {
+        const match = deepData.find((x: any) =>
+          (x.syncedLyrics || x.plainLyrics) &&
+          (lyricsFieldsMatch(x.artistName || '', primaryArtist) || lyricsFieldsMatch(x.artistName || '', artist)) &&
+          (lyricsFieldsMatch(x.trackName || '', deepTitle) || lyricsFieldsMatch(x.trackName || '', cleanTitle))
+        );
+        if (match) {
+          const result = match.syncedLyrics || match.plainLyrics;
+          lyricsCache.set(cacheKey, result);
+          saveLyricsCache();
+          return result;
+        }
+      }
+
+      // Полнотекстовый поиск q=
+      const qUrl = `https://lrclib.net/api/search?q=${encodeURIComponent(deepTitle + ' ' + primaryArtist)}`;
+      const qRes = await safeFetch(qUrl, { method: 'GET' });
+      const qData = await qRes.json();
+      if (qData && qData.length > 0) {
+        const match = qData.find((x: any) =>
+          (x.syncedLyrics || x.plainLyrics) &&
+          (lyricsFieldsMatch(x.artistName || '', primaryArtist) || lyricsFieldsMatch(x.artistName || '', artist)) &&
+          (lyricsFieldsMatch(x.trackName || '', deepTitle) || lyricsFieldsMatch(x.trackName || '', cleanTitle))
+        );
+        if (match) {
+          const result = match.syncedLyrics || match.plainLyrics;
+          lyricsCache.set(cacheKey, result);
+          saveLyricsCache();
+          return result;
+        }
+      }
+    }
   } catch (err) {
     console.error("Lyrics fetch error:", err);
   }
@@ -1108,6 +1433,14 @@ export async function getLyrics(title: string, artist: string, track?: any) {
   lyricsCache.set(cacheKey, 'NOT_FOUND');
   saveLyricsCache();
   return null;
+}
+
+/**
+ * Принудительный повторный поиск текста с очисткой кеша и глубоким поиском вариантов названия.
+ */
+export async function refetchLyrics(track: any): Promise<string | null> {
+  if (!track || !track.title) return null;
+  return getLyrics(track.title, track.artist || '', track, true);
 }
 
 /**
@@ -1383,33 +1716,19 @@ export async function resolveSoundCloudProfile(profileUrl: string) {
 export async function getUserPlaylists(userId: number) {
   try {
     const clientId = await getSoundCloudClientId();
-    const url = `https://api-v2.soundcloud.com/users/${userId}/playlists?client_id=${clientId}&limit=50&representation=full`;
-    const res = await safeFetch(url, { method: 'GET' });
-    if (res.ok) {
+    let url: string | null = `https://api-v2.soundcloud.com/users/${userId}/playlists?client_id=${clientId}&limit=50&representation=full`;
+    const playlists = [];
+    const MAX_PAGES = 5;
+
+    for (let page = 0; page < MAX_PAGES && url; page++) {
+      const res = await safeFetch(url, { method: 'GET' });
+      if (!res.ok) break;
       const data = await res.json();
-      const playlists = [];
-      for (const p of data.collection) {
-        let tracksToUse = p.tracks || [];
-        const missingIds = tracksToUse.filter((t: any) => !t.title).map((t: any) => t.id);
-        
-        if (missingIds.length > 0) {
-          const chunkSize = 50;
-          let fetchedTracks: any[] = [];
-          for (let i = 0; i < missingIds.length; i += chunkSize) {
-            const chunk = missingIds.slice(i, i + chunkSize);
-            const tracksUrl = `https://api-v2.soundcloud.com/tracks?ids=${chunk.join(',')}&client_id=${clientId}`;
-            const tracksRes = await safeFetch(tracksUrl, { method: 'GET' });
-            if (tracksRes.ok) {
-              const chunkData = await tracksRes.json();
-              fetchedTracks = fetchedTracks.concat(chunkData);
-            }
-          }
-          tracksToUse = tracksToUse.map((t: any) => {
-            const fullTrack = fetchedTracks.find((ft: any) => ft.id === t.id);
-            return fullTrack ? fullTrack : t;
-          });
-        }
-        
+      const collection = data.collection || (Array.isArray(data) ? data : []);
+
+      for (const p of collection) {
+        const tracksToUse = await resolvePlaylistTracks(p, clientId);
+
         const validTracks = tracksToUse.map((t: any) => {
           const cover = t.artwork_url ? t.artwork_url.replace('large', 't500x500') : (p.artwork_url ? p.artwork_url.replace('large', 't500x500') : '');
           const avatar = t.user?.avatar_url ? t.user.avatar_url.replace('large', 't500x500') : '';
@@ -1430,7 +1749,7 @@ export async function getUserPlaylists(userId: number) {
             source: 'soundcloud'
           };
         }).filter((t: any) => t.title && (t.audioUrl || t.transcodings?.length > 0));
-        
+
         if (validTracks.length > 0) {
           playlists.push({
             id: `sc_playlist_${p.id}`,
@@ -1439,12 +1758,146 @@ export async function getUserPlaylists(userId: number) {
           });
         }
       }
-      return playlists;
+
+      const next = typeof data.next_href === 'string' ? data.next_href : '';
+      url = next ? `${next}${next.includes('?') ? '&' : '?'}client_id=${clientId}` : null;
     }
+
+    return playlists;
   } catch (e) {
     console.error("Failed to fetch user playlists:", e);
   }
   return [];
+}
+
+export async function importSoundCloudPlaylistByUrl(playlistUrl: string): Promise<any> {
+  if (!playlistUrl || typeof playlistUrl !== 'string') {
+    throw new Error('Укажи ссылку на плейлист SoundCloud.');
+  }
+
+  let cleanUrl = playlistUrl.trim();
+  if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
+    if (cleanUrl.startsWith('soundcloud.com/')) {
+      cleanUrl = 'https://' + cleanUrl;
+    } else {
+      cleanUrl = 'https://soundcloud.com/' + cleanUrl.replace(/^\/+/, '');
+    }
+  }
+
+  try {
+    const parsed = new URL(cleanUrl);
+    parsed.searchParams.delete('si');
+    parsed.searchParams.delete('utm_source');
+    parsed.searchParams.delete('utm_medium');
+    parsed.searchParams.delete('utm_campaign');
+    cleanUrl = parsed.toString();
+  } catch (e) {}
+
+  let data: any = null;
+  const clientId = await getSoundCloudClientId();
+  const resolveUrl = `https://api-v2.soundcloud.com/resolve?url=${encodeURIComponent(cleanUrl)}&client_id=${clientId}`;
+  let resolveError: string | null = null;
+  try {
+    const res = await safeFetch(resolveUrl, { method: 'GET' });
+    if (res.ok) {
+      data = await res.json();
+    } else {
+      if (res.status === 404) {
+        resolveError = 'Плейлист не найден. Проверь ссылку и убедись, что плейлист публичный.';
+      } else {
+        resolveError = `Не удалось загрузить плейлист (код ${res.status}). Проверь соединение.`;
+      }
+    }
+  } catch (e: any) {
+    resolveError = e?.message || 'Ошибка соединения при запросе плейлиста.';
+  }
+
+  // Если resolve не удался, пробуем найти плейлист в поиске по названию из ссылки
+  if (!data || (data.kind !== 'playlist' && data.kind !== 'system-playlist')) {
+    try {
+      const urlParts = cleanUrl.replace(/\/+$/, '').split('/');
+      const slug = urlParts[urlParts.length - 1] || '';
+      const cleanSlug = decodeURIComponent(slug).replace(/^sets_?/, '').replace(/[-_]+/g, ' ').trim();
+      if (cleanSlug) {
+        const searchPlaylists = await getSoundCloudPlaylists(cleanSlug, 5);
+        if (searchPlaylists && searchPlaylists.length > 0) {
+          const match = searchPlaylists.find((p: any) =>
+            p.tracks && p.tracks.length > 0 &&
+            (cleanSlug.toLowerCase().includes(p.title?.toLowerCase()) || p.title?.toLowerCase().includes(cleanSlug.toLowerCase()))
+          ) || searchPlaylists[0];
+
+          if (match && match.tracks && match.tracks.length > 0) {
+            return match;
+          }
+        }
+      }
+    } catch (searchErr) {
+      console.warn('[soundcloud] search fallback failed:', searchErr);
+    }
+
+    if (resolveError) {
+      throw new Error(resolveError);
+    }
+    if (data?.kind === 'user') {
+      throw new Error('Это ссылка на профиль автора, а не на плейлист. Профиль можно подключить в Настройках.');
+    } else if (data?.kind === 'track') {
+      throw new Error('Это ссылка на отдельный трек, а не на плейлист.');
+    }
+    throw new Error('По этой ссылке не найден плейлист SoundCloud.');
+  }
+
+  const tracksToUse = await resolvePlaylistTracks(data, clientId);
+
+  // Если треков все еще меньше, чем track_count, пробуем добрать из поиска SoundCloud
+  if (data.track_count && tracksToUse.length < data.track_count) {
+    try {
+      const searchTerms = [data.title, data.permalink].filter(Boolean);
+      for (const term of searchTerms) {
+        if (!term || tracksToUse.length >= data.track_count) break;
+        const searchPlaylists = await getSoundCloudPlaylists(term, 5);
+        for (const found of searchPlaylists) {
+          if (found && Array.isArray(found.tracks) && found.tracks.length > tracksToUse.length) {
+            return found;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[soundcloud] playlist search track enrichment failed:', err);
+    }
+  }
+  const coverUrl = data.artwork_url ? data.artwork_url.replace('large', 't500x500') : '';
+
+  const validTracks = tracksToUse.map((t: any) => {
+    const cover = t.artwork_url ? t.artwork_url.replace('large', 't500x500') : (coverUrl || '');
+    const avatar = t.user?.avatar_url ? t.user.avatar_url.replace('large', 't500x500') : '';
+    return {
+      id: t.id,
+      title: t.title,
+      artist: t.user?.username || 'Unknown',
+      coverUrl: cover,
+      artistAvatarUrl: avatar,
+      permalinkUrl: t.permalink_url || '',
+      genre: t.genre || '',
+      playbackCount: t.playback_count || 0,
+      likesCount: t.likes_count || 0,
+      releaseDate: t.release_date || t.created_at || t.display_date || '',
+      duration: t.duration || 0,
+      audioUrl: findBestTranscoding(t.media),
+      transcodings: t.media?.transcodings?.map((tr: any) => `${tr.url}?client_id=${clientId}`) || [],
+      source: 'soundcloud'
+    };
+  }).filter((t: any) => t.title && (t.audioUrl || t.transcodings?.length > 0));
+
+  if (validTracks.length === 0) {
+    throw new Error('В плейлисте не найдено доступных для воспроизведения треков.');
+  }
+
+  return {
+    id: `sc_playlist_${data.id}`,
+    title: data.title || 'SoundCloud Плейлист',
+    coverUrl: coverUrl || (validTracks[0]?.coverUrl || ''),
+    tracks: validTracks
+  };
 }
 
 export async function getArtistAlbums(artistName: string, sourceOverride?: ArtistSource) {

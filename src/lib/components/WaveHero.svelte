@@ -57,6 +57,7 @@
   import { coverUrlForTrack, downloadedCoverCache } from '$lib/offlineCovers';
   import {
     describeWaveFilters,
+    isNeuroTrack,
     trackMatchesWaveGenre,
     waveGenreLabel,
     waveLanguageLabel,
@@ -104,12 +105,9 @@
   let tuneLeft = 16;
   let tuneTop = 16;
   let expanded = false;
-  let overlayActive = false;
   let slotEl: HTMLElement;
   let expandTrigger: HTMLButtonElement;
-  let expandAnimation: Animation | null = null;
-  let expansionBusy = false;
-  let expansionRevision = 0;
+  let resizeRaf = 0;
 
   /**
    * Идентификаторы треков станции «по своему». Признак «станция играет» выводится из них, а
@@ -129,12 +127,13 @@
   $: selectedLanguage = waveLanguageLabel($settings.waveLanguage);
   $: activeFilterCount = ($settings.waveContent && $settings.waveContent !== 'all' ? 1 : 0) +
     ($settings.waveLanguage ? 1 : 0) +
-    ($settings.waveGenre ? 1 : 0);
+    ($settings.waveGenre ? 1 : 0) +
+    ($settings.waveAllowNeuro === false ? 1 : 0);
   $: ignoredLocalFilters = !yandexWave && (
     ($settings.waveContent && $settings.waveContent !== 'all') || Boolean($settings.waveLanguage)
   );
   $: if (!onPage && tuneOpen) setTuneOpen(false);
-  $: if (!onPage && expanded) void setExpanded(false, true);
+  $: if (!onPage && expanded) void setExpanded(false);
 
   function positionTunePanel() {
     if (!tuneTrigger || typeof window === 'undefined') return;
@@ -197,82 +196,34 @@
     if (typeof window !== 'undefined') window.removeEventListener('keydown', onExpandedKeydown);
   }
 
-  function setPageScrollLocked(locked: boolean) {
-    if (typeof document === 'undefined') return;
-    document.body.classList.toggle('wave-overlay-open', locked);
-  }
-
-  async function playExpansion(from: DOMRect, to: DOMRect, opening: boolean, revision: number) {
-    if (!hostEl || reduceMotion || typeof hostEl.animate !== 'function') return;
-    // При открытии элемент уже лежит в большой геометрии и визуально стартует из карточки.
-    // При закрытии всё наоборот: layout пока большой, а transform должен привести его к слоту.
-    const x = opening ? from.left - to.left : to.left - from.left;
-    const y = opening ? from.top - to.top : to.top - from.top;
-    const sx = opening
-      ? Math.max(0.08, from.width / Math.max(1, to.width))
-      : Math.max(0.08, to.width / Math.max(1, from.width));
-    const sy = opening
-      ? Math.max(0.08, from.height / Math.max(1, to.height))
-      : Math.max(0.08, to.height / Math.max(1, from.height));
-    const transformed = `translate3d(${x}px, ${y}px, 0) scale(${sx}, ${sy})`;
-    const frames = opening
-      ? [
-          { transform: transformed },
-          { transform: 'translate3d(0, 0, 0) scale(1)' }
-        ]
-      : [
-          { transform: 'translate3d(0, 0, 0) scale(1)' },
-          { transform: transformed }
-        ];
-
-    expandAnimation = hostEl.animate(frames, {
-      duration: opening ? 240 : 200,
-      easing: 'cubic-bezier(0.23, 1, 0.32, 1)',
-      fill: 'both'
-    });
-    await expandAnimation.finished.catch(() => undefined);
-    if (revision === expansionRevision) {
-      expandAnimation.cancel();
-      expandAnimation = null;
+  function smoothResizeTransition(durationMs = 420) {
+    if (typeof window === 'undefined') return;
+    const start = performance.now();
+    if (resizeRaf) cancelAnimationFrame(resizeRaf);
+    function step(now: number) {
+      resize();
+      if (now - start < durationMs) {
+        resizeRaf = requestAnimationFrame(step);
+      } else {
+        resize();
+        resizeRaf = 0;
+      }
     }
+    resizeRaf = requestAnimationFrame(step);
   }
 
-  async function setExpanded(next: boolean, instant = false) {
-    if (expanded === next || (expansionBusy && !instant)) return;
-    const revision = ++expansionRevision;
-    expansionBusy = true;
-    expandAnimation?.cancel();
-    expandAnimation = null;
-
+  async function setExpanded(next: boolean) {
+    if (expanded === next) return;
     if (tuneOpen) await setTuneOpen(false);
-
-    if (next) {
-      const from = hostEl?.getBoundingClientRect();
-      overlayActive = true;
-      setPageScrollLocked(true);
-      expanded = true;
+    expanded = next;
+    if (expanded) {
       attachExpandedListeners();
-      await tick();
-      resize();
-      const to = hostEl?.getBoundingClientRect();
-      if (!instant && from && to) await playExpansion(from, to, true, revision);
     } else {
-      const from = hostEl?.getBoundingClientRect();
-      const to = slotEl?.getBoundingClientRect();
-      if (!instant && from && to) await playExpansion(from, to, false, revision);
-      if (revision !== expansionRevision) return;
-      expanded = false;
-      overlayActive = false;
-      setPageScrollLocked(false);
       detachExpandedListeners();
-      await tick();
-      resize();
     }
-
-    if (revision === expansionRevision) {
-      expansionBusy = false;
-      expandTrigger?.focus();
-    }
+    await tick();
+    smoothResizeTransition(420);
+    expandTrigger?.focus();
   }
 
   async function setTuneOpen(next: boolean) {
@@ -319,8 +270,18 @@
     settings.update((state) => ({ ...state, waveGenre: value }));
   }
 
+  function setWaveAllowNeuro(allowed: boolean) {
+    settings.update((state) => ({ ...state, waveAllowNeuro: allowed }));
+  }
+
   function clearWaveFilters() {
-    settings.update((state) => ({ ...state, waveContent: 'all', waveLanguage: '', waveGenre: '' }));
+    settings.update((state) => ({
+      ...state,
+      waveContent: 'all',
+      waveLanguage: '',
+      waveGenre: '',
+      waveAllowNeuro: true
+    }));
   }
 
   async function applyWaveFilters() {
@@ -359,6 +320,9 @@
     // SoundCloud сообщает жанр, поэтому этот фильтр работает и у локальной волны. Наличие
     // текста он надёжно не сообщает — это условие остаётся только для станции Яндекса.
     pool = pool.filter((track) => trackMatchesWaveGenre(track, $settings));
+    if ($settings.waveAllowNeuro === false) {
+      pool = pool.filter((track) => !isNeuroTrack(track));
+    }
     const unique = new Map<string, any>();
     for (const track of pool) {
       const key = track?.id
@@ -884,18 +848,18 @@
       return;
     }
 
-    // Кадры не крутятся, пока блок не на экране: уйдя вниз по главной, человек всё равно
-    // платил бы за 60 кадров в секунду в невидимом углу.
-    if (canvas && 'IntersectionObserver' in window) {
+    // Кадры не крутятся и пятна фона замирают, пока блок не на экране: уйдя вниз по главной,
+    // человек не тратит ресурсы GPU на невидимые размытия. Буфер 300px возобновляет работу заранее при скролле вверх.
+    if ((hostEl || canvas) && 'IntersectionObserver' in window) {
       inView = new IntersectionObserver(
         (entries) => {
           onScreen = entries.some((e) => e.isIntersecting);
           if (onScreen && awake) startLoop();
           else stopLoop();
         },
-        { threshold: 0.01 }
+        { threshold: 0, rootMargin: '300px 0px' }
       );
-      inView.observe(canvas);
+      inView.observe(hostEl || canvas!);
     }
 
     document.addEventListener('visibilitychange', syncAwake);
@@ -929,8 +893,7 @@
   onDestroy(() => {
     detachTuneListeners();
     detachExpandedListeners();
-    setPageScrollLocked(false);
-    expandAnimation?.cancel();
+    if (resizeRaf) cancelAnimationFrame(resizeRaf);
     stopLoop();
     observer?.disconnect();
     inView?.disconnect();
@@ -945,29 +908,16 @@
 
 <div
   class="wave-hero-slot"
-  class:is-expanded={expanded}
-  class:is-overlay-active={overlayActive}
   bind:this={slotEl}
 >
-{#if overlayActive}
-  <button
-    type="button"
-    class="wave-expand-backdrop"
-    class:is-active={overlayActive}
-    on:click={() => setExpanded(false)}
-    aria-label="Закрыть развёрнутую тусню"
-    tabindex="-1"
-  ></button>
-{/if}
 <section
   id="my-wave-hero"
   class="wave-hero"
   class:is-live={active && $isPlaying}
-  class:is-idle={!awake}
+  class:is-idle={!awake || !onScreen}
   class:is-expanded={expanded}
   bind:this={hostEl}
   aria-label="Моя тусня"
-  aria-busy={expansionBusy}
 >
   <div class="wave-hero-bg" aria-hidden="true">
     {#if cover}
@@ -1036,7 +986,6 @@
         class="wave-expand"
         bind:this={expandTrigger}
         on:click={() => setExpanded(!expanded)}
-        disabled={expansionBusy}
         aria-expanded={expanded}
         aria-controls="my-wave-hero"
         aria-label={expanded ? 'Свернуть Мою тусню' : 'Развернуть Мою тусню'}
@@ -1191,6 +1140,34 @@
       </div>
     </div>
 
+    <div class="wave-tune-section">
+      <div class="wave-tune-label">Нейротреки</div>
+      <div
+        class="seg-control"
+        style="--seg-count: 2; --seg-index: {$settings.waveAllowNeuro === false ? 1 : 0}"
+        role="radiogroup"
+        aria-label="Нейротреки в Моей тусне"
+      >
+        <span class="seg-pill" aria-hidden="true"></span>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={$settings.waveAllowNeuro !== false}
+          class="seg-item"
+          class:is-active={$settings.waveAllowNeuro !== false}
+          on:click={() => setWaveAllowNeuro(true)}
+        >Вкл</button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={$settings.waveAllowNeuro === false}
+          class="seg-item"
+          class:is-active={$settings.waveAllowNeuro === false}
+          on:click={() => setWaveAllowNeuro(false)}
+        >Выкл</button>
+      </div>
+    </div>
+
     <div class="wave-tune-section wave-tune-genres">
       <div class="wave-tune-section-head">
         <span class="wave-tune-label">Жанр</span>
@@ -1233,7 +1210,7 @@
     <div class="wave-tune-note">
       <Info size={14} aria-hidden="true" />
       <span>
-        {yandexWave
+        {$settings.waveAllowNeuro === false ? 'Нейротреки исключаются из подборки. ' : ''}{yandexWave
           ? 'Язык берётся из метаданных Яндекса, а при их отсутствии мягко определяется по названию. Неизвестный жанр не отбрасывает трек.'
           : 'SoundCloud фильтруется по жанру; слова и язык включатся с Яндекс Музыкой.'}
       </span>
@@ -1257,52 +1234,12 @@
     width: 100%;
   }
 
-  /* Слот сохраняет место карточки, пока та развёрнута и временно стала fixed. */
-  .wave-hero-slot.is-expanded {
-    min-height: 224px;
-  }
-
-  :global(body.wave-overlay-open main) {
-    overflow-y: hidden !important;
-    overscroll-behavior: none;
-  }
-
-  /* Родитель карточки создаёт собственный stacking context. Без его подъёма трековые полки
-     с собственным z-index могли рисоваться поверх уже развёрнутой волны. */
-  :global(.wave-hero-host:has(.wave-hero-slot.is-overlay-active)) {
-    z-index: 90;
-  }
-
-  .wave-expand-backdrop {
-    position: fixed;
-    /* Cover the whole app chrome. Leaving a hard left edge at the sidebar boundary
-       produced a second rectangular frame while the card was moving to its fixed slot. */
-    inset: 36px 0 96px;
-    z-index: 110;
-    padding: 0;
-    border: 0;
-    pointer-events: none;
-    touch-action: none;
-    overscroll-behavior: contain;
-    /* Невидимая зона закрытия. Отдельный полупрозрачный scrim выглядел как ещё одна
-       кривая карточка под волной, особенно во время FLIP-масштабирования. */
-    background: transparent;
-    cursor: default;
-  }
-
-  .wave-expand-backdrop.is-active {
-    pointer-events: auto;
-  }
-
-  :global(body[data-perf="light"]) .wave-expand-backdrop {
-    background: transparent;
-  }
-
   .wave-hero {
     position: relative;
     width: 100%;
     overflow: hidden;
     border-radius: 1.375rem;
+    height: 224px;
     min-height: 224px;
     display: flex;
     align-items: flex-end;
@@ -1321,30 +1258,23 @@
     /* Композитору незачем перепроверять, не вылезло ли размытие пятен за края блока: рамка
        обрезки и так здесь. С `contain` он перерисовывает только этот прямоугольник. */
     contain: paint;
-    transition: border-color var(--duration-slow, 700ms) var(--ease-smooth-out, ease);
+    transition:
+      height 380ms cubic-bezier(0.23, 1, 0.32, 1),
+      min-height 380ms cubic-bezier(0.23, 1, 0.32, 1),
+      border-radius 380ms cubic-bezier(0.23, 1, 0.32, 1),
+      box-shadow 380ms cubic-bezier(0.23, 1, 0.32, 1),
+      border-color var(--duration-slow, 700ms) var(--ease-smooth-out, ease);
   }
 
   .wave-hero.is-expanded {
-    position: fixed;
-    /* Оверлей перекрывает всё приложение, значит и центр у него должен быть центром окна,
-       а не правой колонки после сайдбара. Ограничение ширины не даёт сцене растянуться на
-       ультрашироком мониторе, симметричная формула сохраняет точный центр. */
-    inset: 52px max(24px, calc((100vw - 1180px) / 2)) 112px;
-    width: auto;
-    z-index: 120;
-    min-height: 0;
-    border-radius: 32px;
-    background: #07070b;
-    /* `contain: paint` on the compact card made the fixed FLIP frame clip its own
-       canvas during expansion, which showed up as black strips along the edges. */
-    contain: none;
-    overflow: hidden;
-    border: 0;
-    border-color: transparent;
+    height: 480px;
+    min-height: 480px;
+    border-radius: 1.75rem;
+    border-color: rgba(255, 255, 255, 0.1);
     box-shadow:
-      0 42px 110px -34px rgba(0, 0, 0, 0.92),
-      0 0 80px -46px color-mix(in srgb, var(--color-primary) 74%, transparent);
-    transform-origin: top left;
+      inset 0 1px 0 rgba(255, 255, 255, 0.06),
+      0 32px 72px -32px rgba(0, 0, 0, 0.92),
+      0 0 70px -36px color-mix(in srgb, var(--color-primary) 40%, transparent);
   }
 
   .wave-hero.is-live {
@@ -1507,11 +1437,11 @@
 
   .wave-hero.is-expanded .wave-hero-body {
     min-height: 100%;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: end;
-    padding: clamp(40px, 5vw, 64px);
-    gap: clamp(28px, 4vw, 56px);
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    padding: clamp(28px, 4vw, 42px);
+    gap: clamp(20px, 3vw, 36px);
   }
 
   .wave-hero.is-expanded .wave-hero-text {
@@ -1540,15 +1470,16 @@
     line-height: 1.05;
     color: rgba(255, 255, 255, 0.97);
     margin: 0;
+    transition: font-size 380ms cubic-bezier(0.23, 1, 0.32, 1);
   }
 
   .wave-hero.is-expanded .wave-hero-title {
     max-width: none;
-    font-size: clamp(58px, 6.6vw, 104px);
+    font-size: clamp(42px, 4.8vw, 62px);
     font-weight: 800;
-    letter-spacing: -0.06em;
+    letter-spacing: -0.05em;
     white-space: nowrap;
-    text-shadow: 0 18px 60px rgba(0, 0, 0, 0.42);
+    text-shadow: 0 16px 50px rgba(0, 0, 0, 0.42);
   }
 
   .wave-hero.is-expanded .wave-hero-greeting {
@@ -2155,20 +2086,19 @@
       height: 164px;
     }
     .wave-hero.is-expanded {
-      inset: 48px 12px 104px;
-      border-radius: 24px;
-    }
-    .wave-expand-backdrop {
-      inset: 36px 0 92px;
+      height: 400px;
+      min-height: 400px;
+      border-radius: 20px;
     }
     .wave-hero.is-expanded .wave-hero-body {
-      grid-template-columns: minmax(0, 1fr);
-      padding: 56px 20px 24px;
-      align-content: flex-end;
-      gap: 28px;
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: flex-end;
+      padding: 22px 18px;
+      gap: 18px;
     }
     .wave-hero.is-expanded .wave-hero-title {
-      font-size: clamp(48px, 16vw, 72px);
+      font-size: clamp(30px, 8vw, 40px);
     }
     .wave-hero.is-expanded .wave-hero-actions {
       width: 100%;
@@ -2179,7 +2109,8 @@
 
   @media (min-width: 721px) and (max-width: 1080px) {
     .wave-hero.is-expanded {
-      inset: 52px 18px 108px;
+      height: 440px;
+      min-height: 440px;
     }
   }
 

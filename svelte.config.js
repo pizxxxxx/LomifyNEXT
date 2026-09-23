@@ -11,6 +11,10 @@ const config = {
   kit: {
     adapter: adapter({
       fallback: "index.html",
+      ...(process.env.LOMIFY_BUILD_DIR ? {
+        pages: process.env.LOMIFY_BUILD_DIR,
+        assets: process.env.LOMIFY_BUILD_DIR,
+      } : {}),
     }),
   },
 };
