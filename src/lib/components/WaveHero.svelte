@@ -50,9 +50,10 @@
     playlists,
     queue,
     searchHistory,
-    settings
+    settings,
+    waveDisplayName
   } from '$lib/stores';
-  import { startWave, waveActive, waveAvailable } from '$lib/wave';
+  import { startWave, stopWave, waveActive, waveAvailable } from '$lib/wave';
   import { FFT_BINS, readFftInto } from '$lib/fft';
   import { coverUrlForTrack, downloadedCoverCache } from '$lib/offlineCovers';
   import {
@@ -373,6 +374,7 @@
 
     const shuffled = [...pool].sort(() => Math.random() - 0.5);
     stationIds = new Set(shuffled.map((t) => `${t.id}`));
+    stopWave();
     // Очередь ставим раньше трека: реакция плеера на `currentTrack` синхронная, и к моменту,
     // когда он возьмётся за первый трек, остальное уже должно лежать на месте.
     queue.set(shuffled.slice(1));
@@ -942,7 +944,7 @@
   class:is-idle={!awake || !onScreen}
   class:is-expanded={expanded}
   bind:this={hostEl}
-  aria-label="Моя тусня"
+  aria-label={$waveDisplayName}
 >
   <div class="wave-hero-bg" aria-hidden="true">
     {#if cover}
@@ -964,7 +966,7 @@
         </div>
       {/if}
 
-      <h1 class="wave-hero-title">Моя тусня</h1>
+      <h1 class="wave-hero-title">{$waveDisplayName}</h1>
 
       <div class="wave-hero-meta">
         <span class="wave-chip">
@@ -1013,7 +1015,7 @@
         on:click={() => setExpanded(!expanded)}
         aria-expanded={expanded}
         aria-controls="my-wave-hero"
-        aria-label={expanded ? 'Свернуть Мою тусню' : 'Развернуть Мою тусню'}
+        aria-label={expanded ? `Свернуть станцию «${$waveDisplayName}»` : `Развернуть станцию «${$waveDisplayName}»`}
         title={expanded ? 'Свернуть' : 'Развернуть'}
       >
         <MorphIcon
@@ -1038,7 +1040,7 @@
         on:click|stopPropagation={onTuneTriggerClick}
         aria-haspopup="dialog"
         aria-expanded={tuneOpen}
-        aria-label="Настроить Мою тусню"
+        aria-label={`Настроить станцию «${$waveDisplayName}»`}
       >
         <SlidersHorizontal size={16} aria-hidden="true" />
         <span>Настроить</span>
@@ -1052,7 +1054,7 @@
         class="wave-play"
         on:click={primary}
         disabled={busy}
-        title={active ? ($isPlaying ? 'Пауза' : 'Продолжить') : 'Включить Мою тусню'}
+        title={active ? ($isPlaying ? 'Пауза' : 'Продолжить') : `Включить «${$waveDisplayName}»`}
       >
         {#if busy}
           <Loader2 size={28} class="animate-spin" />
@@ -1113,7 +1115,7 @@
         class="seg-control"
         style="--seg-count: 3; --seg-index: {$settings.waveContent === 'lyrics' ? 1 : $settings.waveContent === 'instrumental' ? 2 : 0}"
         role="radiogroup"
-        aria-label="Наличие текста в Моей тусне"
+        aria-label={`Наличие текста в станции «${$waveDisplayName}»`}
       >
         <span class="seg-pill" aria-hidden="true"></span>
         <button
@@ -1148,7 +1150,7 @@
         <span class="wave-tune-label">Язык песни</span>
         <span class="wave-tune-current">{selectedLanguage}</span>
       </div>
-      <div class="wave-language-grid" role="radiogroup" aria-label="Язык песен в Моей тусне">
+      <div class="wave-language-grid" role="radiogroup" aria-label={`Язык песен в станции «${$waveDisplayName}»`}>
         {#each WAVE_LANGUAGES as language}
           <button
             type="button"
@@ -1171,7 +1173,7 @@
         class="seg-control"
         style="--seg-count: 3; --seg-index: {$settings.waveAllowNeuro === 'only' ? 2 : $settings.waveAllowNeuro === false ? 1 : 0}"
         role="radiogroup"
-        aria-label="Нейротреки в Моей тусне"
+        aria-label={`Нейротреки в станции «${$waveDisplayName}»`}
       >
         <span class="seg-pill" aria-hidden="true"></span>
         <button
@@ -1206,7 +1208,7 @@
         <span class="wave-tune-label">Жанр</span>
         <span class="wave-tune-current">{selectedGenre}</span>
       </div>
-      <div class="wave-genre-menu" role="radiogroup" aria-label="Жанр Моей тусни">
+      <div class="wave-genre-menu" role="radiogroup" aria-label={`Жанр станции «${$waveDisplayName}»`}>
         <button
           type="button"
           role="radio"
@@ -1507,6 +1509,8 @@
     line-height: 1.05;
     color: rgba(255, 255, 255, 0.97);
     margin: 0;
+    overflow-wrap: anywhere;
+    text-wrap: balance;
     transition: font-size 380ms cubic-bezier(0.23, 1, 0.32, 1);
   }
 
@@ -1515,7 +1519,7 @@
     font-size: clamp(42px, 4.8vw, 62px);
     font-weight: 800;
     letter-spacing: -0.05em;
-    white-space: nowrap;
+    white-space: normal;
     text-shadow: 0 16px 50px rgba(0, 0, 0, 0.42);
   }
 
@@ -2095,6 +2099,22 @@
   .wave-tune-apply:disabled {
     opacity: 0.6;
     cursor: progress;
+  }
+
+  /* The compact card cannot keep a fixed 224px height once the actions wrap.
+     Let the content define its height before the greeting or title is clipped. */
+  @media (max-width: 1100px) {
+    .wave-hero:not(.is-expanded) {
+      height: auto;
+      min-height: 260px;
+    }
+    .wave-hero:not(.is-expanded) .wave-hero-body {
+      gap: 16px;
+    }
+    .wave-hero:not(.is-expanded) .wave-hero-actions {
+      width: 100%;
+      justify-content: flex-start;
+    }
   }
 
   @media (max-width: 720px) {

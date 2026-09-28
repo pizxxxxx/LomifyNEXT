@@ -167,7 +167,10 @@ export async function startDownload(details?: UpdateDetails): Promise<string | n
     unlistenProgress = await listen<DownloadProgressPayload>(
       'update:download-progress',
       (event) => {
-        downloadProgress.set(event.payload);
+        const percent = Number.isFinite(event.payload.percent)
+          ? Math.min(100, Math.max(0, Math.round(event.payload.percent)))
+          : 0;
+        downloadProgress.set({ ...event.payload, percent });
       }
     );
 

@@ -188,6 +188,15 @@
 
   onMount(() => {
     initStore();
+    const initialSettings = get(settings);
+    if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+      import('@tauri-apps/api/core').then(({ invoke }) => {
+        invoke('rockium_configure', {
+          enabled: initialSettings.rockiumEnabled !== false,
+          serverEnabled: initialSettings.rockiumServerEnabled !== false
+        }).catch(() => {});
+      });
+    }
     let downloadedCoversDisposed = false;
     let releaseDownloadedCovers: (() => void) | null = null;
     void initDownloadedCoverCache().then((release) => {

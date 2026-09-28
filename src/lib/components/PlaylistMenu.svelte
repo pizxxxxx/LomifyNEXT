@@ -25,6 +25,37 @@
   export let buttonClass = '';
   export let open = false;
 
+  let computedPlacement = placement;
+  let computedAlign = align;
+
+  $: if (!open) {
+    computedPlacement = placement;
+    computedAlign = align;
+  }
+
+  function adjustPosition() {
+    if (!root || typeof window === 'undefined') return;
+    const rect = root.getBoundingClientRect();
+    const menuWidth = 240;
+    const menuHeight = 240;
+
+    if (placement === 'bottom' && rect.bottom + menuHeight > window.innerHeight && rect.top > menuHeight) {
+      computedPlacement = 'top';
+    } else if (placement === 'top' && rect.top - menuHeight < 0 && window.innerHeight - rect.bottom > menuHeight) {
+      computedPlacement = 'bottom';
+    } else {
+      computedPlacement = placement;
+    }
+
+    if (align === 'right' && rect.right - menuWidth < 12 && window.innerWidth - rect.left >= menuWidth) {
+      computedAlign = 'left';
+    } else if (align === 'left' && rect.left + menuWidth > window.innerWidth - 12 && rect.right >= menuWidth) {
+      computedAlign = 'right';
+    } else {
+      computedAlign = align;
+    }
+  }
+
   // Хозяину строки нужно знать про открытое меню: он поднимает строку по z-index и не
   // прячет ряд кнопок, пока меню на экране. Без этого меню закрывалось бы «само» от того,
   // что курсор ушёл со строки, а вместе с ней погас весь ряд.
@@ -66,8 +97,12 @@
     window.removeEventListener('keydown', onKey);
   }
 
-  $: if (open) attach();
-    else detach();
+  $: if (open) {
+    adjustPosition();
+    attach();
+  } else {
+    detach();
+  }
 
   onDestroy(detach);
 
@@ -124,27 +159,32 @@
   }
 </script>
 
-<span class="pl-menu" bind:this={root}>
+<!-- svelte-ignore a11y-click-events-have-key-events -->
+<!-- svelte-ignore a11y-no-static-element-interactions -->
+<span class="pl-menu" bind:this={root} on:click|stopPropagation>
   <button
     type="button"
-    data-press-late
     class="pl-menu-trigger {buttonClass}"
     class:is-open={open}
     aria-haspopup="menu"
     aria-expanded={open}
     aria-label="Добавить в плейлист"
     title="Добавить в плейлист"
+    on:pointerdown|stopPropagation
     on:click={toggle}
   >
     <Plus size={iconSize} />
   </button>
 
   {#if open}
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <!-- svelte-ignore a11y-no-static-element-interactions -->
     <div
       transition:popFade
-      class="pl-menu-pop is-{placement} is-{align}"
+      class="pl-menu-pop is-{computedPlacement} is-{computedAlign}"
       role="menu"
       tabindex="-1"
+      on:click|stopPropagation
     >
       <div class="pl-menu-head">
         <ListMusic size={12} />

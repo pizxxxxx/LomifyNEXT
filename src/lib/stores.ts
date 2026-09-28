@@ -1,4 +1,5 @@
 import { derived, readable, writable, get } from 'svelte/store';
+import { dedupePlaylists, loadPlaylistSnapshot, savePlaylistSnapshot } from '$lib/playlistStorage';
 
 // Global app state
 export const currentTrack = writable<{
@@ -15,6 +16,8 @@ export const currentTrack = writable<{
   lyricsAvailable?: boolean;
   /** Язык слов, когда источник его сообщил: `ru`, `en` или другой ISO-код. */
   lyricsLanguage?: string;
+  /** Прямая ссылка на немой видеошот Яндекс Музыки, если он есть у трека. */
+  backgroundVideoUri?: string;
   /**
    * Раздельный список авторов, когда источник его знает. Яндекс отдаёт авторов массивом
    * (`mapYandexTrack`), и это факт, а не догадка: `artist` там — та же строка, склеенная
@@ -72,8 +75,14 @@ const defaultSettings = {
   lyricsOffset: 0, // ms offset for synced lyrics
   /** Выделение эдлибов и бэк-вокала (damn): звуки в скобках выносятся отдельным слоем. По умолчанию true. */
   lyricsAdlibs: true,
-  /** Вариант отображения эдлибов: 'overlay' (парящий над текстом) или 'backdrop' (кинематографичный слой под текстом во весь экран). */
-  lyricsAdlibStyle: 'overlay' as 'overlay' | 'backdrop',
+  /** Вариант отображения эдлибов: 'backdrop' (кинематографичный слой под текстом во всю ширину экрана по центру) или 'overlay' (парящий над текстом). */
+  lyricsAdlibStyle: 'backdrop' as 'overlay' | 'backdrop',
+  /** Объемное 3D-звучание с виртуальной комнатой. По умолчанию false. */
+  spatialAudio: false,
+  /** Размер виртуальной комнаты (от 0.0 до 1.0, по умолчанию 0.5 - сбалансированная комната). */
+  spatialRoomSize: 0.5,
+  /** Интенсивность объемного 3D-эффекта (от 0.3 до 1.5, по умолчанию 0.85 - выраженная глубина). */
+  spatialIntensity: 0.85,
   uiStyle: 'style1', // 'style1' | 'style2'
   // Оконная рамка Tauri выключена, поэтому оба варианта рисуются самим Lomify.
   // Windows — компактные управляющие кнопки справа; macOS — цветные точки слева.
@@ -166,6 +175,10 @@ const defaultSettings = {
    */
   crossfadeMs: 6000,
   enableDiscordRpc: true,
+  /** Интеграция с Rockium: публикация статуса и текста в rockium.json / HTTP API. По умолчанию включено. */
+  rockiumEnabled: true,
+  /** Локальный HTTP-сервер Rockium (порт 52289). При выключении Lomify удаляет api.json и Rockium переключается на чтение файла rockium.json. */
+  rockiumServerEnabled: true,
   /** Показывать стартовое информационное окно со статусом версии при запуске приложения. */
   showStartupNotice: true,
   /** Автоматическая проверка обновлений при запуске и в фоне во время работы (по умолчанию включено). */
@@ -186,6 +199,12 @@ const defaultSettings = {
   // Читается как `!== false`, поэтому в старых сохранённых настройках без ключа спектр
   // остаётся включённым — так же, как до появления переключателя.
   fullscreenVisualizer: true,
+  /** Показывать видеошоты Яндекс Музыки на фоне полноэкранного плеера. */
+  fullscreenYandexVideo: true,
+  /** Растянуть видеошот на всё окно и смягчить низкое разрешение размытием. */
+  fullscreenYandexVideoFill: true,
+  /** Старым установкам включаем новый вид один раз; дальнейший выбор пользователя сохраняется. */
+  fullscreenYandexVideoFillDefaultApplied: true,
   /** В полноэкранном режиме: true — караоке по буквам, false — синхронизация целыми строками. */
   fullscreenLyricsSync: true,
   /**
@@ -198,6 +217,8 @@ const defaultSettings = {
    * даёт сглаженный стиль — новый и более спокойный вид по умолчанию.
    */
   waveStyle: 'smooth', // 'smooth' | 'pulse'
+  /** Слово после «Моя» в названии станции; пусто оставляет «Моя тусня». */
+  waveCustomName: '',
   /** Что допускается в «Мою волну». Фильтры применяются только к станции Яндекс Музыки. */
   waveContent: 'all', // 'all' | 'lyrics' | 'instrumental'
   /** Пустая строка — любой язык; фильтр применяется только к песням со словами. */
@@ -234,6 +255,13 @@ const defaultSettings = {
 };
 
 export const settings = writable(defaultSettings);
+
+export const waveDisplayName = derived(settings, ($settings) => {
+  const customName = typeof $settings.waveCustomName === 'string'
+    ? $settings.waveCustomName.trim().slice(0, 16)
+    : '';
+  return `Моя ${customName || 'тусня'}`;
+});
 
 function detectLowEndDevice(): boolean {
   if (typeof navigator === 'undefined') return false;
@@ -365,14 +393,108 @@ export interface PageAtmosphere {
 }
 export const pageAtmosphere = writable<PageAtmosphere | null>(null);
 
-// Playlists store
-const storedPlaylists = typeof window !== 'undefined' ? localStorage.getItem('lomifynext_playlists') : null;
-export const playlists = writable<any[]>(storedPlaylists ? JSON.parse(storedPlaylists) : []);
+/**
+ * Фоновые эдлибы текста (backdrop adlibs, e.g. "damn", "#выходанет"):
+ * Выносятся на корневой уровень (fullscreen / main area) через стор, чтобы не зависеть
+ * от контейнеров с CSS-трансформами (.fs-lyrics-side) и боковой панели.
+ */
+export interface BackdropAdlibItem {
+  id: string;
+  text: string;
+  side: 'left' | 'right' | 'center';
+  rotateDeg: number;
+  xOffsetVw: number;
+  yOffsetPx: number;
+}
+export const activeBackdropAdlib = writable<BackdropAdlibItem | null>(null);
+export const departingBackdropAdlib = writable<BackdropAdlibItem | null>(null);
+
+// Playlists can be much larger than the localStorage quota. Keep the old value only long
+// enough to migrate it, then persist the full list in IndexedDB without blocking the UI.
+const LEGACY_PLAYLISTS_KEY = 'lomifynext_playlists';
+function readLegacyPlaylists(): any[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const value = JSON.parse(localStorage.getItem(LEGACY_PLAYLISTS_KEY) || '[]');
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
+
+const legacyPlaylists = dedupePlaylists(readLegacyPlaylists());
+export const playlists = writable<any[]>(legacyPlaylists);
+let latestPlaylists = legacyPlaylists;
+let playlistStorageReady = false;
+let changedBeforeHydration = false;
+let playlistSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let playlistWriteChain: Promise<void> = Promise.resolve();
+let playlistStorageErrorShown = false;
+
+function reportPlaylistStorageError(error: unknown) {
+  console.error('Failed to save playlists:', error);
+  if (playlistStorageErrorShown) return;
+  playlistStorageErrorShown = true;
+  notify('Не удалось сохранить плейлисты на этом устройстве. Проверь свободное место и повтори действие.', 'error');
+}
+
+function queuePlaylistSave(value: any[]): Promise<void> {
+  const write = playlistWriteChain.catch(() => {}).then(() => savePlaylistSnapshot(value));
+  playlistWriteChain = write;
+  return write.then(() => {
+    try { localStorage.removeItem(LEGACY_PLAYLISTS_KEY); } catch { /* IndexedDB copy is already safe. */ }
+  });
+}
+
+function mergePlaylistsLoadedDuringEdit(stored: any[], current: any[]): any[] {
+  const currentIds = new Set(current.map(item => `${item.id}`));
+  const removedIds = new Set(legacyPlaylists
+    .filter(item => !currentIds.has(`${item.id}`))
+    .map(item => `${item.id}`));
+  return [...current, ...stored.filter(item => !currentIds.has(`${item.id}`) && !removedIds.has(`${item.id}`))];
+}
 
 if (typeof window !== 'undefined') {
   playlists.subscribe(value => {
-    localStorage.setItem('lomifynext_playlists', JSON.stringify(value));
+    if (!playlistStorageReady && value !== latestPlaylists) changedBeforeHydration = true;
+    latestPlaylists = value;
+    if (!playlistStorageReady) return;
+    if (playlistSaveTimer !== null) clearTimeout(playlistSaveTimer);
+    playlistSaveTimer = setTimeout(() => {
+      playlistSaveTimer = null;
+      void queuePlaylistSave(latestPlaylists).catch(reportPlaylistStorageError);
+    }, 100);
   });
+}
+
+export const playlistsReady: Promise<void> = typeof window === 'undefined'
+  ? Promise.resolve()
+  : (async () => {
+      try {
+        const stored = await loadPlaylistSnapshot();
+        const loaded = changedBeforeHydration && stored
+          ? mergePlaylistsLoadedDuringEdit(stored, latestPlaylists)
+          : stored ?? latestPlaylists;
+        const next = dedupePlaylists(loaded);
+        if (next !== latestPlaylists) {
+          latestPlaylists = next;
+          playlists.set(next);
+        }
+        playlistStorageReady = true;
+        if (stored === null || changedBeforeHydration || next.length !== loaded.length) await queuePlaylistSave(next);
+        else try { localStorage.removeItem(LEGACY_PLAYLISTS_KEY); } catch { /* Already migrated. */ }
+      } catch (error) {
+        playlistStorageReady = true;
+        reportPlaylistStorageError(error);
+      }
+    })();
+
+export async function flushPlaylistStorage(): Promise<void> {
+  await playlistsReady;
+  if (typeof window === 'undefined') return;
+  if (playlistSaveTimer !== null) clearTimeout(playlistSaveTimer);
+  playlistSaveTimer = null;
+  await queuePlaylistSave(latestPlaylists);
 }
 
 // Notifications
@@ -428,7 +550,14 @@ export function initStore() {
     const stored = localStorage.getItem('lomifynext_settings');
     if (stored) {
       try {
-        settings.set({ ...defaultSettings, ...JSON.parse(stored) });
+        const savedSettings = JSON.parse(stored);
+        settings.set({
+          ...defaultSettings,
+          ...savedSettings,
+          ...(savedSettings?.fullscreenYandexVideoFillDefaultApplied === true
+            ? {}
+            : { fullscreenYandexVideoFill: true })
+        });
       } catch (e) {
         console.error("Failed to parse settings", e);
       }

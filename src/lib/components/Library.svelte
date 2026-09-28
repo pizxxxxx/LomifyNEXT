@@ -10,7 +10,14 @@
   import PlaylistMenu from './PlaylistMenu.svelte';
   import TrackStatus from './TrackStatus.svelte';
   import PlaylistTrailer from './PlaylistTrailer.svelte';
+  import PlaylistOrderControls from './PlaylistOrderControls.svelte';
+  import PlaylistCoverEditor from './PlaylistCoverEditor.svelte';
+  import { playlistCoverUrl } from '$lib/playlistCover';
+  import PlaylistSearch from './PlaylistSearch.svelte';
+  import { searchPlaylistTracks } from '$lib/utils/playlistSearch';
+  import SelectMenu from './SelectMenu.svelte';
   import { currentTrack, isPlaying, likedTracks, dislikedTracks, queue, currentView, searchQuery, playlists, notify, settings, activeLibraryTab, type LibraryTab } from '$lib/stores';
+  import { stopWave, waveActive } from '$lib/wave';
   import { goToArtist } from '$lib/utils/navigation';
   import { splitArtists } from '$lib/utils/artists';
   import { saveTrack, getTracks, removeTrack } from '$lib/db';
@@ -20,6 +27,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { withCount } from '$lib/utils/plural';
   import { coverUrlAtSize, coverUrlForTrack, downloadedCoverCache } from '$lib/offlineCovers';
+  import { importLinkedPlaylist, saveImportedPlaylists } from '$lib/playlistImport';
 
   /** Порядок вкладок — он же порядок ячеек переключателя, из него берётся и направление
       перехода: вправо, если ушли к следующей вкладке, влево — если к предыдущей. */
@@ -58,6 +66,10 @@
 
   function togglePlaylistPlayback(playlist: any) {
     if (!playlist?.tracks?.length) return;
+    if ($waveActive) {
+      playTrackList(playlist.tracks[0], playlist.tracks);
+      return;
+    }
     if (isPlaylistPlaying(playlist, $currentTrack, $isPlaying)) {
       isPlaying.set(false);
       return;
@@ -75,6 +87,13 @@
   let expandedPlaylist: string | null = null;
   let openedPlaylist: any = null;
   let activePreviewPlaylist: any = null;
+  let playlistSearchQuery = '';
+
+  function updatePlaylistSearch(value: string) {
+    playlistSearchQuery = value;
+    rowBudget = ROWS_FIRST_PAINT;
+    activeTrackMenu = null;
+  }
 
   $: openedPlaylist = expandedPlaylist
     ? $playlists.find(playlist => playlist.id === expandedPlaylist) ?? null
@@ -169,15 +188,25 @@
     : activeTab === 'disliked' ? $dislikedTracks.length
     : activeTab === 'local' ? localTracks.length
     : activeTab === 'artists' ? groupedArtists.length
-    : openedPlaylist ? openedPlaylist.tracks?.length || 0
+    : openedPlaylist ? filteredPlaylistTracks.length
     : $playlists.length;
 
   $: visibleLiked = $likedTracks.slice(0, rowBudget);
   $: visibleDisliked = $dislikedTracks.slice(0, rowBudget);
   $: visibleLocal = localTracks.slice(0, rowBudget);
-  $: visibleArtists = groupedArtists.slice(0, rowBudget);
+  let artistSort: 'liked' | 'name' | 'recent' = 'liked';
+  const artistSortOptions = [
+    { value: 'liked', label: 'Больше любимых треков' },
+    { value: 'name', label: 'По имени' },
+    { value: 'recent', label: 'Недавно добавленные' }
+  ];
+  $: sortedArtists = [...groupedArtists].sort((a, b) => artistSort === 'name'
+    ? a.name.localeCompare(b.name, 'ru')
+    : artistSort === 'recent' ? a.firstIndex - b.firstIndex : b.count - a.count);
+  $: visibleArtists = sortedArtists.slice(0, rowBudget);
   $: visiblePlaylists = $playlists.slice(0, rowBudget);
-  $: visiblePlaylistTracks = openedPlaylist?.tracks?.slice(0, rowBudget) || [];
+  $: filteredPlaylistTracks = searchPlaylistTracks<any>(openedPlaylist?.tracks || [], playlistSearchQuery);
+  $: visiblePlaylistTracks = filteredPlaylistTracks.slice(0, rowBudget);
 
   /**
    * Дорисовываем следующую порцию только перед тем, как человек до неё доскроллит.
@@ -218,6 +247,7 @@
   }
 
   function openPlaylistDetail(id: string) {
+    playlistSearchQuery = '';
     rowBudget = ROWS_FIRST_PAINT;
     expandedPlaylist = id;
     activeTrackMenu = null;
@@ -248,20 +278,20 @@
   // фит «A, B» становился третьим «артистом» с собственной плиткой, а сами A и B недобирали
   // по треку каждый: в разделе появлялись имена, которых нет ни в одном сервисе.
   $: groupedArtists = (() => {
-    const map = $likedTracks.reduce((acc: any, t) => {
+    const map = $likedTracks.reduce((acc: any, t, trackIndex) => {
       const names = splitArtists(t.artist, t.artists);
       names.forEach((name, i) => {
         if (!acc[name]) {
           // `artistAvatarUrl` — портрет ПЕРВОГО исполнителя (см. `mapYandexTrack`), поэтому
           // остальным он не достаётся: чужое лицо на плитке хуже обложки трека.
-          acc[name] = { count: 0, avatarUrl: (i === 0 ? t.artistAvatarUrl : '') || t.coverUrl };
+          acc[name] = { count: 0, firstIndex: trackIndex, avatarUrl: (i === 0 ? t.artistAvatarUrl : '') || t.coverUrl };
         }
         acc[name].count += 1;
       });
       return acc;
     }, {});
     return Object.entries(map)
-      .map(([name, data]: any) => ({ name, count: data.count, avatarUrl: data.avatarUrl }))
+      .map(([name, data]: any) => ({ name, count: data.count, firstIndex: data.firstIndex, avatarUrl: data.avatarUrl }))
       .sort((a, b) => b.count - a.count);
   })();
 
@@ -321,17 +351,8 @@
     if (!url || isImportingPlaylist) return;
     isImportingPlaylist = true;
     try {
-      const { importSoundCloudPlaylistByUrl } = await import('$lib/api');
-      const pl = await importSoundCloudPlaylistByUrl(url);
-      playlists.update(existing => {
-        const idx = existing.findIndex(p => p.id === pl.id || (p.title === pl.title && String(p.id).startsWith('sc_playlist_')));
-        if (idx !== -1) {
-          const copy = [...existing];
-          copy[idx] = pl;
-          return copy;
-        }
-        return [pl, ...existing];
-      });
+      const pl = await importLinkedPlaylist(url, $settings.yandexToken);
+      await saveImportedPlaylists([pl]);
       notify(`Плейлист «${pl.title}» импортирован (${withCount(pl.tracks.length, 'трек', 'трека', 'треков')}).`, 'success');
       showImportPlaylistModal = false;
       importPlaylistUrl = '';
@@ -518,12 +539,13 @@
    * правда не отдаст поток, об этом честно скажет плеер. Молчаливого клика не остаётся
    * ни в одном случае.
    */
-  function playTrackList(track: any, list: any[]) {
+  function playTrackList(track: any, list: any[], position?: number) {
     if (!track) return;
+    stopWave();
     if (track.isBanned) {
       notify('Этот источник недавно не отвечал. Пробую запустить трек ещё раз.', 'info');
     }
-    const idx = list.findIndex(t => t.title === track.title && t.artist === track.artist);
+    const idx = position ?? list.findIndex(t => t.title === track.title && t.artist === track.artist);
     if (idx !== -1) {
       queue.set(list.slice(idx + 1));
     }
@@ -534,7 +556,7 @@
   function toggleTrackPlayback(e: Event, track: any, list: any[]) {
     e.stopPropagation();
     const isCurrent = $currentTrack?.title === track.title && $currentTrack?.artist === track.artist;
-    if (isCurrent) {
+    if (isCurrent && !$waveActive) {
       isPlaying.update(value => !value);
       return;
     }
@@ -984,7 +1006,7 @@
                      одного меню всегда закрывает соседнее и меню другой строки. -->
                 <div class="track-row-menu-slot" data-track-menu-owner={i}>
                   <button
-                    data-press-late
+                    type="button"
                     class="track-row-action"
                     class:is-open={activeTrackMenu?.row === i && activeTrackMenu?.kind === 'info'}
                     aria-label="Информация"
@@ -1142,7 +1164,6 @@
 
                     <button
                       type="button"
-                      data-press-late
                       class="library-tile-action"
                       class:is-open={activeTrackMenu?.row === i && activeTrackMenu?.kind === 'info'}
                       aria-label="Информация"
@@ -1155,7 +1176,7 @@
 
                     <PlaylistMenu
                       {track}
-                      placement={i >= visibleLiked.length - 5 ? 'top' : 'bottom'}
+                      placement="top"
                       align="right"
                       iconSize={tileActionIconSize}
                       buttonClass="library-tile-action"
@@ -1213,7 +1234,7 @@
           <div class="library-showcase-copy">
             <span class="library-showcase-kicker"><User size={14} aria-hidden="true" /> По любимым трекам</span>
             <h2 id="library-artists-title" class="library-showcase-title">Твои артисты</h2>
-            <p>Собрали исполнителей, к которым ты возвращаешься чаще всего.</p>
+            <p>Исполнители из твоих любимых треков.</p>
           </div>
           <span class="library-showcase-count tnum">{withCount(groupedArtists.length, 'артист', 'артиста', 'артистов')}</span>
         </div>
@@ -1223,19 +1244,27 @@
             <span class="library-showcase-empty-icon"><User size={25} aria-hidden="true" /></span>
             <div>
               <p class="display-title">Артисты соберутся сами</p>
-              <p class="empty-hint">Добавь несколько треков в любимые — исполнители появятся здесь автоматически.</p>
+              <p class="empty-hint">Добавь несколько треков в любимые - исполнители появятся здесь автоматически.</p>
             </div>
           </div>
         {:else}
+          <div class="library-artist-sort">
+            <span>Порядок артистов</span>
+            <SelectMenu
+              value={artistSort}
+              options={artistSortOptions}
+              ariaLabel="Порядок артистов"
+              onChange={(value) => { artistSort = value as typeof artistSort; rowBudget = ROWS_FIRST_PAINT; }}
+            />
+          </div>
           <div class="library-artist-grid">
-            {#each visibleArtists as artist, index}
+            {#each visibleArtists as artist (artist.name)}
               <button
                 type="button"
                 class="library-artist-card"
                 on:click={() => goToArtist(artist.name)}
                 aria-label={`Открыть артиста ${artist.name}`}
               >
-                <span class="library-artist-rank tnum" aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>
                 <span class="library-artist-art">
                   {#if artist.avatarUrl}
                     <img src={coverUrlAtSize(artist.avatarUrl, 120)} alt="" width="72" height="72" loading="lazy" decoding="async" />
@@ -1265,13 +1294,9 @@
           </button>
 
           <div class="library-playlist-detail-hero">
-            <div class="library-playlist-detail-cover" aria-hidden="true">
-              {#if hasTracks && openedPlaylist.tracks[0].coverUrl}
-                <img src={coverUrlForTrack(openedPlaylist.tracks[0], $downloadedCoverCache)} alt="" decoding="async" />
-              {:else}
-                <ListMusic size={46} />
-              {/if}
-            </div>
+            {#key openedPlaylist.id}
+              <PlaylistCoverEditor playlist={openedPlaylist} />
+            {/key}
 
             <div class="library-playlist-detail-copy">
               <span class="library-showcase-kicker"><ListMusic size={14} aria-hidden="true" /> Плейлист</span>
@@ -1341,10 +1366,21 @@
           <div class="library-playlist-detail-section-head">
             <div>
               <span>Содержание</span>
-              <h3>Треки</h3>
+              <h3>Треки <span class="library-playlist-track-count tnum">{openedPlaylist.tracks?.length || 0}</span></h3>
             </div>
-            <span class="tnum">{openedPlaylist.tracks?.length || 0}</span>
+            {#key openedPlaylist.id}
+              <PlaylistOrderControls playlist={openedPlaylist} />
+            {/key}
           </div>
+
+          {#if hasTracks}
+            <PlaylistSearch
+              value={playlistSearchQuery}
+              total={openedPlaylist.tracks.length}
+              matches={filteredPlaylistTracks.length}
+              onChange={updatePlaylistSearch}
+            />
+          {/if}
 
           {#if !hasTracks}
             <div class="library-playlist-detail-empty">
@@ -1353,18 +1389,23 @@
               <p>Добавь музыку из любимых — меню трека уже умеет отправлять её в плейлист.</p>
               <button type="button" on:click={() => setTab('liked')}>Перейти в любимые</button>
             </div>
+          {:else if filteredPlaylistTracks.length === 0}
+            <div class="library-playlist-detail-empty">
+              <strong>Ничего не найдено</strong>
+              <p>Попробуй другое название или имя исполнителя. Крестик в строке поиска вернёт все треки.</p>
+            </div>
           {:else}
             <div class="library-playlist-track-list">
-              {#each visiblePlaylistTracks as track, i}
+              {#each visiblePlaylistTracks as { track, index }}
                 {@const isActive = $currentTrack?.title === track.title && $currentTrack?.artist === track.artist}
                 <!-- svelte-ignore a11y-click-events-have-key-events -->
                 <!-- svelte-ignore a11y-no-static-element-interactions -->
                 <div
                   class="library-playlist-track group/track"
                   class:is-active={isActive}
-                  on:click={() => playTrackList(track, openedPlaylist.tracks)}
+                  on:click={() => playTrackList(track, openedPlaylist.tracks, index)}
                 >
-                  <TrackStatus index={i} {isActive} playing={$isPlaying} />
+                  <TrackStatus {index} {isActive} playing={$isPlaying} />
                   <div class="library-playlist-track-cover">
                     {#if track.coverUrl}
                       <img src={coverUrlAtSize(coverUrlForTrack(track, $downloadedCoverCache), 120)} alt="" width="48" height="48" loading="lazy" decoding="async" />
@@ -1450,12 +1491,13 @@
               <span class="library-playlist-create-icon"><Link size={23} aria-hidden="true" /></span>
               <span>
                 <strong>Импорт по ссылке</strong>
-                <small>SoundCloud плейлист</small>
+                <small>SoundCloud или Яндекс Музыка</small>
               </span>
             </button>
 
             {#each visiblePlaylists as pl}
               {@const hasTracks = Boolean(pl.tracks?.length)}
+              {@const cover = playlistCoverUrl(pl, $downloadedCoverCache)}
               {@const isPlayingThisPl = isPlaylistPlaying(pl, $currentTrack, $isPlaying)}
               <article class="library-playlist-card">
                 <div class="library-playlist-art-shell">
@@ -1467,8 +1509,8 @@
                     on:click={() => openPlaylistDetail(pl.id)}
                   >
                     <span class="library-playlist-art">
-                      {#if hasTracks && pl.tracks[0].coverUrl}
-                        <img src={coverUrlForTrack(pl.tracks[0], $downloadedCoverCache)} alt="" loading="lazy" decoding="async" />
+                      {#if cover}
+                        <img src={cover} alt="" loading="lazy" decoding="async" />
                       {:else}
                         <ListMusic size={36} aria-hidden="true" />
                       {/if}
@@ -1605,7 +1647,7 @@
 
                 <div class="track-row-menu-slot" data-track-menu-owner={i}>
                   <button
-                    data-press-late
+                    type="button"
                     class="track-row-action"
                     class:is-open={activeTrackMenu?.row === i && activeTrackMenu?.kind === 'info'}
                     aria-label="Информация"
@@ -1731,9 +1773,9 @@
       </button>
 
       <span class="playlist-create-mark"><Link size={24} aria-hidden="true" /></span>
-      <span class="playlist-create-kicker">SoundCloud</span>
+      <span class="playlist-create-kicker">SoundCloud · Яндекс Музыка</span>
       <h2 id="playlist-import-title">Импорт по ссылке</h2>
-      <p id="playlist-import-help">Вставь ссылку на любой публичный плейлист SoundCloud.</p>
+      <p id="playlist-import-help">Вставь ссылку на плейлист SoundCloud или Яндекс Музыки. Для Яндекса сначала подключи аккаунт в настройках.</p>
 
       <label for="playlist-import-url">Ссылка на плейлист</label>
       <div class="playlist-create-field">
@@ -1743,7 +1785,7 @@
           id="playlist-import-url"
           type="text"
           bind:value={importPlaylistUrl}
-          placeholder="https://soundcloud.com/никнейм/sets/плейлист"
+          placeholder="https://music.yandex.ru/users/имя/playlists/123"
           autocomplete="off"
           spellcheck="false"
           disabled={isImportingPlaylist}

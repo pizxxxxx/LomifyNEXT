@@ -1,11 +1,12 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
   import { get } from 'svelte/store';
-  import { currentTrack, isPlaying, progress, lyricsStatus, lyricsReloadTrigger } from '$lib/stores';
+  import { currentTrack, isPlaying, progress, lyricsStatus, lyricsReloadTrigger, settings, activeBackdropAdlib, departingBackdropAdlib, type BackdropAdlibItem } from '$lib/stores';
   import { getLyrics } from '$lib/api';
+  import { getBackdropFontSize } from '$lib/lyrics';
   import { Loader2, AlignLeft } from '@lucide/svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { settings } from '$lib/stores';
+
 
   /** Включена ли посимвольная караоке-подсветка. Тайминг строк работает в обоих режимах. */
   export let letterSync = true;
@@ -14,6 +15,7 @@
     text: string;
     isPrefix: boolean;
     order: number;
+    triggerThreshold: number;
   }
 
   interface LyricLine {
@@ -36,10 +38,15 @@
       const content = match[1].trim();
       if (content) {
         const isPrefix = match.index === 0 || text.slice(0, match.index).trim().length === 0;
+        const charRatio = text.length > 0 ? match.index / text.length : 0.8;
+        const triggerThreshold = isPrefix
+          ? 0.0
+          : Math.min(0.92, Math.max(0.1, charRatio > 0.72 ? (0.78 + order * 0.04) : charRatio));
         adlibs.push({
           text: content,
           isPrefix,
-          order: order++
+          order: order++,
+          triggerThreshold
         });
       }
     }
@@ -226,14 +233,156 @@
   }
 
   $: adlibsEnabled = $settings.lyricsAdlibs !== false;
-  $: adlibStyle = $settings.lyricsAdlibStyle || 'overlay';
+  $: adlibStyle = $settings.lyricsAdlibStyle || 'backdrop';
   let previousAdlibsEnabled = adlibsEnabled;
   let previousAdlibStyle = adlibStyle;
   $: if (adlibsEnabled !== previousAdlibsEnabled || adlibStyle !== previousAdlibStyle) {
     previousAdlibsEnabled = adlibsEnabled;
     previousAdlibStyle = adlibStyle;
+    clearBackdropAdlibs();
     void handleLetterModeChange();
   }
+
+  let activeBackdrop: BackdropAdlibItem | null = null;
+  let departingBackdrop: BackdropAdlibItem | null = null;
+  let departingTimer: ReturnType<typeof setTimeout> | null = null;
+  let backdropAutoDismissTimer: ReturnType<typeof setTimeout> | null = null;
+  let lineDismissTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastAdlibSide: 'left' | 'right' | null = null;
+  let adlibSideRepeat = 0;
+
+  function scheduleLineDismiss(delayMs = 550) {
+    if (lineDismissTimer) clearTimeout(lineDismissTimer);
+    if (!activeBackdrop) return;
+    lineDismissTimer = setTimeout(() => {
+      dismissActiveBackdrop();
+      lineDismissTimer = null;
+    }, delayMs);
+  }
+
+  function triggerBackdropAdlib(lineIndex: number, adlibIndex: number, text: string) {
+    const id = `${lineIndex}-${adlibIndex}`;
+    if (activeBackdrop?.id === id) return;
+
+    if (lineDismissTimer) {
+      clearTimeout(lineDismissTimer);
+      lineDismissTimer = null;
+    }
+
+    if (activeBackdrop) {
+      departingBackdrop = activeBackdrop;
+      departingBackdropAdlib.set(departingBackdrop);
+      if (departingTimer) clearTimeout(departingTimer);
+      departingTimer = setTimeout(() => {
+        departingBackdrop = null;
+        departingBackdropAdlib.set(null);
+        departingTimer = null;
+      }, 420);
+    }
+
+    const clean = text.replace(/^[(\[«"'\s#]+|[)\]»"'\s]+$/gu, '').trim();
+    const isShort = clean.length <= 6;
+    let side: 'left' | 'right' | 'center';
+    let rotateDeg = 0;
+    let xOffsetVw = 0;
+    let yOffsetPx = 0;
+
+    if (isShort) {
+      // Короткая строка (до 6 букв): случайно слева или справа с защитой от залипания на одной стороне
+      if (!lastAdlibSide) {
+        side = Math.random() < 0.5 ? 'left' : 'right';
+        adlibSideRepeat = 1;
+      } else if (adlibSideRepeat >= 2) {
+        side = lastAdlibSide === 'left' ? 'right' : 'left';
+        adlibSideRepeat = 1;
+      } else {
+        if (Math.random() < 0.75) {
+          side = lastAdlibSide === 'left' ? 'right' : 'left';
+          adlibSideRepeat = 1;
+        } else {
+          side = lastAdlibSide;
+          adlibSideRepeat++;
+        }
+      }
+      lastAdlibSide = side;
+
+      // Наклон в сторону: слева влево (-15° +- 2.5°), справа вправо (+15° +- 2.5°)
+      if (side === 'left') {
+        rotateDeg = -15 + (Math.random() * 5 - 2.5);
+        xOffsetVw = -22 + (Math.random() * 4 - 2);
+      } else {
+        rotateDeg = 15 + (Math.random() * 5 - 2.5);
+        xOffsetVw = 22 + (Math.random() * 4 - 2);
+      }
+      yOffsetPx = Math.round(Math.random() * 32 - 16);
+    } else {
+      // Длинный текст: строго по центру, без сильного наклона (микро-дрейф +-0.8°), большой кегль
+      side = 'center';
+      rotateDeg = Math.random() * 1.6 - 0.8;
+      xOffsetVw = 0;
+      yOffsetPx = Math.round(Math.random() * 16 - 8);
+    }
+
+    activeBackdrop = {
+      id,
+      text,
+      side,
+      rotateDeg: Number(rotateDeg.toFixed(1)),
+      xOffsetVw: Number(xOffsetVw.toFixed(1)),
+      yOffsetPx,
+    };
+    activeBackdropAdlib.set(activeBackdrop);
+
+    if (backdropAutoDismissTimer) clearTimeout(backdropAutoDismissTimer);
+    backdropAutoDismissTimer = setTimeout(() => {
+      dismissActiveBackdrop();
+      backdropAutoDismissTimer = null;
+    }, 3000);
+  }
+
+  function dismissActiveBackdrop() {
+    if (lineDismissTimer) {
+      clearTimeout(lineDismissTimer);
+      lineDismissTimer = null;
+    }
+    if (backdropAutoDismissTimer) {
+      clearTimeout(backdropAutoDismissTimer);
+      backdropAutoDismissTimer = null;
+    }
+    if (!activeBackdrop) return;
+    departingBackdrop = activeBackdrop;
+    departingBackdropAdlib.set(departingBackdrop);
+    activeBackdrop = null;
+    activeBackdropAdlib.set(null);
+    if (departingTimer) clearTimeout(departingTimer);
+    departingTimer = setTimeout(() => {
+      departingBackdrop = null;
+      departingBackdropAdlib.set(null);
+      departingTimer = null;
+    }, 420);
+  }
+
+  function clearBackdropAdlibs() {
+    if (lineDismissTimer) {
+      clearTimeout(lineDismissTimer);
+      lineDismissTimer = null;
+    }
+    if (backdropAutoDismissTimer) {
+      clearTimeout(backdropAutoDismissTimer);
+      backdropAutoDismissTimer = null;
+    }
+    if (departingTimer) {
+      clearTimeout(departingTimer);
+      departingTimer = null;
+    }
+    activeBackdrop = null;
+    departingBackdrop = null;
+    activeBackdropAdlib.set(null);
+    departingBackdropAdlib.set(null);
+    lastAdlibSide = null;
+    adlibSideRepeat = 0;
+  }
+
 
   function getEffectiveLineText(line: LyricLine | undefined): string {
     if (!line) return '';
@@ -332,6 +481,7 @@
     displayLines = [];
     charRefs = [];
     adlibRefs = [];
+    clearBackdropAdlibs();
     lineWindowsCache.clear();
     activeIndex = -1;
     
@@ -415,6 +565,9 @@
 
     activeIndex = idx;
     lineProgress = 0;
+    if (idx !== prev) {
+      scheduleLineDismiss(550);
+    }
     applyLineStates(idx, force);
 
     if (idx >= 0 && idx < lineRefs.length && !manualScroll) {
@@ -425,7 +578,7 @@
     }
   }
 
-  function writeLineProgress(i: number, p: number) {
+  function writeLineProgress(i: number, p: number, elapsedSec?: number) {
     const el = lineRefs[i];
     if (!el) return;
     const value = clamp01(p);
@@ -443,30 +596,57 @@
 
     // Dynamic adlib timing and velocity-dependent appearance
     const adlibs = getLineAdlibs(line);
-    if (adlibs.length > 0 && adlibRefs[i]) {
+    if (adlibs.length > 0) {
       const nextLine = displayLines[i + 1];
       const dur = Math.max(0.4, (nextLine?.time ?? line.time + 2.6) - line.time);
       const singingDur = line.pause
         ? (line.duration ?? dur)
         : Math.min(dur, Math.max(0.5, calculateSungDuration(lineText, dur)));
-      const charCount = Math.max(1, lineText.replace(/\s+/gu, '').length);
-      const speed = charCount / Math.max(0.4, singingDur);
-      const appearSpeedMs = Math.round(Math.min(650, Math.max(90, 2200 / Math.max(3.0, Math.min(25.0, speed)))));
-      const lifecycleMs = Math.round(Math.min(5200, Math.max(2800, appearSpeedMs * 14)));
+      const currentElapsed = elapsedSec !== undefined ? elapsedSec : (value * singingDur);
+      // Смещение появления эдлибов на ~750 мс позже, чтобы они точно совпадали с вокалом
+      const ADLIB_OFFSET_SEC = 0.75;
 
-      for (let a = 0; a < adlibs.length; a++) {
-        const node = adlibRefs[i][a];
-        if (!node) continue;
-        const adlib = adlibs[a];
-        // Если эдлиб в самом начале строки (до слов) — зажигаем сразу (0.0).
-        const triggerThreshold = adlib.isPrefix ? 0.0 : Math.min(1.0, 0.94 + adlib.order * 0.03);
-        const isLineActive = (i === activeIndex);
-        const isTriggered = isLineActive ? (value >= triggerThreshold) : (i < activeIndex && node.dataset.triggered === 'true');
-        const trigStr = isTriggered ? 'true' : 'false';
-        if (node.dataset.triggered !== trigStr) {
-          node.dataset.triggered = trigStr;
-          node.style.setProperty('--adlib-speed', `${appearSpeedMs}ms`);
-          node.style.setProperty('--adlib-lifecycle', `${lifecycleMs}ms`);
+      if (adlibStyle === 'backdrop') {
+        // Фоновый кинематографичный режим во всю ширину экрана по центру
+        if (i === activeIndex && activeIndex >= 0) {
+          let candidate: AdlibItem | null = null;
+          let candidateIdx = -1;
+          for (let a = 0; a < adlibs.length; a++) {
+            const adlib = adlibs[a];
+            const baseTime = adlib.isPrefix ? 0.0 : (adlib.triggerThreshold * singingDur);
+            const maxTriggerTime = Math.max(0.1, dur - 0.2);
+            const targetTime = Math.min(maxTriggerTime, baseTime + ADLIB_OFFSET_SEC);
+            if (currentElapsed >= targetTime) {
+              candidate = adlib;
+              candidateIdx = a;
+            }
+          }
+          if (candidate) {
+            triggerBackdropAdlib(i, candidateIdx, candidate.text);
+          }
+        }
+      } else if (adlibRefs[i]) {
+        // Режим парящего оверлея над текстом
+        const charCount = Math.max(1, lineText.replace(/\s+/gu, '').length);
+        const speed = charCount / Math.max(0.4, singingDur);
+        const appearSpeedMs = Math.round(Math.min(650, Math.max(90, 2200 / Math.max(3.0, Math.min(25.0, speed)))));
+        const lifecycleMs = Math.round(Math.min(5200, Math.max(2800, appearSpeedMs * 14)));
+
+        for (let a = 0; a < adlibs.length; a++) {
+          const node = adlibRefs[i][a];
+          if (!node) continue;
+          const adlib = adlibs[a];
+          const baseTime = adlib.isPrefix ? 0.0 : (adlib.triggerThreshold * singingDur);
+          const maxTriggerTime = Math.max(0.1, dur - 0.2);
+          const targetTime = Math.min(maxTriggerTime, baseTime + ADLIB_OFFSET_SEC);
+          const isLineActive = (i === activeIndex);
+          const isTriggered = isLineActive ? (currentElapsed >= targetTime) : (i < activeIndex && node.dataset.triggered === 'true');
+          const trigStr = isTriggered ? 'true' : 'false';
+          if (node.dataset.triggered !== trigStr) {
+            node.dataset.triggered = trigStr;
+            node.style.setProperty('--adlib-speed', `${appearSpeedMs}ms`);
+            node.style.setProperty('--adlib-lifecycle', `${lifecycleMs}ms`);
+          }
         }
       }
     }
@@ -562,7 +742,7 @@
         : prev + diff * Math.min(1, frameMs / 35);
 
       lineProgress = smoothed;
-      writeLineProgress(idx, smoothed);
+      writeLineProgress(idx, smoothed, Math.max(0, adjustedProgress - cur.time));
     };
     rafId = requestAnimationFrame(tickFrame);
   }
@@ -575,6 +755,7 @@
     charRefs = [];
     adlibRefs = [];
     pauseBarsRef = [];
+    clearBackdropAdlibs();
     lineWindowsCache.clear();
     await tick();
     syncActiveLine(get(progress), true, 'auto');
@@ -637,6 +818,7 @@
   onDestroy(() => {
     if (rafId) cancelAnimationFrame(rafId);
     cancelFollowResume();
+    clearBackdropAdlibs();
   });
 
   function splitChars(text: string) {
@@ -672,6 +854,7 @@
       lastSeekTime = now;
       cancelFollowResume();
       manualScroll = false;
+      clearBackdropAdlibs();
       const targetPosition = Math.max(0, time);
       lastProgressVal = targetPosition;
       lastProgressTs = now;
@@ -762,69 +945,65 @@
   $: plainBlocks = toPlainBlocks(lyrics, adlibsEnabled);
 </script>
 
-<!-- svelte-ignore a11y-no-static-element-interactions -->
-<div 
-  class="h-full w-full flex-1 overflow-y-auto overflow-x-hidden scrollbar-hide px-12 py-16 relative {!$isPlaying ? 'lyrics-paused' : ''}"
-  bind:this={containerRef}
-  style="mask-image: linear-gradient(transparent 0%, black 10%, black 90%, transparent 100%); -webkit-mask-image: linear-gradient(transparent 0%, black 10%, black 90%, transparent 100%);"
-  on:wheel|passive={markManual}
-  on:touchstart|passive={markManual}
-  on:pointerdown={markManual}
->
-  {#if isLoading}
-    <div class="h-full flex items-center justify-center text-white/50">
-      <Loader2 class="animate-spin w-8 h-8" />
-    </div>
-  {:else if hasTimedLyrics}
-    {#key letterSync}
-      <div
-        class="selectable flex flex-col gap-2"
-        class:lyrics-line-sync={!letterSync}
-        class:lyrics-letter-sync={letterSync}
-      >
-        {#each displayLines as line, i}
-          {#if line.pause}
-            <div
-              bind:this={lineRefs[i]}
-              class="lyric-line lyric-pause"
-              style="--pause-duration: {line.duration ?? 2}s"
-            >
-              <span class="note-gradient-text">{PAUSE_MARKER}</span>
-              <div class="lyric-pause-track">
-                <div class="lyric-pause-bar" bind:this={pauseBarsRef[i]}></div>
-              </div>
-            </div>
-          {:else}
-            <!-- svelte-ignore a11y-click-events-have-key-events -->
-            <!-- svelte-ignore a11y-no-static-element-interactions -->
-            <div
-              bind:this={lineRefs[i]}
-              class="lyric-line"
-              class:has-adlibs={getLineAdlibs(line).length > 0}
-              on:click={() => handleSeek(line.time)}
-            >
-              {#if getLineAdlibs(line).length > 0}
-                <div
-                  class="lyric-adlib-overlay"
-                  class:is-backdrop={adlibStyle === 'backdrop'}
-                  class:is-overlay={adlibStyle !== 'backdrop'}
-                  aria-label="Ad-libs"
-                >
-                  {#each getLineAdlibs(line) as adlib, adlibIdx}
-                    <span
-                      class="lyric-adlib-callout"
-                      class:is-backdrop={adlibStyle === 'backdrop'}
-                      class:is-overlay={adlibStyle !== 'backdrop'}
-                      class:is-long={adlib.text.length > 14}
-                      use:registerAdlib={{ lineIndex: i, adlibIndex: adlibIdx }}
-                      data-triggered="false"
-                    >
-                      <span class="lyric-adlib-halo" aria-hidden="true"></span>
-                      <span class="lyric-adlib-text">{adlib.text}</span>
-                    </span>
-                  {/each}
+<div class="lyrics-view-wrapper relative w-full h-full flex-1 min-h-full flex flex-col overflow-visible select-none">
+  <!-- svelte-ignore a11y-no-static-element-interactions -->
+  <div
+    class="h-full w-full flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-hide px-12 py-16 relative z-[1] {!$isPlaying ? 'lyrics-paused' : ''}"
+    bind:this={containerRef}
+    style="mask-image: linear-gradient(transparent 0%, black 10%, black 90%, transparent 100%); -webkit-mask-image: linear-gradient(transparent 0%, black 10%, black 90%, transparent 100%);"
+    on:wheel|passive={markManual}
+    on:touchstart|passive={markManual}
+    on:pointerdown={markManual}
+  >
+    {#if isLoading}
+      <div class="h-full flex items-center justify-center text-white/50">
+        <Loader2 class="animate-spin w-8 h-8" />
+      </div>
+    {:else if hasTimedLyrics}
+      {#key letterSync}
+        <div
+          class="selectable flex flex-col gap-2"
+          class:lyrics-line-sync={!letterSync}
+          class:lyrics-letter-sync={letterSync}
+        >
+          {#each displayLines as line, i}
+            {#if line.pause}
+              <div
+                bind:this={lineRefs[i]}
+                class="lyric-line lyric-pause"
+                style="--pause-duration: {line.duration ?? 2}s"
+              >
+                <span class="note-gradient-text">{PAUSE_MARKER}</span>
+                <div class="lyric-pause-track">
+                  <div class="lyric-pause-bar" bind:this={pauseBarsRef[i]}></div>
                 </div>
-              {/if}
+              </div>
+            {:else}
+              <!-- svelte-ignore a11y-click-events-have-key-events -->
+              <!-- svelte-ignore a11y-no-static-element-interactions -->
+              <div
+                bind:this={lineRefs[i]}
+                class="lyric-line"
+                class:has-adlibs={getLineAdlibs(line).length > 0}
+                on:click={() => handleSeek(line.time)}
+              >
+                {#if adlibsEnabled && adlibStyle === 'overlay' && getLineAdlibs(line).length > 0}
+                  <div
+                    class="lyric-adlib-overlay is-overlay"
+                    aria-label="Ad-libs"
+                  >
+                    {#each getLineAdlibs(line) as adlib, adlibIdx}
+                      <span
+                        class="lyric-adlib-callout is-overlay"
+                        class:is-long={adlib.text.length > 14}
+                        use:registerAdlib={{ lineIndex: i, adlibIndex: adlibIdx }}
+                        data-triggered="false"
+                      >
+                        <span class="lyric-adlib-text">{adlib.text}</span>
+                      </span>
+                    {/each}
+                  </div>
+                {/if}
 
               <!-- Keep this condition inline: Svelte then tracks `activeIndex` as a template
                    dependency and swaps the three character-based lines at the exact line
@@ -887,9 +1066,9 @@
                     class:is-backdrop={adlibStyle === 'backdrop'}
                     class:is-overlay={adlibStyle !== 'backdrop'}
                     class:is-long={adlib.text.length > 14}
+                    style={adlibStyle === 'backdrop' ? `--backdrop-font-size: ${getBackdropFontSize(adlib.text)}` : undefined}
                     data-triggered="true"
                   >
-                    <span class="lyric-adlib-halo" aria-hidden="true"></span>
                     <span class="lyric-adlib-text">{adlib.text}</span>
                   </span>
                 {/each}
@@ -907,4 +1086,5 @@
     </div>
   {/if}
   <div class="h-[40vh]"></div>
+  </div>
 </div>

@@ -7,6 +7,7 @@
   import Settings from '$lib/components/Settings.svelte';
   import Search from '$lib/components/Search.svelte';
   import Lyrics from '$lib/components/Lyrics.svelte';
+  import BackdropAdlibStage from '$lib/components/BackdropAdlibStage.svelte';
   import Fullscreen from '$lib/components/Fullscreen.svelte';
   import Equalizer from '$lib/components/Equalizer.svelte';
   import Library from '$lib/components/Library.svelte';
@@ -17,6 +18,7 @@
   import GlyphWake from '$lib/components/GlyphWake.svelte';
   import { currentView, previousView, currentTrack, isPlaying, queue, likedTracks, listenStats, searchHistory, playlists, navHistory, navFuture, isHistoryNavigation, currentArtist, searchQuery as searchQueryStore, settings, effectivePerformanceMode, notify, pageAtmosphere } from '$lib/stores';
   import { getTrendingTracks } from '$lib/api';
+  import { stopWave } from '$lib/wave';
   import { LASTFM_TASTE_UPDATED_EVENT } from '$lib/lastfm';
   import { getTracks } from '$lib/db';
   import { coverUrlForTrack, downloadedCoverCache } from '$lib/offlineCovers';
@@ -222,6 +224,7 @@
   });
 
   function playTrack(track: any) {
+    stopWave();
     const idx = trendingTracks.findIndex(t => t.title === track.title && t.artist === track.artist);
     if (idx !== -1) {
       queue.set(trendingTracks.slice(idx + 1));
@@ -391,6 +394,11 @@
       />
     </div>
 
+    <!-- Backdrop adlibs layer for normal lyrics view: covers full viewport width behind content -->
+    {#if $currentView === 'lyrics'}
+      <BackdropAdlibStage isFullscreen={false} />
+    {/if}
+
     <div class="flex w-full relative">
       {#if displayView !== 'fullscreen'}
         <Sidebar />
@@ -400,11 +408,11 @@
       <main
         bind:this={mainEl}
         on:scroll={syncAtmosShift}
-        class="flex-1 overflow-y-auto overflow-x-hidden hide-scrollbar {displayView === 'fullscreen' ? 'p-0' : 'px-8 pt-20 pb-32'} relative scroll-smooth"
+        class="app-main-content flex-1 overflow-y-auto overflow-x-hidden hide-scrollbar {displayView === 'fullscreen' ? 'p-0' : 'px-8 pt-20 pb-32'} relative scroll-smooth"
       >
     
     {#if $currentView !== 'fullscreen'}
-      <div class="fixed top-6 left-[300px] z-50 flex items-center gap-3">
+      <div class="app-history-nav fixed top-6 z-50 flex items-center gap-3">
         <button 
           class="w-10 h-10 rounded-full bg-black/40 hover:bg-black/60 backdrop-blur-md flex items-center justify-center text-white/80 hover:text-white transition-all disabled:opacity-30 disabled:cursor-not-allowed"
           on:click={goBack}
@@ -463,7 +471,7 @@
       <ArtistPage />
     {:else if displayView === 'home'}
       {#if isLoadingHome}
-        <div class="w-full flex flex-col items-center gap-4 py-20 text-primary">
+        <div class="home-feed-loading w-full flex flex-col items-center gap-4 py-20 text-primary">
           <Loader2 class="animate-spin" size={40} />
           <div class="empty-hint !mt-0">Собираем рекомендации…</div>
         </div>
@@ -471,7 +479,7 @@
         <!-- Раньше на этом месте крутился вечный лоадер: любая сетевая осечка обрывала
              загрузку до того, как спиннер выключался. Теперь у неудачи есть свой экран
              с внятной причиной и кнопкой, которая не требует перезапуска приложения. -->
-        <div class="w-full flex flex-col items-center justify-center gap-1.5 py-24 text-center">
+        <div class="home-feed-error w-full flex flex-col items-center justify-center gap-1.5 text-center">
           <div class="w-12 h-12 rounded-2xl bg-white/[0.05] border border-white/10 flex items-center justify-center text-white/40 mb-4">
             <WifiOff size={20} />
           </div>

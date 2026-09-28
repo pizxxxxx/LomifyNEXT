@@ -12,8 +12,9 @@ use sha2::{Digest, Sha256};
 
 use crate::audio::analyser::{AnalyserBuffer, AnalyserSource};
 use crate::audio::eq::{EqSource, GainSource};
+use crate::audio::spatial::SpatialSource;
 use crate::audio::types::{
-    ChannelCount, EqParams, SampleRate, NORMALIZATION_ANALYSIS_SAMPLES,
+    ChannelCount, EqParams, SampleRate, SpatialParams, NORMALIZATION_ANALYSIS_SAMPLES,
     NORMALIZATION_BLOCK_SAMPLES, NORMALIZATION_MAX_ATTENUATION_DB, NORMALIZATION_MAX_BOOST_DB,
     NORMALIZATION_TARGET_PEAK, NORMALIZATION_TARGET_RMS,
 };
@@ -355,6 +356,7 @@ pub fn create_player_from_bytes(
     normalization_gain: f32,
     start_paused: bool,
     eq_params: Arc<RwLock<EqParams>>,
+    spatial_params: Arc<RwLock<SpatialParams>>,
     analyser_buffer: Arc<AnalyserBuffer>,
 ) -> Result<PreparedPlayer, String> {
     let player = Player::connect_new(mixer);
@@ -377,7 +379,10 @@ pub fn create_player_from_bytes(
             source.channels().get(),
         );
         player.append(AnalyserSource::new(
-            EqSource::new(GainSource::new(source, normalization_gain), eq_params),
+            SpatialSource::new(
+                EqSource::new(GainSource::new(source, normalization_gain), eq_params),
+                spatial_params,
+            ),
             analyser_buffer,
         ));
         about
@@ -389,7 +394,10 @@ pub fn create_player_from_bytes(
             source.channels().get(),
         );
         player.append(AnalyserSource::new(
-            EqSource::new(GainSource::new(source, normalization_gain), eq_params),
+            SpatialSource::new(
+                EqSource::new(GainSource::new(source, normalization_gain), eq_params),
+                spatial_params,
+            ),
             analyser_buffer,
         ));
         about
@@ -405,7 +413,10 @@ pub fn create_player_from_bytes(
             source.channels().get(),
         );
         player.append(AnalyserSource::new(
-            EqSource::new(GainSource::new(source, normalization_gain), eq_params),
+            SpatialSource::new(
+                EqSource::new(GainSource::new(source, normalization_gain), eq_params),
+                spatial_params,
+            ),
             analyser_buffer,
         ));
         about
@@ -547,6 +558,7 @@ mod tests {
             0.08,
             1.0,
             false,
+            Default::default(),
             Default::default(),
             crate::audio::analyser::AnalyserBuffer::new(),
         )

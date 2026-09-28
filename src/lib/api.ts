@@ -40,21 +40,25 @@ export async function safeFetch(url: string, options?: any) {
     };
   }
 
+  let nativeError: unknown;
   try {
     if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
       return await tauriFetch(url, finalOptions);
     }
   } catch (err) {
-    console.warn("Tauri fetch unavailable or failed, falling back to window.fetch", err);
+    nativeError = err;
+    console.warn('Tauri fetch unavailable or failed, falling back to window.fetch', err);
   }
-  
+
   try {
-    const res = await window.fetch(url, finalOptions);
-    if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
-    return res;
-  } catch (e) {
-    const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
-    return window.fetch(proxyUrl, finalOptions);
+    return await window.fetch(url, finalOptions);
+  } catch (browserError) {
+    // corsproxy.io no longer accepts anonymous legacy URLs (HTTP 403). Returning
+    // its response hid the actual connection failure from SoundCloud callers.
+    const message = isSoundCloud
+      ? 'Не удалось подключиться к SoundCloud. Проверь подключение и доступ к сервису.'
+      : 'Не удалось загрузить данные из сети.';
+    throw new Error(message, { cause: browserError ?? nativeError });
   }
 }
 

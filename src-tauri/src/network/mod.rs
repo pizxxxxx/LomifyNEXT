@@ -4,5 +4,7 @@ pub mod image_cache;
 pub mod proxy;
 pub mod proxy_server;
 pub mod server;
+pub mod soundcloud_bypass;
 pub mod static_server;
 pub mod wallpapers;
+pub mod zapret_catalog;

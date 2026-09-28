@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { ChevronRight, Home, Search, Library, Settings, Sliders } from '@lucide/svelte';
+  import { onMount, tick } from 'svelte';
+  import { ChevronRight, Home, Search, Library, Settings, Sliders, HeartHandshake } from '@lucide/svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { currentView, settings } from '$lib/stores';
   import { LASTFM_TASTE_UPDATED_EVENT, getLastFmSession, type LastFmSession } from '$lib/lastfm';
@@ -53,6 +53,12 @@
 
     return () => window.removeEventListener(LASTFM_TASTE_UPDATED_EVENT, syncLastFmIdentity);
   });
+
+  async function openSupport() {
+    currentView.set('settings');
+    await tick();
+    window.dispatchEvent(new Event('lomify:open-support'));
+  }
 </script>
 
 <!-- Панель остаётся неподвижной: это постоянная опора интерфейса, а не карточка. Движутся
@@ -109,6 +115,11 @@
     {/each}
 
     <div class="sidebar-foot">
+      <button type="button" class="sidebar-support" on:click={openSupport} aria-label="Поддержать проект через ЮMoney">
+        <span class="sidebar-support-icon" aria-hidden="true"><HeartHandshake size={18} /></span>
+        <span class="sidebar-support-copy"><strong>Поддержать проект</strong><small>Через ЮMoney</small></span>
+        <ChevronRight size={16} aria-hidden="true" />
+      </button>
       <button
         type="button"
         class="sidebar-profile"

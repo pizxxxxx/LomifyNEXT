@@ -353,6 +353,7 @@ async fn build_player_from_bytes(
     normalization_cache_key: Option<String>,
     start_paused: bool,
     eq_params: std::sync::Arc<std::sync::RwLock<crate::audio::types::EqParams>>,
+    spatial_params: std::sync::Arc<std::sync::RwLock<crate::audio::types::SpatialParams>>,
     analyser_buffer: std::sync::Arc<crate::audio::analyser::AnalyserBuffer>,
 ) -> Result<(Vec<u8>, PreparedPlayer, f32), String> {
     task::spawn_blocking(move || {
@@ -372,6 +373,7 @@ async fn build_player_from_bytes(
             normalization_gain,
             start_paused,
             eq_params,
+            spatial_params,
             analyser_buffer,
         )?;
         Ok((bytes, prepared, normalization_gain))
@@ -475,6 +477,7 @@ pub fn reload_current_track(state: &AudioState) -> Result<(), String> {
         },
         was_paused,
         state.eq_params.clone(),
+        state.spatial_params.clone(),
         state.analyser_buffer.clone(),
     )?
     .player;
@@ -565,6 +568,7 @@ pub async fn load_file(
         normalization_cache_key.or_else(|| normalization_key_from_path(&path)),
         start_paused,
         state.eq_params.clone(),
+        state.spatial_params.clone(),
         state.analyser_buffer.clone(),
     )
     .await?;
@@ -818,6 +822,7 @@ pub async fn load_url(
             .or_else(|| cache_path.as_deref().and_then(normalization_key_from_path)),
         start_paused,
         state.eq_params.clone(),
+        state.spatial_params.clone(),
         state.analyser_buffer.clone(),
     )
     .await?;
@@ -990,6 +995,7 @@ pub fn seek_to(state: &AudioState, position: f64) -> Result<(), String> {
         },
         was_paused,
         state.eq_params.clone(),
+        state.spatial_params.clone(),
         state.analyser_buffer.clone(),
     )
     .map(|prepared| (prepared.player, prepared.duration_secs))?;
@@ -1086,6 +1092,26 @@ pub fn set_normalization(enabled: bool, state: State<'_, AudioState>) {
         .store(enabled, Ordering::Relaxed);
 }
 
+pub fn set_spatial(enabled: bool, room_size: f64, intensity: Option<f64>, state: State<'_, AudioState>) {
+    // An invalid persisted slider value must never feed NaNs into the DSP chain.
+    let clamped_room = if room_size.is_finite() {
+        (room_size as f32).clamp(0.0, 1.0)
+    } else {
+        0.5
+    };
+    let intensity = intensity.unwrap_or(0.85);
+    let clamped_intensity = if intensity.is_finite() {
+        (intensity as f32).clamp(0.0, 1.5)
+    } else {
+        0.85
+    };
+    if let Ok(mut params) = state.spatial_params.write() {
+        params.enabled = enabled;
+        params.room_size = clamped_room;
+        params.intensity = clamped_intensity;
+    }
+}
+
 pub fn is_playing(state: State<'_, AudioState>) -> bool {
     state
         .player
@@ -1177,9 +1203,19 @@ pub async fn preview_play(
     // hover latency low. Build directly at the target volume so the sample is
     // audible the instant it loads (a zero-start + tick fade-in left it silent).
     let analyser = crate::audio::analyser::AnalyserBuffer::new();
+    let spatial_params = state.spatial_params.clone();
     let player = task::spawn_blocking(move || {
-        create_player_from_bytes(&bytes, &mixer, target, 1.0, false, eq_params, analyser)
-            .map(|prepared| prepared.player)
+        create_player_from_bytes(
+            &bytes,
+            &mixer,
+            target,
+            1.0,
+            false,
+            eq_params,
+            spatial_params,
+            analyser,
+        )
+        .map(|prepared| prepared.player)
     })
         .await
         .map_err(|e| format!("preview decode task failed: {e}"))??;

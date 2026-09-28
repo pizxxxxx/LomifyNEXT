@@ -3,6 +3,7 @@
   import { fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { currentTrack, isPlaying, queue, globalVolume, likedTracks, settings, effectivePerformanceMode, playlists, notify } from '$lib/stores';
+  import { stopWave, waveActive } from '$lib/wave';
   import { Play, Pause, Info, ListMusic, Radio, Heart } from 'lucide-svelte';
   import { Plus as PlusIcon, Check as CheckIcon, Play as PlayData, Pause as PauseData } from 'lucide';
   import { MorphIcon } from 'morphicons/svelte';
@@ -66,14 +67,15 @@
 
   function togglePlaylistPlayback(playlist: any) {
     if (!playlist?.tracks?.length) return;
-    if (isPlaylistPlaying(playlist, $currentTrack, $isPlaying)) {
+    if (!$waveActive && isPlaylistPlaying(playlist, $currentTrack, $isPlaying)) {
       isPlaying.set(false);
       return;
     }
-    if (isPlaylistCurrent(playlist, $currentTrack)) {
+    if (!$waveActive && isPlaylistCurrent(playlist, $currentTrack)) {
       isPlaying.set(true);
       return;
     }
+    stopWave();
     queue.set(playlist.tracks.slice(1));
     currentTrack.set(playlist.tracks[0]);
     isPlaying.set(true);
@@ -154,7 +156,7 @@
    */
   function playTrack(track: any, index: number) {
     if (!track) return;
-    if ($currentTrack?.title === track.title) {
+    if ($currentTrack?.title === track.title && $currentTrack?.artist === track.artist && !$waveActive) {
       isPlaying.update(p => !p);
       return;
     }
@@ -163,6 +165,7 @@
     }
 
     // Set queue to the remaining tracks in this shelf
+    stopWave();
     queue.set(tracks.slice(index + 1).filter(t => !t.tracks));
     currentTrack.set(track);
     isPlaying.set(true);
@@ -352,6 +355,7 @@
                          плейлисте бывает пятьдесят треков, а в окно списка влезает шесть. -->
                     <div class="pl-open-track flex items-center gap-3 p-2 rounded-xl transition-colors group/ptrack cursor-pointer {$currentTrack?.title === pt.title ? 'bg-primary/10 border border-primary/20' : 'hover:bg-white/10'}"
                          on:click|stopPropagation={() => {
+                            stopWave();
                             queue.set(track.tracks.slice(i + 1));
                             currentTrack.set(pt);
                             isPlaying.set(true);

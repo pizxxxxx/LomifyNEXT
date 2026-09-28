@@ -2,17 +2,29 @@
   import { onMount, onDestroy } from 'svelte';
   import { fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
-  import { Play, Loader2, User, Info, Disc, X, ListMusic, ChevronLeft, Music2 } from 'lucide-svelte';
+  import { Loader2, User, Disc, X, ListMusic, ChevronLeft, ChevronDown, Music2 } from 'lucide-svelte';
   import { Play as PlayData, Pause as PauseData } from 'lucide';
   import { MorphIcon } from 'morphicons/svelte';
-  import { currentArtist, currentTrack, isPlaying, queue, settings, effectivePerformanceMode, globalVolume, notify, pageAtmosphere, type PageAtmosphere } from '$lib/stores';
+  import { currentArtist, currentTrack, isPlaying, queue, settings, effectivePerformanceMode, globalVolume, notify } from '$lib/stores';
+  import { stopWave, waveActive } from '$lib/wave';
   import { getArtistTracks, getAudioUrl, getArtistAlbums, getArtistProfile, getAlbumTracks, trackByArtist, type ArtistSource } from '$lib/api';
-  import ArtistTag from './ArtistTag.svelte';
-  import TrackStatus from './TrackStatus.svelte';
-  import { withCount, plural } from '$lib/utils/plural';
-  import { coverUrlAtSize } from '$lib/offlineCovers';
+  import ArtistTrackList from './ArtistTrackList.svelte';
+  import SelectMenu from './SelectMenu.svelte';
+  import { withCount } from '$lib/utils/plural';
+  import { ARTIST_TRACK_SORT_KEY, ARTIST_TRACK_SORT_OPTIONS, sortArtistTracks, type ArtistTrackSort } from '$lib/utils/artistTracks';
 
   let tracks: any[] = [];
+  let trackSort: ArtistTrackSort = 'popular';
+  $: sortedTracks = sortArtistTracks(tracks, trackSort, artistSource);
+  let artistDescription = '';
+  let artistLocation = '';
+  let aboutOpen = false;
+
+  function changeTrackSort(value: string | number) {
+    trackSort = value as ArtistTrackSort;
+    handleMouseLeave();
+    try { localStorage.setItem(ARTIST_TRACK_SORT_KEY, trackSort); } catch {}
+  }
   let isLoading = true;
   // Площадка страницы — локальный выбор. Переключение профиля не должно заодно менять
   // источник поиска, главной ленты и рекомендаций во всём приложении.
@@ -94,24 +106,6 @@
    * раскрывается на месте сетки, а не под ней.
    */
   let activeTab: 'tracks' | 'albums' = 'tracks';
-  let openInfoRow = -1;
-
-  function toggleTrackInfo(event: MouseEvent, row: number) {
-    event.preventDefault();
-    event.stopPropagation();
-    openInfoRow = openInfoRow === row ? -1 : row;
-  }
-
-  function onArtistInfoPointerDown(event: PointerEvent) {
-    if (openInfoRow < 0) return;
-    const owner = (event.target as HTMLElement | null)?.closest?.('[data-artist-info-row]') as HTMLElement | null;
-    if (owner?.dataset.artistInfoRow !== String(openInfoRow)) openInfoRow = -1;
-  }
-
-  function onArtistInfoKeydown(event: KeyboardEvent) {
-    if (event.key === 'Escape') openInfoRow = -1;
-  }
-
   /**
    * Направление последнего перехода: +1 — вперёд (вправо), -1 — назад (влево). Нужно только
    * анимации: вход внутрь релиза и возврат к сетке должны читаться как шаг в глубину и шаг
@@ -125,7 +119,6 @@
     // Уходя с релизов, закрываем раскрытый: вернувшись на вкладку, ждёшь список всего, а не
     // то, что открывал до этого.
     expandedAlbum = null;
-    openInfoRow = -1;
     activeTab = tab;
   }
   
@@ -137,34 +130,12 @@
     previewAudio.volume = Math.pow($globalVolume, 3);
   }
 
-  /**
-   * Атмосферная подложка страницы: то же изображение, что в шапке, размытое во всю ширину
-   * окна — включая полосу под боковой панелью, куда сама шапка попасть не может
-   * (`<main>` обрезает содержимое по стыку с панелью, см. `pageAtmosphere` в stores).
-   * Именно она и делает продолжение баннера влево: резкий слой в шапке теперь гасится
-   * коротким спадом и передаёт картинку размытой копии, а не обрывается в пустоту.
-   *
-   * Только в Aurora: там шапка растянута во всю ширину и её левая кромка приходится ровно
-   * на стык с панелью. В классическом дизайне шапка — закрытая карточка в колонке
-   * контента, продолжать себя ей некуда, и подложка была бы новым элементом дизайна, а не
-   * починкой.
-   *
-   * Баннера у артиста может не быть вовсе — тогда источником идёт аватар (он же обложка
-   * первого трека). Как `derived`: это квадрат, его надо размыть сильнее.
-   */
-  let atmos: PageAtmosphere | null = null;
-  $: {
-    const source = artistBannerUrl || artistAvatarUrl;
-    atmos = $settings.design === 'aurora' && source
-      ? { url: source, derived: !artistBannerUrl }
-      : null;
-    pageAtmosphere.set(atmos);
-  }
-
   onMount(() => {
     previewAudio = new Audio();
-    window.addEventListener('pointerdown', onArtistInfoPointerDown, true);
-    window.addEventListener('keydown', onArtistInfoKeydown);
+    try {
+      const savedSort = localStorage.getItem(ARTIST_TRACK_SORT_KEY);
+      if (ARTIST_TRACK_SORT_OPTIONS.some(option => option.value === savedSort)) trackSort = savedSort as ArtistTrackSort;
+    } catch {}
   });
 
   onDestroy(() => {
@@ -172,12 +143,8 @@
       previewAudio.pause();
       previewAudio.src = '';
     }
-    window.removeEventListener('pointerdown', onArtistInfoPointerDown, true);
-    window.removeEventListener('keydown', onArtistInfoKeydown);
-    // Гасим подложку только если она всё ещё наша: порядок «создать новую страницу →
-    // уничтожить старую» Svelte не обещает, и слепой сброс погасил бы подложку, которую
-    // только что поставил следующий раздел.
-    pageAtmosphere.update(cur => (cur === atmos ? null : cur));
+    if (hoverTimer) clearTimeout(hoverTimer);
+    loadGeneration += 1;
   });
 
   async function handleMouseEnter(track: any) {
@@ -188,7 +155,7 @@
       if (!previewAudio) return;
       try {
         const url = await getAudioUrl(track, { silent: true });
-        if (url && previewAudio && !$effectivePerformanceMode) {
+        if (url && previewAudio && hoveredTrack === track && !$effectivePerformanceMode) {
           previewAudio.src = url;
           previewAudio.volume = Math.pow($globalVolume, 3);
           const durSecs = (track.duration || 0) / 1000;
@@ -226,6 +193,10 @@
   async function loadArtist(artistName: string, source: ArtistSource) {
     const generation = ++loadGeneration;
     isLoading = true;
+    handleMouseLeave();
+    artistDescription = '';
+    artistLocation = '';
+    aboutOpen = false;
     tracks = [];
     albums = [];
     expandedAlbum = null;
@@ -247,6 +218,10 @@
     getArtistProfile(artistName, source).then(profile => {
       if (generation !== loadGeneration || !profile) return;
       artistBannerUrl = profile.bannerUrl;
+      if (profile.isExactMatch) {
+        artistDescription = profile.description?.trim() || '';
+        artistLocation = [profile.city, profile.country].filter(Boolean).join(', ');
+      }
       artistFollowers = profile.followersCount;
       artistListeners = profile.listenersCount;
       artistLikes = profile.likesCount ?? 0;
@@ -295,7 +270,6 @@
       notify('Сначала подключи Яндекс Музыку в настройках.', 'info');
       return;
     }
-    openInfoRow = -1;
     artistSource = source;
   }
 
@@ -368,8 +342,9 @@
    * своей копией логики, из-за чего правки приходилось дублировать — и одна из копий
    * неизбежно отставала.
    */
-  function playTrack(track: any, list: any[] = tracks) {
+  function playTrack(track: any, list: any[] = sortedTracks) {
     if (!track) return;
+    stopWave();
     if (track.isBanned) {
       notify('Этот источник недавно не отвечал. Пробую запустить трек ещё раз.', 'info');
     }
@@ -390,6 +365,7 @@
       notify('Не удалось загрузить треки этого релиза. Попробуй ещё раз.', 'error');
       return;
     }
+    stopWave();
     queue.set(list.slice(1));
     currentTrack.set(list[0]);
     isPlaying.set(true);
@@ -425,6 +401,10 @@
 
   async function toggleAlbumPlayback(album: any) {
     if (!album) return;
+    if ($waveActive) {
+      await playAlbum(album);
+      return;
+    }
     if (isAlbumPlaying(album, $currentTrack, $isPlaying)) {
       isPlaying.set(false);
       return;
@@ -446,6 +426,10 @@
 
   function toggleArtistPlayback() {
     if (!tracks.length) return;
+    if ($waveActive) {
+      playTrack(sortedTracks[0], sortedTracks);
+      return;
+    }
     if (isArtistPlaying) {
       isPlaying.set(false);
       return;
@@ -459,22 +443,14 @@
       isPlaying.set(true);
       return;
     }
-    playTrack(tracks[0], tracks);
+    playTrack(sortedTracks[0], sortedTracks);
   }
 </script>
 
-<div class="w-full">
-  <!-- Artist Header. Геометрия, вуали и растворение в фон — в классах `.artist-hero*`
-       (app.css + design-aurora.css). Шапка сознательно вынесена ЗА пределы колонки
-       контента: в Aurora она перестаёт быть плиткой и растягивается во всю ширину
-       страницы, уходя под верхний край и растворяясь в цвете фона к контенту — то есть
-       делает ровно то, чего нельзя добиться, пока блок заперт в центрированном
-       контейнере с `max-width`. В классическом дизайне ширину ей возвращает
-       `max-width: 1000px` в самом классе, так что колонка не разъезжается. -->
-  <header class="artist-hero">
+<div class="artist-page">
+  <header class="artist-hero artist-profile-hero">
     {#if artistBannerUrl}
-      <!-- The artist's own SoundCloud header. Faded and masked so the name stays readable
-           on top of whatever they uploaded — some banners are near-white. -->
+      <!-- A dimmed artist photo keeps text readable without a colored gradient. -->
       <img
         src={artistBannerUrl}
         alt=""
@@ -482,9 +458,7 @@
         class="artist-hero-media"
       />
       <div class="artist-hero-veil"></div>
-      <div class="artist-hero-fade"></div>
     {/if}
-    <div class="artist-hero-tint"></div>
     <div class="artist-source-switch">
       <div
         class="seg-control artist-source-control"
@@ -533,18 +507,17 @@
         title="Открыть аватар"
         aria-label="Открыть аватар артиста"
       >
-        <div class="absolute inset-0 bg-gradient-to-br from-primary/20 to-transparent"></div>
         <img src={artistAvatarUrl} alt={$currentArtist} class="w-full h-full object-cover relative z-10" />
       </button>
     {:else}
       <div class="artist-avatar artist-hero-avatar">
-        <div class="absolute inset-0 bg-gradient-to-br from-primary/20 to-transparent"></div>
         <User size={50} class="text-primary relative z-10" />
       </div>
     {/if}
     <div class="artist-hero-body">
+      <p class="artist-profile-label">Артист <span aria-hidden="true">·</span> {artistSource === 'yandex' ? 'Яндекс Музыка' : 'SoundCloud'}</p>
       <div class="flex items-center gap-3 mb-2 min-w-0">
-        <h1 class="page-title artist-hero-name truncate">
+        <h1 class="page-title artist-hero-name">
           {$currentArtist}
         </h1>
         {#if ['klimentos', 'uniquebleed', 'bleed'].includes($currentArtist.toLowerCase())}
@@ -553,31 +526,14 @@
           </span>
         {/if}
       </div>
-      <p class="artist-hero-meta truncate w-full">
-        <!-- Число треков — из каталога источника, а не из длины загруженного списка: список
-             ограничен сверху, и «300 треков» у артиста с тысячей было бы такой же неправдой,
-             как прежние «6 треков» у артиста с сотней. -->
-        {withCount(shownTrackCount, 'трек', 'трека', 'треков')}
-        {#if catalogAlbumCount > 0}
-          • {withCount(catalogAlbumCount, 'релиз', 'релиза', 'релизов')}
-        {/if}
-        {#if totalPlaybackCount > 0}
-          • {totalPlaybackCount.toLocaleString('ru-RU')} прослушиваний
-        {/if}
-        <!-- Слушатели — из Яндекса, подписчики — из SoundCloud. Оба сразу не бывают: профиль
-             приходит от площадки, выбранной переключателем в этой шапке. -->
-        {#if artistListeners > 0}
-          • {artistListeners.toLocaleString('ru-RU')} {plural(artistListeners, 'слушатель', 'слушателя', 'слушателей')} за месяц
-        {/if}
-        <!-- «В избранном», а не «прослушиваний»: это `likesCount`. Прослушиваний по треку
-             Музыка не отдаёт нигде — см. комментарий у `artistLikes`. -->
-        {#if artistLikes > 0}
-          • {artistLikes.toLocaleString('ru-RU')} в избранном
-        {/if}
-        {#if artistFollowers > 0}
-          • {artistFollowers.toLocaleString('ru-RU')} {plural(artistFollowers, 'подписчик', 'подписчика', 'подписчиков')}
-        {/if}
-      </p>
+      <dl class="artist-profile-stats">
+        <div><dt>Треки</dt><dd>{isLoading ? '...' : shownTrackCount.toLocaleString('ru-RU')}</dd></div>
+        {#if catalogAlbumCount || albums.length}<div><dt>Релизы</dt><dd>{Math.max(catalogAlbumCount, albums.length).toLocaleString('ru-RU')}</dd></div>{/if}
+        {#if artistListeners > 0}<div><dt>Слушателей за месяц</dt><dd>{artistListeners.toLocaleString('ru-RU')}</dd></div>{/if}
+        {#if artistFollowers > 0}<div><dt>Подписчики</dt><dd>{artistFollowers.toLocaleString('ru-RU')}</dd></div>{/if}
+        {#if artistLikes > 0}<div><dt>В избранном</dt><dd>{artistLikes.toLocaleString('ru-RU')}</dd></div>{/if}
+        {#if totalPlaybackCount > 0 && artistSource !== 'yandex'}<div><dt>Прослушиваний у загруженных треков</dt><dd>{totalPlaybackCount.toLocaleString('ru-RU')}</dd></div>{/if}
+      </dl>
       <div class="artist-hero-actions mt-3 flex items-center gap-3">
         <button
           type="button"
@@ -637,7 +593,25 @@
     </div>
   {/if}
 
-  <div class="flex flex-col px-4 md:px-8 w-full max-w-[1000px] mx-auto">
+  <div class="artist-content">
+  {#if artistDescription || artistLocation}
+    <section class="artist-about">
+      <button
+        type="button"
+        class="artist-about-toggle"
+        aria-expanded={aboutOpen}
+        aria-controls="artist-about-panel"
+        on:click={() => aboutOpen = !aboutOpen}
+      >
+        <span class="artist-about-chevron" aria-hidden="true"><ChevronDown size={16} /></span>
+        <span>Об артисте</span>
+        {#if artistLocation}<span class="artist-about-location">{artistLocation}</span>{/if}
+      </button>
+      <div id="artist-about-panel" class="artist-about-collapse" class:is-open={aboutOpen} aria-hidden={!aboutOpen} inert={!aboutOpen}>
+        <div class="artist-about-body"><p>{artistDescription || artistLocation}</p></div>
+      </div>
+    </section>
+  {/if}
   {#if isLoading}
     <div class="flex-1 flex items-center justify-center text-primary">
       <Loader2 class="animate-spin" size={40} />
@@ -654,52 +628,59 @@
          сеткой обложек — а при тридцати девяти релизах это на экран с лишним ниже точки
          клика, так что нажатие выглядело как «ничего не произошло». Теперь релизы и треки —
          два раздела, и релиз раскрывается на месте сетки, а не под ней. -->
-    {#if albums.length > 0}
-      <div class="artist-tabs">
-        <div
-          class="seg-control is-lg"
-          style="--seg-count: 2; --seg-index: {activeTab === 'albums' ? 1 : 0}"
-          role="tablist"
-          aria-label="Разделы артиста"
-        >
-          <span class="seg-pill" aria-hidden="true"></span>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'tracks'}
-            class="seg-item"
-            class:is-active={activeTab === 'tracks'}
-            on:click={() => setTab('tracks')}
+    <div class="artist-list-header">
+      {#if albums.length > 0}
+        <div class="artist-tabs">
+          <div
+            class="seg-control is-lg"
+            style="--seg-count: 2; --seg-index: {activeTab === 'albums' ? 1 : 0}"
+            role="tablist"
+            aria-label="Разделы артиста"
           >
-            <Music2 size={15} />
-            Треки
-            <!-- Здесь длина загруженного списка, а НЕ каталожное `shownTrackCount` из шапки.
-                 Цифра на вкладке читается как «столько строк внутри», и у артиста с тысячей
-                 треков она обещала бы тысячу, а список ограничен лимитом источника. В шапке
-                 то число уместно — оно там подписано словом «треков» и говорит о каталоге.
-                 Рядом стоит `albums.length`, тоже длина списка: два счётчика в одном органе
-                 управления обязаны значить одно и то же. -->
-            <span class="seg-count tnum">{tracks.length}</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'albums'}
-            class="seg-item"
-            class:is-active={activeTab === 'albums'}
-            on:click={() => setTab('albums')}
-          >
-            <Disc size={15} />
-            Альбомы и EP
-            <span class="seg-count tnum">{albums.length}</span>
-          </button>
+            <span class="seg-pill" aria-hidden="true"></span>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'tracks'}
+              class="seg-item"
+              class:is-active={activeTab === 'tracks'}
+              on:click={() => setTab('tracks')}
+            >
+              <Music2 size={15} />
+              Треки
+              <!-- Здесь длина загруженного списка, а НЕ каталожное `shownTrackCount` из шапки.
+                   Цифра на вкладке читается как «столько строк внутри», и у артиста с тысячей
+                   треков она обещала бы тысячу, а список ограничен лимитом источника. В шапке
+                   то число уместно — оно там подписано словом «треков» и говорит о каталоге.
+                   Рядом стоит `albums.length`, тоже длина списка: два счётчика в одном органе
+                   управления обязаны значить одно и то же. -->
+              <span class="seg-count tnum">{tracks.length}</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'albums'}
+              class="seg-item"
+              class:is-active={activeTab === 'albums'}
+              on:click={() => setTab('albums')}
+            >
+              <Disc size={15} />
+              Альбомы и EP
+              <span class="seg-count tnum">{albums.length}</span>
+            </button>
+          </div>
         </div>
-      </div>
-    {:else}
-      <!-- Релизов нет — переключатель из одного раздела был бы органом управления, которым
-           нечего переключать. -->
-      <h2 class="section-title mb-6 flex items-center gap-3">Популярные треки</h2>
-    {/if}
+      {:else}
+        <!-- Релизов нет — переключатель из одного раздела был бы органом управления, которым
+             нечего переключать. -->
+        <h2 class="section-title">Треки</h2>
+      {/if}
+      {#if activeTab === 'tracks'}
+        <div class="artist-sort-control">
+          <SelectMenu value={trackSort} options={ARTIST_TRACK_SORT_OPTIONS} ariaLabel="Порядок треков артиста" onChange={changeTrackSort} />
+        </div>
+      {/if}
+    </div>
 
     {#if activeTab === 'albums' && !expandedAlbum}
       <div class="artist-pane mb-10 w-full" in:fly={{ x: 34 * navDir, duration: 340, easing: cubicOut }}>
@@ -817,117 +798,73 @@
               <Loader2 class="animate-spin" size={28} />
             </div>
           {:else if !al.tracks?.length}
-            <p class="empty-hint">Треки этого релиза не пришли — источник их не отдал.</p>
+            <p class="empty-hint">Не удалось загрузить треки. Попробуй открыть релиз ещё раз.</p>
           {:else}
-            <div class="track-row-list is-compact">
-              {#each al.tracks as track, i}
-                {@const isActive = $currentTrack?.title === track.title && $currentTrack?.artist === track.artist}
-                <!-- svelte-ignore a11y-click-events-have-key-events -->
-                <!-- svelte-ignore a11y-no-static-element-interactions -->
-                <!-- Та же правка, что и у строк основного списка: `transition-all` разгонял
-                     вообще всё, включая `box-shadow` от `hover:shadow-lg` — тень
-                     перерисовывается каждый кадр. Подъём и тень даёт `interactive-item`, у
-                     которого тень заранее отрисована на псевдоэлементе и проявляется
-                     прозрачностью, а переход остаётся только на цвете фона. -->
-                <div
-                  class="track-row-card is-plain group/track interactive-item {isActive ? 'is-active' : ''} {track.isBanned ? 'is-banned' : ''}"
-                  on:click={() => playTrack(track, al.tracks)}
-                >
-                  <TrackStatus index={i} {isActive} playing={$isPlaying} banned={track.isBanned} />
-                  <div class="track-row-copy">
-                    <span class="track-row-title">{track.title}</span>
-                    <span class="track-row-artist">
-                      <ArtistTag artist={track.artist} artists={track.artists} />
-                    </span>
-                  </div>
-                </div>
-              {/each}
-            </div>
+            {#key al.id}
+              <ArtistTrackList tracks={al.tracks} source={artistSource} onplay={playTrack} onpreview={handleMouseEnter} onpreviewend={handleMouseLeave} />
+            {/key}
           {/if}
         </div>
       {/if}
     {/if}
 
     {#if activeTab === 'tracks'}
-    <div class="artist-pane" in:fly={{ x: 34 * navDir, duration: 340, easing: cubicOut }}>
-    <div class="track-collection track-row-grid" class:has-open-track-menu={openInfoRow >= 0}>
-      {#each tracks as track, i}
-        {@const isActive = $currentTrack?.title === track.title && $currentTrack?.artist === track.artist}
-        <!-- svelte-ignore a11y-click-events-have-key-events -->
-        <!-- svelte-ignore a11y-no-static-element-interactions -->
-        <!-- `hover:-translate-y-1 hover:shadow-lg` убраны: подъём и тень строке уже даёт
-             `interactive-item` (тень — заранее отрисованным псевдоэлементом, а не свойством
-             `box-shadow`, которое перерисовывается каждый кадр). Два подъёма складывались
-             в 8px и заметно дёргались. -->
-        <div
-          data-artist-info-row={i}
-          class="track-row-card group interactive-item {isActive ? 'is-active' : ''} {track.isBanned ? 'is-banned' : ''}"
-          class:has-open-menu={openInfoRow === i}
-          on:click={() => playTrack(track)}
-        >
-          <TrackStatus index={i} {isActive} playing={$isPlaying} banned={track.isBanned} />
-          <div class="track-row-art"
-               on:mouseenter={() => handleMouseEnter(track)}
-               on:mouseleave={handleMouseLeave}>
-            {#if track.coverUrl}
-              <!-- `lazy` — потому что список перестал быть короткой выдачей поиска: у артиста
-                   с большой дискографией здесь сотни строк, и без этого браузер полез бы за
-                   всеми обложками сразу, включая те, до которых никто не докрутит. -->
-              <img src={coverUrlAtSize(track.coverUrl, 120)} alt="" width="48" height="48" loading="lazy" decoding="async" />
-            {:else}
-              <div class="track-row-art-empty">
-                <Play size={20} />
-              </div>
-            {/if}
-            {#if $settings.enableHoverPreview && !$effectivePerformanceMode}
-              <div class="absolute bottom-0 left-0 h-[3px] bg-primary shadow-[0_0_8px_#00e5ff]"
-                   style="width: {hoveredTrack?.title === track.title ? '100%' : '0%'}; transition: width {$settings.hoverPreviewDelay}ms linear;">
-              </div>
-            {/if}
-          </div>
-          <div class="track-row-copy">
-            <span class="track-row-title">{track.title}</span>
-            <div class="track-row-artist">
-              <ArtistTag artist={track.artist} artists={track.artists} />
-            </div>
-          </div>
-          <div class="track-row-actions">
-            <div class="track-row-menu-slot" data-artist-info-row={i}>
-              <button
-                data-press-late
-                class="track-row-action"
-                class:is-open={openInfoRow === i}
-                aria-label="Информация"
-                aria-haspopup="dialog"
-                aria-expanded={openInfoRow === i}
-                on:click={(event) => toggleTrackInfo(event, i)}
-              >
-                <Info size={18} />
-              </button>
-            </div>
-          </div>
-
-          {#if openInfoRow === i}
-            <div class="track-row-info-pop {i >= tracks.length - 2 ? 'is-top' : 'is-bottom'}" role="dialog" aria-label="Информация о треке" tabindex="-1" on:click|stopPropagation>
-              <div class="track-row-popover">
-                <p class="mb-1"><strong class="text-white">Автор:</strong> {track.artist}</p>
-                {#if track.playbackCount != null}
-                  <p class="mb-1"><strong class="text-white">Прослушиваний SC:</strong> {track.playbackCount.toLocaleString('ru-RU')}</p>
-                {/if}
-                {#if track.releaseDate}
-                  <p class="mb-1"><strong class="text-white">Выпущен:</strong> {new Date(track.releaseDate).toLocaleDateString('ru-RU')}</p>
-                {/if}
-                {#if track.genre}
-                  <p><strong class="text-white">Жанр:</strong> {track.genre}</p>
-                {/if}
-              </div>
-            </div>
-          {/if}
-        </div>
-      {/each}
-    </div>
-    </div>
+      <div class="artist-pane">
+        {#key `${$currentArtist}:${artistSource}:${trackSort}`}
+          <ArtistTrackList tracks={sortedTracks} source={artistSource} onplay={playTrack} onpreview={handleMouseEnter} onpreviewend={handleMouseLeave} />
+        {/key}
+      </div>
     {/if}
   {/if}
   </div>
 </div>
+
+
+<style>
+  .artist-page { width: 100%; max-width: 1200px; margin: 0 auto; }
+  .artist-content { width: 100%; container: artist-content / inline-size; padding: 0 8px 24px; }
+  .artist-profile-hero.artist-hero, :global(body[data-design="aurora"]) .artist-profile-hero.artist-hero {
+    display: grid; grid-template-columns: 152px minmax(0, 1fr); align-items: center; gap: 22px 28px;
+    max-width: none; min-height: 0; margin: 0 0 24px; padding: 24px;
+    border: 1px solid rgb(255 255 255 / 8%); border-radius: 20px; background: rgb(255 255 255 / 3%);
+  }
+  .artist-profile-hero .artist-source-switch { position: static; grid-column: 1 / -1; justify-self: end; }
+  .artist-profile-hero .artist-source-control { min-width: 0; }
+  .artist-profile-hero .artist-hero-media { mask-image: none; -webkit-mask-image: none; opacity: 0.22; filter: none; animation: none; }
+  .artist-profile-hero .artist-hero-veil { mask-image: none; -webkit-mask-image: none; background: rgb(0 0 0 / 35%); }
+  .artist-profile-hero .artist-hero-avatar { width: 152px; height: 152px; border: 1px solid rgb(255 255 255 / 12%); box-shadow: none; }
+  .artist-profile-hero .artist-hero-name { font-size: clamp(28px, 3.5vw, 48px); line-height: 1.12; letter-spacing: -0.03em; overflow-wrap: anywhere; text-shadow: none; }
+  .artist-profile-label { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; color: var(--color-muted, #a3a3a3); font-size: 12px; }
+  .artist-profile-stats { display: flex; flex-wrap: wrap; gap: 14px 28px; margin: 18px 0; }
+  .artist-profile-stats div { display: flex; flex-direction: column-reverse; gap: 4px; }
+  .artist-profile-stats dt { font-size: 12px; color: var(--color-muted, #a3a3a3); }
+  .artist-profile-stats dd { margin: 0; font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .artist-about { margin-bottom: 24px; padding: 16px 20px; border: 1px solid rgb(255 255 255 / 8%); border-radius: 12px; }
+  .artist-about-toggle { display: flex; align-items: center; gap: 6px; width: 100%; padding: 0; border: 0; background: none; color: inherit; text-align: left; cursor: pointer; font: inherit; font-size: 14px; font-weight: 600; }
+  .artist-about-chevron { display: inline-flex; flex: 0 0 auto; transition: transform var(--duration-quick) var(--ease-smooth-out); }
+  .artist-about-toggle[aria-expanded='true'] .artist-about-chevron { transform: rotate(180deg); }
+  .artist-about-location { margin-left: 8px; color: var(--color-muted, #a3a3a3); font-size: 12px; font-weight: 400; }
+  .artist-about-collapse { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows var(--duration-quick) var(--ease-smooth-out), opacity 180ms var(--ease-smooth-out); }
+  .artist-about-collapse.is-open { grid-template-rows: 1fr; opacity: 1; }
+  .artist-about-body { min-height: 0; overflow: hidden; }
+  .artist-about p { max-width: 80ch; margin: 14px 0 0; white-space: pre-line; overflow-wrap: anywhere; font-size: 14px; line-height: 1.65; color: rgb(255 255 255 / 75%); }
+  .artist-list-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+  .artist-list-header .section-title { margin: 0; }
+  .artist-sort-control { display: flex; align-items: center; margin-left: auto; }
+  .artist-sort-control :global(.select-menu) { min-width: 172px; }
+  .artist-sort-control :global(.select-menu-trigger) { min-height: 44px; }
+  .artist-about-toggle:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; border-radius: 4px; }
+  @media (prefers-reduced-motion: reduce) {
+    .artist-about-collapse { transition: opacity var(--duration-micro) var(--ease-smooth-out); }
+    .artist-about-chevron { transition: none; }
+  }
+  @media (max-width: 800px) {
+    .artist-profile-hero.artist-hero, :global(body[data-design="aurora"]) .artist-profile-hero.artist-hero { grid-template-columns: 96px minmax(0, 1fr); gap: 16px; padding: 20px; }
+    .artist-profile-hero .artist-hero-avatar { width: 96px; height: 96px; }
+  }
+  @media (max-width: 540px) {
+    .artist-profile-hero.artist-hero, :global(body[data-design="aurora"]) .artist-profile-hero.artist-hero { grid-template-columns: minmax(0, 1fr); }
+    .artist-profile-hero .artist-source-switch { justify-self: start; max-width: 100%; }
+    .artist-content { padding-inline: 0; }
+  }
+</style>

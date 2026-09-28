@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
+  import { stopWave, waveActive } from '$lib/wave';
   import {
     Search as SearchIcon,
     Play,
@@ -334,6 +335,7 @@
    */
   function playTrack(track: any) {
     if (!track) return;
+    stopWave();
     if (track.isBanned) {
       notify('Этот источник недавно не отвечал. Пробую запустить трек ещё раз.', 'info');
     }
@@ -350,7 +352,7 @@
   function toggleTopResultPlayback(track: any) {
     if (!track) return;
     const isCurrent = $currentTrack?.title === track.title && $currentTrack?.artist === track.artist;
-    if (isCurrent) {
+    if (isCurrent && !$waveActive) {
       isPlaying.update(v => !v);
       return;
     }
@@ -359,6 +361,7 @@
 
   function playPlaylist(pl: any) {
     if (pl.tracks && pl.tracks.length > 0) {
+      stopWave();
       queue.set(pl.tracks.slice(1));
       currentTrack.set(pl.tracks[0]);
       isPlaying.set(true);
@@ -390,6 +393,10 @@
 
   function togglePlaylistPlayback(playlist: any) {
     if (!playlist?.tracks?.length) return;
+    if ($waveActive) {
+      playPlaylist(playlist);
+      return;
+    }
     if (isPlaylistPlaying(playlist, $currentTrack, $isPlaying)) {
       isPlaying.set(false);
       return;
@@ -716,7 +723,7 @@
                       {@const playlistTrackActive = $currentTrack?.title === pt.title && $currentTrack?.artist === pt.artist}
                       <!-- svelte-ignore a11y-click-events-have-key-events -->
                       <!-- svelte-ignore a11y-no-static-element-interactions -->
-                      <div class="search-playlist-track group/playlist-track" class:is-active={playlistTrackActive} on:click={() => { queue.set(pl.tracks.slice(i + 1)); currentTrack.set(pt); isPlaying.set(true); }}>
+                      <div class="search-playlist-track group/playlist-track" class:is-active={playlistTrackActive} on:click={() => { stopWave(); queue.set(pl.tracks.slice(i + 1)); currentTrack.set(pt); isPlaying.set(true); }}>
                         <span class="tnum">{i + 1}</span>
                         <span class="search-playlist-track-art">{#if pt.coverUrl}<img src={coverUrlAtSize(pt.coverUrl, 50)} alt="" width="36" height="36" loading="lazy" decoding="async" />{:else}<Music size={16} />{/if}</span>
                         <span class="search-playlist-track-copy"><strong>{pt.title}</strong><small><ArtistTag artist={pt.artist} artists={pt.artists} /></small></span>

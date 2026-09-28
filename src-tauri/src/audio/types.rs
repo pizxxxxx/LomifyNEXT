@@ -33,6 +33,23 @@ impl Default for EqParams {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpatialParams {
+    pub enabled: bool,
+    pub room_size: f32,
+    pub intensity: f32,
+}
+
+impl Default for SpatialParams {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            room_size: 0.5,
+            intensity: 0.85,
+        }
+    }
+}
+
 // Все варианты — это команды на установку state у системного медиа-контроллера
 // (MPRIS/SMTC), общий `Set`-префикс отражает это назначение, не редандант.
 #[allow(clippy::enum_variant_names)]

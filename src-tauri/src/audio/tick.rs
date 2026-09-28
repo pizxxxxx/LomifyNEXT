@@ -243,9 +243,12 @@ pub fn start_tick_emitter(app: &AppHandle) {
                 };
 
                 match tick {
-                    Tick::Idle => {}
+                    Tick::Idle => {
+                        crate::rockium::on_playback_idle();
+                    }
 
                     Tick::Ended => {
+                        crate::rockium::on_playback_ended();
                         let suppress_ended = engine::now_ms()
                             < state.suppress_ended_until_ms.load(Ordering::Relaxed);
                         if !state.device_error.load(Ordering::Relaxed)
@@ -277,6 +280,7 @@ pub fn start_tick_emitter(app: &AppHandle) {
                     Tick::LoopBack { a, rate } => {
                         engine::seek_to(&state, a).ok();
                         handle.emit("audio:tick", a).ok();
+                        crate::rockium::on_audio_tick(a, true);
                         last_pos_ms = ((a / rate).max(0.0) * 1000.0) as u64;
                         last_progress_at = std::time::Instant::now();
                     }
@@ -289,6 +293,7 @@ pub fn start_tick_emitter(app: &AppHandle) {
                         handle.emit("audio:tick", pos).ok();
                         timing::process_lyrics_timeline(&handle, &state, pos);
                         timing::process_comments_timeline(&handle, &state, pos);
+                        crate::rockium::on_audio_tick(pos, playing);
 
                         if awaiting_first_progress && raw_ms > 0 {
                             awaiting_first_progress = false;

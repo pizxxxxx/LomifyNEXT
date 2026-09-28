@@ -72,3 +72,52 @@ export async function searchLyricsManual(
   const data = res ? await res.json() as BackendLyricsResponse : null;
   return toResult(data);
 }
+
+/** Динамический расчет размера шрифта для фоновых эдлибов в зависимости от длины текста */
+export function getBackdropFontSize(text: string): string {
+  const clean = text.replace(/^[(\[«"'\s#]+|[)\]»"'\s]+$/gu, '').trim();
+  const len = Math.max(1, clean.length);
+
+  let targetVw: number;
+  let minPx: number;
+  let maxPx: number;
+
+  if (len <= 4) {
+    // Короткие звуки ("damn", "yeah", "эй")
+    targetVw = 9.5;
+    minPx = 55;
+    maxPx = 135;
+  } else if (len <= 6) {
+    // Короткие слова до 6 букв ("baby", "wait", "хоу")
+    targetVw = 8.5;
+    minPx = 48;
+    maxPx = 115;
+  } else if (len <= 10) {
+    // Слова средней длины ("раскрой", "выходанет")
+    targetVw = 7.0;
+    minPx = 40;
+    maxPx = 95;
+  } else if (len <= 16) {
+    // Фразы ("не останавливай", "всегда со мной")
+    targetVw = 5.6;
+    minPx = 34;
+    maxPx = 80;
+  } else if (len <= 26) {
+    // Длинные строки ("никогда не говори никогда")
+    targetVw = 4.4;
+    minPx = 28;
+    maxPx = 64;
+  } else if (len <= 40) {
+    // Очень длинные строки
+    targetVw = 3.4;
+    minPx = 24;
+    maxPx = 52;
+  } else {
+    // Большие предложения
+    targetVw = 2.6;
+    minPx = 20;
+    maxPx = 42;
+  }
+
+  return `clamp(${minPx}px, ${targetVw}vw, ${maxPx}px)`;
+}

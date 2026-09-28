@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { settings, automaticPerformanceMode, playlists, listenStats, notify, dislikedTracks, currentView, activeLibraryTab, rebootCurrentTrack } from '$lib/stores';
+  import { settings, waveDisplayName, automaticPerformanceMode, playlists, listenStats, notify, dislikedTracks, currentView, activeLibraryTab, rebootCurrentTrack } from '$lib/stores';
   import { clearAllDislikes } from '$lib/dislikes';
   import {
     Download,
@@ -28,6 +28,7 @@
   import { enable, isEnabled, disable } from '@tauri-apps/plugin-autostart';
   import { appDataDir, appLocalDataDir } from '@tauri-apps/api/path';
   import { openUrl } from '@tauri-apps/plugin-opener';
+  import { invoke } from '@tauri-apps/api/core';
   import { onMount, tick } from 'svelte';
   import { withCount } from '$lib/utils/plural';
   import { APP_NAME, APP_VERSION, APP_CHANNEL } from '$lib/version';
@@ -44,7 +45,86 @@
   import SpotifyImport from './SpotifyImport.svelte';
   import LastFmConnect from './LastFmConnect.svelte';
   import MusicServiceIcon from './MusicServiceIcon.svelte';
+  import { importLinkedPlaylist, saveImportedPlaylists } from '$lib/playlistImport';
+  import { getYandexPlaylists, importYandexPlaylist, importYandexPlaylistByUrl } from '$lib/yandex';
   let autostartEnabled = false;
+  const soundCloudBypassSupported = typeof window !== 'undefined'
+    && '__TAURI_INTERNALS__' in window
+    && /Win/i.test(navigator.platform);
+  type SoundCloudBypassStatus = {
+    state: 'idle' | 'testing' | 'running' | 'watching' | 'waiting' | 'external' | 'direct' | 'failed' | 'stopped';
+    message: string;
+    strategy: string;
+    index: number;
+    total: number;
+    catalogCount: number;
+    catalogUpdatedAt: number;
+    diagnosisState: string;
+    diagnosisMessage: string;
+    diagnosisAt: number;
+    autoEnabled: boolean;
+  };
+  type SoundCloudConnectionTest = {
+    reachable: boolean;
+    checks: { service: string; reachable: boolean; status: number | null; detail: string }[];
+  };
+  let soundCloudBypassStatus: SoundCloudBypassStatus = {
+    state: 'idle', message: '', strategy: '', index: 0, total: 0, catalogCount: 0, catalogUpdatedAt: 0,
+    diagnosisState: '', diagnosisMessage: '', diagnosisAt: 0, autoEnabled: false
+  };
+  let soundCloudBypassBusy = false;
+  let soundCloudConnectionBusy = false;
+  let soundCloudConnection: SoundCloudConnectionTest | null = null;
+  $: soundCloudStatusTitle = ({
+    idle: 'Обход не включён', testing: 'Подбираю стратегию', running: 'Обход работает',
+    watching: 'SoundCloud отвечает', waiting: 'Ожидаю повторной проверки',
+    failed: 'Обход не запустился', stopped: 'Обход выключен',
+    external: 'SoundCloud отвечает', direct: 'SoundCloud отвечает'
+  } as Record<string, string>)[soundCloudBypassStatus.state] || 'Состояние обхода';
+  $: soundCloudStatusTone = soundCloudBypassStatus.state === 'running' ? 'success'
+    : soundCloudBypassStatus.state === 'testing' || soundCloudBypassStatus.state === 'waiting' ? 'progress'
+    : soundCloudBypassStatus.state === 'failed' ? 'error'
+    : soundCloudBypassStatus.state === 'watching' ? 'ready' : 'idle';
+
+  async function testSoundCloudConnection() {
+    if (soundCloudConnectionBusy || soundCloudBypassStatus.state === 'testing') return;
+    soundCloudConnectionBusy = true;
+    soundCloudConnection = null;
+    try {
+      soundCloudConnection = await invoke<SoundCloudConnectionTest>('soundcloud_bypass_test_connection');
+    } catch (error) {
+      notify(`Не удалось проверить соединение: ${error}`, 'error');
+    } finally {
+      soundCloudConnectionBusy = false;
+    }
+  }
+
+  async function refreshSoundCloudBypassStatus() {
+    if (!soundCloudBypassSupported || typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
+    try {
+      soundCloudBypassStatus = await invoke<SoundCloudBypassStatus>('soundcloud_bypass_status');
+    } catch (error) {
+      console.warn('[soundcloud] состояние обхода недоступно', error);
+    }
+  }
+
+  async function toggleSoundCloudBypass() {
+    if (soundCloudBypassBusy || soundCloudConnectionBusy) return;
+    soundCloudBypassBusy = true;
+    try {
+      if (['running', 'watching', 'waiting', 'testing'].includes(soundCloudBypassStatus.state)) {
+        await invoke('soundcloud_bypass_stop');
+      } else {
+        await invoke('soundcloud_bypass_start');
+      }
+      await refreshSoundCloudBypassStatus();
+    } catch (error) {
+      notify(`${error}`, 'error');
+      await refreshSoundCloudBypassStatus();
+    } finally {
+      soundCloudBypassBusy = false;
+    }
+  }
   let dataPath = '';
   let localDataPath = '';
   const RELEASES_URL = 'https://github.com/pizxxxxx/LomifyNEXT/releases';
@@ -281,6 +361,8 @@
   }
 
   onMount(() => {
+    const openSupportFromSidebar = () => void setSupportOpen(true);
+    window.addEventListener('lomify:open-support', openSupportFromSidebar);
     if ($settings.uiStyle === 'style3') {
       $settings.uiStyle = 'style1';
     }
@@ -303,6 +385,12 @@
     // создаётся заново, см. +page.svelte), поэтому воткнутые наушники видно без кнопки.
     refreshOutputs();
     void refreshCacheStats();
+    void refreshSoundCloudBypassStatus();
+    const bypassStatusTimer = setInterval(() => void refreshSoundCloudBypassStatus(), 1500);
+    return () => {
+      clearInterval(bypassStatusTimer);
+      window.removeEventListener('lomify:open-support', openSupportFromSidebar);
+    };
   });
 
   // ── Устройство вывода ────────────────────────────────────────────────────────
@@ -491,23 +579,80 @@
     if (!url || scPlaylistLoading) return;
     scPlaylistLoading = true;
     try {
-      const { importSoundCloudPlaylistByUrl } = await import('$lib/api');
-      const pl = await importSoundCloudPlaylistByUrl(url);
-      playlists.update(existing => {
-        const idx = existing.findIndex(p => p.id === pl.id || (p.title === pl.title && String(p.id).startsWith('sc_playlist_')));
-        if (idx !== -1) {
-          const copy = [...existing];
-          copy[idx] = pl;
-          return copy;
-        }
-        return [pl, ...existing];
-      });
+      const pl = await importLinkedPlaylist(url, $settings.yandexToken);
+      await saveImportedPlaylists([pl]);
       notify(`Плейлист «${pl.title}» импортирован (${withCount(pl.tracks.length, 'трек', 'трека', 'треков')}).`, 'success');
       scPlaylistInputUrl = '';
     } catch (e: any) {
       notify(e?.message || 'Не удалось импортировать плейлист.', 'error');
     }
     scPlaylistLoading = false;
+  }
+
+  let ymPlaylistsLoading = false;
+  let ymPlaylistsProgress = '';
+  let ymPlaylistInputUrl = '';
+  let ymPlaylistLinkLoading = false;
+  async function importYMPlaylistLink() {
+    const url = ymPlaylistInputUrl.trim();
+    if (!url || !$settings.yandexToken || ymPlaylistLinkLoading) return;
+    ymPlaylistLinkLoading = true;
+    try {
+      const playlist = await importYandexPlaylistByUrl($settings.yandexToken, url);
+      await saveImportedPlaylists([playlist]);
+      notify(`Плейлист «${playlist.title}» импортирован (${withCount(playlist.tracks.length, 'трек', 'трека', 'треков')}).`, 'success');
+      ymPlaylistInputUrl = '';
+    } catch (error: any) {
+      notify(error?.message || 'Не удалось импортировать плейлист Яндекс Музыки.', 'error');
+    } finally {
+      ymPlaylistLinkLoading = false;
+    }
+  }
+
+  async function importMyYandexPlaylists() {
+    if (!$settings.yandexToken || ymPlaylistsLoading) return;
+    ymPlaylistsLoading = true;
+    ymPlaylistsProgress = 'Получаю список плейлистов...';
+    try {
+      const summaries = await getYandexPlaylists($settings.yandexToken);
+      if (!summaries.length) {
+        notify('В аккаунте нет плейлистов для импорта.', 'info');
+        return;
+      }
+      const imported: any[] = [];
+      const failed: string[] = [];
+      let firstFailure = '';
+      for (let i = 0; i < summaries.length; i++) {
+        const summary = summaries[i];
+        ymPlaylistsProgress = `${i + 1} из ${summaries.length}: ${summary.title}`;
+        try {
+          imported.push(await importYandexPlaylist($settings.yandexToken, summary));
+        } catch (error) {
+          console.warn('[yandex] не удалось импортировать плейлист', summary.title, error);
+          failed.push(summary.title);
+          if (!firstFailure) firstFailure = error instanceof Error ? error.message : String(error);
+        }
+      }
+      if (imported.length) {
+        ymPlaylistsProgress = 'Сохраняю плейлисты...';
+        await tick();
+        await saveImportedPlaylists(imported);
+      }
+      if (imported.length === 0 && failed.length) {
+        notify(`Не удалось импортировать ни один плейлист (${failed.length}). ${firstFailure}`, 'error');
+      } else {
+        notify(`Импортировано ${withCount(imported.length, 'плейлист', 'плейлиста', 'плейлистов')}${failed.length ? `, не удалось: ${failed.length}` : ''}.`, failed.length ? 'info' : 'success');
+        if (imported.length) {
+          activeLibraryTab.set('playlists');
+          currentView.set('library');
+        }
+      }
+    } catch (error: any) {
+      notify(error?.message || 'Не удалось получить плейлисты Яндекс Музыки.', 'error');
+    } finally {
+      ymPlaylistsLoading = false;
+      ymPlaylistsProgress = '';
+    }
   }
 
   /**
@@ -753,7 +898,7 @@
   }
 </script>
 
-<div class="max-w-3xl mx-auto py-8">
+<div class="w-full max-w-3xl mx-auto pb-8">
   <h2 class="page-title mb-5">Настройки</h2>
 
   <div class="settings-tabs-shell">
@@ -1003,11 +1148,34 @@
             </button>
           </div>
 
+          <div class="setting-row mt-3 flex-wrap">
+            <div class="flex-1 min-w-[220px]">
+              <label class="setting-title" for="wave-custom-name">Название станции</label>
+              <div class="setting-hint">Измени слово после «Моя». До 16 символов; пустое поле оставит «Моя тусня».</div>
+            </div>
+            <div class="flex items-center gap-2">
+              <div class="flex items-center gap-2 rounded-xl border border-white/10 bg-black/25 px-3 py-2 transition-colors focus-within:border-primary/60">
+                <span class="text-sm text-white/65" aria-hidden="true">Моя</span>
+                <input
+                  id="wave-custom-name"
+                  type="text"
+                  maxlength="16"
+                  value={$settings.waveCustomName}
+                  on:input={(event) => $settings.waveCustomName = event.currentTarget.value.slice(0, 16)}
+                  placeholder="тусня"
+                  aria-describedby="wave-name-limit"
+                  class="w-36 min-w-0 bg-transparent text-sm text-white outline-none placeholder:text-white/35"
+                />
+              </div>
+              <span id="wave-name-limit" class="min-w-10 text-right text-xs text-white/45 tnum">{($settings.waveCustomName || '').length}/16</span>
+            </div>
+          </div>
+
           <div class="setting-row mt-3">
             <div class="flex-1 min-w-0">
               <div class="setting-title">Стиль тусни</div>
               <div class="setting-hint">
-                Как «Моя тусня» на главной реагирует на музыку: сглаженное дыхание или живой ритм.
+                Как «{$waveDisplayName}» на главной реагирует на музыку: сглаженное дыхание или живой ритм.
               </div>
             </div>
             <div
@@ -1338,6 +1506,69 @@
             </button>
           </div>
 
+          {#if soundCloudBypassSupported}
+            <div class="setting-row sc-bypass-row mt-4 pt-4 border-t border-white/[0.06]">
+              <div class="sc-bypass-copy">
+                <div class="setting-title">Обход блокировки SoundCloud</div>
+                <div class="setting-hint">
+                  После включения Lomify проверяет сбои воспроизведения треков SoundCloud, ищет сетевую причину и подбирает обход. Работающий сторонний Zapret не останавливается. Для своего обхода Windows запросит права администратора.
+                </div>
+                <div class="sc-bypass-status" data-tone={soundCloudStatusTone} role="status" aria-live="polite">
+                  <div class="sc-bypass-status-head">
+                    <span class="sc-bypass-status-dot" aria-hidden="true"></span>
+                    <strong>{soundCloudStatusTitle}</strong>
+                    {#if soundCloudBypassStatus.state === 'testing' && soundCloudBypassStatus.total > 0}
+                      <span class="sc-bypass-status-count">{soundCloudBypassStatus.index} из {soundCloudBypassStatus.total}</span>
+                    {/if}
+                  </div>
+                  <p>{soundCloudBypassStatus.message || (soundCloudBypassStatus.autoEnabled ? 'Автоподбор включён. Проверю сеть, когда трек SoundCloud не запустится.' : 'Нажмите «Подобрать и включить», чтобы запустить проверку.')}</p>
+                  {#if soundCloudBypassStatus.strategy && soundCloudBypassStatus.strategy !== 'direct' && soundCloudBypassStatus.strategy !== 'external'}
+                    <div class="sc-bypass-strategy">Стратегия <strong>{soundCloudBypassStatus.strategy}</strong></div>
+                  {/if}
+                  {#if soundCloudBypassStatus.diagnosisMessage}
+                    <div class="sc-bypass-diagnosis" data-kind={soundCloudBypassStatus.diagnosisState}>
+                      <strong>Проверка трека</strong>
+                      <span>{soundCloudBypassStatus.diagnosisMessage}</span>
+                    </div>
+                  {/if}
+                </div>
+                {#if soundCloudBypassStatus.catalogCount > 0}
+                  <div class="setting-hint">Набор Flowseal: {soundCloudBypassStatus.catalogCount} стратегий, обновлён {new Date(soundCloudBypassStatus.catalogUpdatedAt * 1000).toLocaleString('ru-RU')}.</div>
+                {/if}
+                {#if soundCloudConnection}
+                  <div class="sc-bypass-test" data-tone={soundCloudConnection.reachable ? 'success' : 'error'} role="status">
+                    <strong>{soundCloudConnection.reachable ? 'Соединение с SoundCloud есть' : soundCloudConnection.checks.some(check => check.reachable) ? 'Соединение с SoundCloud работает не полностью' : 'SoundCloud недоступен'}</strong>
+                    <div class="sc-bypass-test-checks">
+                      {#each soundCloudConnection.checks as check}
+                        <span class:check-ok={check.reachable}>{check.service}: {check.reachable ? `доступен (${check.detail})` : check.detail}</span>
+                      {/each}
+                    </div>
+                    <div class="sc-bypass-test-note">Этот тест проверяет серверы. При сбое воспроизведения отдельно проверяется поток трека.</div>
+                  </div>
+                {/if}
+                <div class="setting-hint">Новые стратегии Flowseal загружаются каждые 6 часов. Перехват ограничен IP SoundCloud; если другой Zapret тоже обрабатывает эти адреса, результат зависит от совместной работы фильтров.</div>
+              </div>
+              <div class="flex shrink-0 flex-col gap-2">
+                <button
+                  type="button"
+                  class="settings-action-button"
+                  disabled={soundCloudConnectionBusy || soundCloudBypassBusy || soundCloudBypassStatus.state === 'testing'}
+                  on:click={testSoundCloudConnection}
+                >
+                  {soundCloudConnectionBusy ? 'Проверяю соединение...' : 'Тест соединения'}
+                </button>
+                <button
+                  type="button"
+                  class="settings-action-button"
+                  disabled={soundCloudBypassBusy || soundCloudConnectionBusy}
+                  on:click={toggleSoundCloudBypass}
+                >
+                  {soundCloudBypassStatus.state === 'testing' ? 'Остановить подбор' : ['running', 'watching', 'waiting'].includes(soundCloudBypassStatus.state) ? 'Выключить' : 'Подобрать и включить'}
+                </button>
+              </div>
+            </div>
+          {/if}
+
           <div class="setting-row mt-4 pt-4 border-t border-white/[0.06]">
             <div>
               <div class="setting-title">Синхронизация любимых треков</div>
@@ -1471,7 +1702,7 @@
                 {/if}
               </button>
             </div>
-            <p class="provider-import-note">Вставь ссылку на любой публичный плейлист SoundCloud, чтобы добавить его в медиатеку.</p>
+            <p class="provider-import-note">Вставь ссылку на публичный плейлист SoundCloud, чтобы добавить его в медиатеку.</p>
           </div>
         </div>
 
@@ -1482,7 +1713,7 @@
             <div>
               <span class="provider-import-kicker">Подключение медиатеки</span>
               <h3>Импорт из Яндекс Музыки</h3>
-              <p>Подключает аккаунт и синхронизирует любимые треки. Полные версии доступны при активной подписке Плюс.</p>
+              <p>Подключает аккаунт, синхронизирует любимые треки и переносит плейлисты. Полные версии доступны при активной подписке Плюс.</p>
             </div>
             {#if $settings.yandexUser}
               <span class="provider-import-status"><Check size={14} aria-hidden="true" /> Подключён</span>
@@ -1515,9 +1746,34 @@
                   <button type="button" class="is-danger" on:click={unlinkYandex}>Отвязать</button>
                 </div>
               </div>
+              <label for="yandex-playlist-url">Ссылка на плейлист Яндекс Музыки</label>
+              <div class="provider-import-field">
+                <ExternalLink size={16} aria-hidden="true" />
+                <input
+                  id="yandex-playlist-url"
+                  type="text"
+                  bind:value={ymPlaylistInputUrl}
+                  placeholder="https://music.yandex.ru/users/имя/playlists/123"
+                  autocomplete="off"
+                  spellcheck="false"
+                  disabled={ymPlaylistLinkLoading}
+                  on:keydown={(event) => event.key === 'Enter' && importYMPlaylistLink()}
+                />
+                <button type="button" class="is-secondary" on:click={importYMPlaylistLink} disabled={!ymPlaylistInputUrl.trim() || ymPlaylistLinkLoading}>
+                  {#if ymPlaylistLinkLoading}<Loader2 class="animate-spin w-4 h-4" aria-hidden="true" />{/if}
+                  {ymPlaylistLinkLoading ? 'Импорт...' : 'Импортировать'}
+                </button>
+              </div>
               <p class="provider-import-note">
                 Без активной подписки Яндекс Музыка отдаёт только короткие фрагменты, поэтому такие треки нельзя воспроизвести полностью.
               </p>
+              <div class="provider-account-actions mt-4">
+                <button type="button" class="is-secondary" on:click={importMyYandexPlaylists} disabled={ymPlaylistsLoading}>
+                  {#if ymPlaylistsLoading}<Loader2 class="animate-spin w-4 h-4" aria-hidden="true" />{/if}
+                  {ymPlaylistsLoading ? 'Импортирую...' : 'Импортировать мои плейлисты'}
+                </button>
+                {#if ymPlaylistsProgress}<span class="provider-import-note" role="status">{ymPlaylistsProgress}</span>{/if}
+              </div>
             </div>
           {:else}
             <div class="provider-import-body">
@@ -1922,8 +2178,8 @@
                   }}
                 >
                   <span class="settings-choice-copy">
-                    <strong>Под текстом</strong>
-                    <small>Подложка во весь экран с размытием</small>
+                    <strong>Под текстом (в фоне)</strong>
+                    <small>Во всю ширину экрана по центру с размытием</small>
                   </span>
                   <span class="settings-choice-check" aria-hidden="true">
                     {#if $settings.lyricsAdlibStyle === 'backdrop'}<Check size={14} />{/if}
@@ -2043,6 +2299,52 @@
               <span class="switch-knob"></span>
             </button>
           </div>
+        </div>
+
+        <!-- Rockium Integration Setting -->
+        <div class="plate p-8">
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <h3 class="section-title">Интеграция с Rockium</h3>
+              <p class="setting-hint !mt-2">
+                Передача играющего трека, обложки и синхронизированного текста в Rockium и виджеты рабочего стола.
+              </p>
+            </div>
+            <button
+              aria-label="Интеграция с Rockium"
+              role="switch"
+              aria-checked={$settings.rockiumEnabled !== false}
+              class="switch"
+              on:click={() => $settings.rockiumEnabled = $settings.rockiumEnabled === false}
+            >
+              <span class="switch-knob"></span>
+            </button>
+          </div>
+
+          {#if $settings.rockiumEnabled !== false}
+            <div class="setting-row mt-6 pt-6 border-t border-white/[0.06]">
+              <div>
+                <div class="setting-title flex items-center gap-2">
+                  <span>Локальный HTTP-сервер Rockium</span>
+                  <span class="text-xs px-2 py-0.5 rounded-full font-mono {$settings.rockiumServerEnabled !== false ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30' : 'bg-white/[0.06] text-neutral-400 border border-white/[0.08]'}">
+                    {$settings.rockiumServerEnabled !== false ? 'порт 52289' : 'выключен'}
+                  </span>
+                </div>
+                <div class="setting-hint">
+                  Открывает локальный HTTP API (порт 52289) для мгновенного опроса текста и обложек по сети. Если выключить - Lomify удаляет файл api.json, и Rockium автоматически подхватывает треки через локальный файл rockium.json без открытия сетевого порта.
+                </div>
+              </div>
+              <button
+                aria-label="Локальный HTTP-сервер Rockium"
+                role="switch"
+                aria-checked={$settings.rockiumServerEnabled !== false}
+                class="switch"
+                on:click={() => $settings.rockiumServerEnabled = $settings.rockiumServerEnabled === false}
+              >
+                <span class="switch-knob"></span>
+              </button>
+            </div>
+          {/if}
         </div>
 
         <!-- App Data Paths -->

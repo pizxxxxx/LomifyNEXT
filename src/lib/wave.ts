@@ -31,6 +31,7 @@ import {
 
 /** Играет ли сейчас волна. Плеер смотрит на это, чтобы докладывать порции. */
 export const waveActive = writable(false);
+let waveRequestGeneration = 0;
 
 /** Текущая станция ротора Яндекс Музыки (user:onyourwave или genre:...). */
 let activeStationId = 'user:onyourwave';
@@ -242,6 +243,7 @@ async function filteredWaveBatch(
  * порцию с учётом всего, что человек успел пропустить и дослушать.
  */
 export async function startWave(): Promise<boolean> {
+  const requestGeneration = ++waveRequestGeneration;
   const t = token();
   if (!t) {
     notify('Волна работает от аккаунта Яндекс Музыки — вставьте токен в настройках', 'error');
@@ -256,11 +258,16 @@ export async function startWave(): Promise<boolean> {
   try {
     batch = await filteredWaveBatch(t, null, FILTER_TARGET_TRACKS);
   } catch (e) {
+    if (requestGeneration !== waveRequestGeneration) return false;
     console.error('[волна] станция не ответила', e);
     const reason = e instanceof Error ? e.message.trim() : '';
     notify(reason || 'Волна не собралась: Яндекс Музыка не ответила', 'error');
     return false;
   }
+
+  // A manual selection can happen while Yandex is preparing the first batch.
+  // An old response must never replace the queue the listener just chose.
+  if (requestGeneration !== waveRequestGeneration) return false;
 
   if (batch.tracks.length === 0) {
     const filter = describeWaveFilters(get(settings));
@@ -298,6 +305,7 @@ export async function startWave(): Promise<boolean> {
 
 /** Остановить волну. Играющий трек не трогаем — останавливается только докладка порций. */
 export function stopWave(): void {
+  waveRequestGeneration++;
   if (!get(waveActive)) return;
   waveActive.set(false);
   batchId = '';
@@ -381,12 +389,13 @@ export async function waveRefill(): Promise<void> {
 
 async function fetchBatch(): Promise<void> {
   if (pendingBatch) return pendingBatch;
+  const requestGeneration = waveRequestGeneration;
 
   pendingBatch = (async () => {
     try {
       const batch = await filteredWaveBatch(token(), tailId, FILTER_TARGET_TRACKS);
       // Пока шёл запрос, волну могли остановить — тогда порция уже никому не нужна.
-      if (!get(waveActive)) return;
+      if (!get(waveActive) || requestGeneration !== waveRequestGeneration) return;
       if (batch.batchId) batchId = batch.batchId;
       // Хвост двигаем и при пустом результате фильтра, иначе следующий запрос принёс бы
       // те же неподходящие порции по кругу.

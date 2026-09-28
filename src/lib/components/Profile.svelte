@@ -11,6 +11,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { listenStats, currentTrack, isPlaying, settings, pageAtmosphere, likedTracks, playlists, type ListenHistoryEntry, type PageAtmosphere } from '$lib/stores';
+  import { stopWave, waveActive } from '$lib/wave';
   import { BarChart3, Check, Clock, Cloud, Disc3, Edit2, ExternalLink, Headphones, Heart, Image as ImageIcon, ListMusic, Loader2, Music, Pause, Play, RefreshCw, Trophy, X } from '@lucide/svelte';
   import {
     LASTFM_TASTE_UPDATED_EVENT,
@@ -275,15 +276,17 @@
   }
 
   function playTrack(track: any) {
-    if ($currentTrack?.title === track.title && $currentTrack?.artist === track.artist) {
+    if ($currentTrack?.title === track.title && $currentTrack?.artist === track.artist && !$waveActive) {
       $isPlaying = !$isPlaying;
     } else {
+      stopWave();
       $currentTrack = track;
       $isPlaying = true;
     }
   }
 
   function formatTime(seconds: number) {
+    seconds = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
     if (seconds < 60) return `${seconds} сек`;
     const m = Math.floor(seconds / 60);
     const h = Math.floor(m / 60);
@@ -467,7 +470,7 @@
     <div class="profile-stat-grid">
       <article class="profile-stat-card">
         <span class="profile-stat-icon"><Clock size={19} /></span>
-        <div><span>В эфире</span><strong>{formatTime($listenStats.listenSeconds)}</strong></div>
+        <div><span>Музыка играла</span><strong>{formatTime($listenStats.listenSeconds)}</strong></div>
       </article>
       <article class="profile-stat-card">
         <span class="profile-stat-icon"><Headphones size={19} /></span>

@@ -1,0 +1,14 @@
+Bundled from Flowseal/zapret-discord-youtube at commit
+249a70424aae2676f99c5363e21073ed89873eda
+https://github.com/Flowseal/zapret-discord-youtube
+
+winws.exe SHA256 AFFB4F69D2EA302A7ABCCD5325D81826E140DDAE014F1E070BC4A6C0DD555188
+WinDivert.dll SHA256 C1E060EE19444A259B2162F8AF0F3FE8C4428A1C6F694DCE20DE194AC8D7D9A2
+WinDivert64.sys SHA256 8DA085332782708D8767BCACE5327A6EC7283C17CFB85E40B03CD2323A90DDC2
+cygwin1.dll SHA256 103104A52E5293CE418944725DF19E2BF81AD9269B9A120D71D39028E821499B
+
+LICENSE.txt is copied from the same commit.
+soundcloud-bypass.ps1 is LomifyNEXT integration code.
+At runtime LomifyNEXT reads Flowseal general*.bat files from the current GitHub
+commit, keeps only validated HTTPS desync parameters and scopes them to
+SoundCloud. It never executes downloaded BAT files or replaces these binaries.

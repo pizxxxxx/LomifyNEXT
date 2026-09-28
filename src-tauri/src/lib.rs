@@ -147,6 +147,12 @@ pub fn run() {
             let (static_port, proxy_port) = rt.block_on(network::server::start_all(wallpapers_dir));
             let rt_handle = rt.handle().clone();
 
+            #[cfg(windows)]
+            network::zapret_catalog::start_updates(
+                data_dir.join("soundcloud-bypass-strategies.json"),
+                rt_handle.clone(),
+            );
+
             std::thread::spawn(move || {
                 rt.block_on(std::future::pending::<()>());
             });
@@ -220,6 +226,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![exit_app,
             rockium::rockium_publish,
+            rockium::rockium_configure,
             app::updater::check_and_download_update,
             app::updater::install_update,
             network::server::get_server_ports,
@@ -240,8 +247,10 @@ pub fn run() {
             audio::audio_set_playback_rate,
             audio::audio_set_ab_loop,
             audio::audio_get_position,
+            audio::audio_playback_clock,
             audio::audio_set_eq,
             audio::audio_set_normalization,
+            audio::audio_set_spatial,
             audio::audio_is_playing,
             audio::audio_set_metadata,
             audio::audio_set_playback_state,
@@ -290,6 +299,11 @@ pub fn run() {
             auth::auth_set_premium,
             network::wallpapers::wallpaper_search,
             network::direct_fetch::net_fetch_direct,
+            network::soundcloud_bypass::soundcloud_bypass_start,
+            network::soundcloud_bypass::soundcloud_bypass_stop,
+            network::soundcloud_bypass::soundcloud_bypass_status,
+            network::soundcloud_bypass::soundcloud_bypass_test_connection,
+            network::soundcloud_bypass::soundcloud_bypass_report_playback_failure,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {

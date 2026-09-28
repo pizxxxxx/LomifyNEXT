@@ -152,6 +152,23 @@ pub fn audio_get_position(state: State<'_, AudioState>) -> f64 {
     engine::get_position(state)
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaybackClock {
+    played_ms: u64,
+}
+
+/// Time consumed by the output sink. It stays still while paused and does not
+/// advance while a URL is still resolving, unlike the frontend play intent.
+#[tauri::command]
+pub fn audio_playback_clock(state: State<'_, AudioState>) -> Option<PlaybackClock> {
+    let player = state.player.lock().ok()?;
+    let player = player.as_ref()?;
+    Some(PlaybackClock {
+        played_ms: player.get_pos().as_millis() as u64,
+    })
+}
+
 #[tauri::command]
 pub fn audio_set_eq(enabled: bool, gains: Vec<f64>, state: State<'_, AudioState>) {
     engine::set_eq(enabled, gains, state);
@@ -160,6 +177,16 @@ pub fn audio_set_eq(enabled: bool, gains: Vec<f64>, state: State<'_, AudioState>
 #[tauri::command]
 pub fn audio_set_normalization(enabled: bool, state: State<'_, AudioState>) {
     engine::set_normalization(enabled, state);
+}
+
+#[tauri::command]
+pub fn audio_set_spatial(
+    enabled: bool,
+    room_size: Option<f64>,
+    intensity: Option<f64>,
+    state: State<'_, AudioState>,
+) {
+    engine::set_spatial(enabled, room_size.unwrap_or(0.5), intensity, state);
 }
 
 #[tauri::command]

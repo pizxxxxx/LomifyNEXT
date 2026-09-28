@@ -6,8 +6,11 @@
   import { fade, slide } from 'svelte/transition';
   import { getAudioUrl } from '$lib/api';
   import { currentTrack, queue, isPlaying, currentView, playlists, globalVolume } from '$lib/stores';
+  import { stopWave, waveActive } from '$lib/wave';
   import { invoke } from '@tauri-apps/api/core';
   import ArtistTag from './ArtistTag.svelte';
+  import { playlistCoverUrl } from '$lib/playlistCover';
+  import { downloadedCoverCache } from '$lib/offlineCovers';
 
   export let playlist: any;
   export let onClose: () => void;
@@ -20,6 +23,7 @@
   let needsManualPlay = false;
 
   $: tracks = playlist.tracks || [];
+  $: cover = playlistCoverUrl(playlist, $downloadedCoverCache);
   $: currentSnippetTrack = tracks[activeSnippetIndex];
 
   $: if (previewAudio) {
@@ -106,6 +110,7 @@
   function playFull() {
     stopSnippet();
     if (tracks.length > 0) {
+      stopWave();
       queue.set(tracks.slice(1));
       currentTrack.set(tracks[0]);
       isPlaying.set(true);
@@ -147,7 +152,7 @@
   );
 
   function togglePlayFull() {
-    if (isFullPlaying) {
+    if (isFullPlaying && !$waveActive) {
       isPlaying.set(false);
       return;
     }
@@ -170,8 +175,8 @@
       </button>
       
       <div class="w-24 h-24 rounded-xl overflow-hidden bg-neutral-800 shrink-0 shadow-lg relative">
-        {#if tracks[0]?.coverUrl}
-          <img src={tracks[0].coverUrl} alt="Cover" class="w-full h-full object-cover" />
+        {#if cover}
+          <img src={cover} alt="" class="w-full h-full object-cover" />
         {:else}
           <div class="w-full h-full flex items-center justify-center text-neutral-500">
             <Music size={32} />

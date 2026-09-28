@@ -10,7 +10,7 @@
     Pause as PauseData,
     Play as PlayData
   } from 'lucide';
-  import { currentTrack, isPlaying, progress, duration as durationStore, currentView, previousView, settings, equalizerBands, listenStats, queue, likedTracks, dislikedTracks, trackHistory, notify, playlists, globalVolume, lyricsStatus } from '$lib/stores';
+  import { currentTrack, isPlaying, progress, duration as durationStore, currentView, previousView, settings, waveDisplayName, equalizerBands, listenStats, queue, likedTracks, dislikedTracks, trackHistory, notify, playlists, globalVolume, lyricsStatus } from '$lib/stores';
   import { buildTrackUrn } from '$lib/utils/trackUrn';
   import { getAudioUrl, getTrackInfo, getLyrics } from '$lib/api';
   import { waveActive, waveRefill, waveTrackDone, stopWave } from '$lib/wave';
@@ -84,7 +84,75 @@
     }
   }
   let repeatMode = 0; // 0: off, 1: all, 2: one
-  let statInterval: any;
+  let statInterval: ReturnType<typeof setInterval>;
+  let lastOutputMs = 0;
+  let lastOutputSampleAt = 0;
+  let listenedMsRemainder = 0;
+  let statPollPending = false;
+
+  async function samplePlaybackClock() {
+    if (!$currentTrack || statPollPending) return;
+    statPollPending = true;
+    const generation = loadGeneration;
+    try {
+      const clock = await invoke<{ playedMs: number } | null>('audio_playback_clock');
+      if (generation !== loadGeneration || !$currentTrack) return;
+      const now = performance.now();
+      if (!clock) {
+        lastOutputMs = 0;
+        lastOutputSampleAt = now;
+        return;
+      }
+      const elapsed = now - lastOutputSampleAt;
+      const delta = clock.playedMs - lastOutputMs;
+      // A seek can jump the sink clock. Only actual output time may become listening time.
+      if (delta > 0 && delta <= elapsed + 200) {
+        currentTrackListenTime += delta / 1000;
+        listenedMsRemainder += delta;
+        const seconds = Math.floor(listenedMsRemainder / 1000);
+        if (seconds > 0) {
+          listenedMsRemainder -= seconds * 1000;
+          listenStats.update(s => ({ ...s, listenSeconds: s.listenSeconds + seconds }));
+        }
+        if (!currentTrackCounted && duration > 0) {
+          const threshold = duration < 60 ? duration * 0.8 : 60;
+          if (currentTrackListenTime >= threshold) {
+              currentTrackCounted = true;
+              listenStats.update(s => {
+                const historyObj = s.history || {};
+                const trackId = $currentTrack.title + '-' + $currentTrack.artist;
+                const currentHistory = historyObj[trackId] || { count: 0, title: $currentTrack.title, artist: $currentTrack.artist, coverUrl: $currentTrack.coverUrl };
+                return {
+                  ...s,
+                  tracksPlayed: (s.tracksPlayed || 0) + 1,
+                  history: {
+                    ...historyObj,
+                    [trackId]: {
+                      ...currentHistory,
+                      count: currentHistory.count + 1,
+                      title: $currentTrack.title,
+                      artist: $currentTrack.artist,
+                      coverUrl: $currentTrack.coverUrl,
+                      id: $currentTrack.id,
+                      source: $currentTrack.source,
+                      artists: $currentTrack.artists,
+                      duration: $currentTrack.duration,
+                      lastPlayedAt: Date.now()
+                    }
+                  }
+                };
+              });
+          }
+        }
+      }
+      lastOutputMs = clock.playedMs;
+      lastOutputSampleAt = now;
+    } catch (error) {
+      console.warn('[player] не удалось прочитать часы аудиовыхода', error);
+    } finally {
+      statPollPending = false;
+    }
+  }
 
   // `listen()` resolves asynchronously. The previous code assigned each unlisten fn to
   // its own `let` inside an async onMount, so a component destroyed before those
@@ -474,6 +542,7 @@
   }
 
   async function handleTrackEnded(outcome: TrackOutcome = 'finished') {
+    const endingGeneration = loadGeneration;
     if (repeatMode === 2) {
       invoke('audio_seek', { position: 0 });
       invoke('audio_play').catch(() => {});
@@ -485,6 +554,7 @@
       // Порция догружается заранее, но если очередь всё-таки опустела — ждём: без этого
       // волна кончалась бы на последнем треке порции и уходила в обычный автоплей.
       await waveRefill();
+      if (endingGeneration !== loadGeneration || !$waveActive) return;
     }
 
     const rawQueue = get(queue);
@@ -521,6 +591,7 @@
     } else if ($currentTrack) {
       import('$lib/api').then(async api => {
         const trending = await api.getRelatedTracks($currentTrack, $likedTracks, $listenStats, $playlists);
+        if (endingGeneration !== loadGeneration) return;
         if (trending && trending.length > 0) {
           const nextTrack = trending[Math.floor(Math.random() * trending.length)];
           currentTrack.set(nextTrack);
@@ -605,45 +676,7 @@
       else if (id === 'prev') playPrev();
     }));
 
-    statInterval = setInterval(async () => {
-      if ($isPlaying) {
-        listenStats.update(s => ({ ...s, listenSeconds: s.listenSeconds + 1 }));
-
-        if ($currentTrack) {
-          currentTrackListenTime++;
-          if (!currentTrackCounted && duration > 0) {
-            let threshold = duration < 60 ? duration * 0.8 : 60;
-            if (currentTrackListenTime >= threshold) {
-              currentTrackCounted = true;
-              listenStats.update(s => {
-                const historyObj = s.history || {};
-                const trackId = $currentTrack.title + '-' + $currentTrack.artist;
-                const currentHistory = historyObj[trackId] || { count: 0, title: $currentTrack.title, artist: $currentTrack.artist, coverUrl: $currentTrack.coverUrl };
-                return {
-                  ...s,
-                  tracksPlayed: (s.tracksPlayed || 0) + 1,
-                  history: {
-                    ...historyObj,
-                    [trackId]: {
-                      ...currentHistory,
-                      count: currentHistory.count + 1,
-                      title: $currentTrack.title,
-                      artist: $currentTrack.artist,
-                      coverUrl: $currentTrack.coverUrl,
-                      id: $currentTrack.id,
-                      source: $currentTrack.source,
-                      artists: $currentTrack.artists,
-                      duration: $currentTrack.duration,
-                      lastPlayedAt: Date.now()
-                    }
-                  }
-                };
-              });
-            }
-          }
-        }
-      }
-    }, 1000);
+    statInterval = setInterval(() => void samplePlaybackClock(), 250);
     return () => window.removeEventListener('trackCacheChanged', handleTrackCacheChanged);
   });
 
@@ -668,6 +701,19 @@
   function isDrmError(e: unknown): boolean {
     const text = typeof e === 'string' ? e : `${(e as any)?.message ?? ''}`;
     return text.toLowerCase().includes('drm') || text.toLowerCase().includes('защищён');
+  }
+
+  function reportSoundCloudPlaybackFailure(track: any, phase: 'resolve' | 'stream', url: string | null, error: unknown) {
+    if (track?.source !== 'soundcloud') return;
+    if (url) {
+      try {
+        const host = new URL(url).hostname.toLowerCase();
+        if (host !== 'soundcloud.com' && !host.endsWith('.soundcloud.com') && !host.endsWith('.sndcdn.com')) return;
+      } catch { return; }
+    }
+    const detail = (typeof error === 'string' ? error : (error as any)?.message ?? '').toString();
+    void invoke('soundcloud_bypass_report_playback_failure', { phase, url, detail })
+      .catch(e => console.warn('[soundcloud] проверка сбоя воспроизведения не удалась', e));
   }
 
   /**
@@ -772,6 +818,8 @@
     loadingGeneration = generation;
     currentTrackListenTime = 0;
     currentTrackCounted = false;
+    lastOutputMs = 0;
+    lastOutputSampleAt = performance.now();
     duration = 0;
     currentTime = 0;
     progress.set(0);
@@ -862,8 +910,9 @@
       // дальше. Настоящую недоступность отдаёт сам источник (`available === false` в
       // yandex.ts, `policy === 'BLOCK'` в api.ts) — этому мы верим, своим догадкам нет.
       const reason = urlError instanceof Error ? urlError.message.trim() : '';
+      if (generation === loadGeneration) reportSoundCloudPlaybackFailure(currentTrackObj, 'resolve', null, urlError);
       notify(reason || 'Источник не передал ссылку на этот трек. Включаю следующий.', 'error');
-      setTimeout(() => playNext('dropped'), 1500);
+      setTimeout(() => { if (generation === loadGeneration) playNext('dropped'); }, 1500);
       return;
     }
 
@@ -908,12 +957,15 @@
             loadPromise = streamWithFreshSignature(currentTrackObj, safeUrl, generation, urn, crossfadeMs)
               .catch(e => {
                 console.error("Playback failed:", e);
+                if (generation === loadGeneration) reportSoundCloudPlaybackFailure(currentTrackObj, 'stream', safeUrl, e);
                 // `invoke` отклоняется строкой из `Err(String)` — в ней уже лежит причина
                 // (например «HTTP 403 — ссылка на поток отклонена раздачей»). Прятать её за
                 // общим «не смог включить» значит терять единственную подсказку.
                 const reason = (typeof e === 'string' ? e : (e as any)?.message ?? '').trim();
                 notify(reason ? `Не удалось включить трек: ${reason}` : 'Не удалось включить трек. Перехожу к следующему.', 'error');
-                setTimeout(() => playNext('dropped'), 1500);
+                if (generation === loadGeneration) {
+                  setTimeout(() => { if (generation === loadGeneration) playNext('dropped'); }, 1500);
+                }
                 throw e;
               });
 
@@ -1012,6 +1064,15 @@
   // Apply EQ
   $: if ($equalizerBands) {
     invoke('audio_set_eq', { enabled: true, gains: $equalizerBands }).catch(e => console.error(e));
+  }
+
+  // Apply Spatial Audio & Virtual Room size
+  $: if (typeof window !== 'undefined') {
+    invoke('audio_set_spatial', {
+      enabled: Boolean($settings.spatialAudio),
+      roomSize: Number($settings.spatialRoomSize ?? 0.5),
+      intensity: Number($settings.spatialIntensity ?? 0.85)
+    }).catch(e => console.error(e));
   }
 
   /**
@@ -1191,7 +1252,7 @@
             title={$currentTrack.title}
             on:click={toggleFullscreenView}
           >{$currentTrack.title}</button>
-          <div class="text-xs text-neutral-400 mt-0.5 min-w-0">
+          <div class="player-track-artist text-xs text-neutral-400 mt-0.5 min-w-0">
             <ArtistTag artist={$currentTrack.artist} artists={$currentTrack.artists} />
           </div>
         </div>
@@ -1224,9 +1285,9 @@
                выключать то, что не включено, незачем. -->
           {#if $waveActive}
             <button
-              aria-label="Выключить Мою тусню"
+              aria-label={`Выключить станцию «${$waveDisplayName}»`}
               class="interactive-item text-primary"
-              title="Играет «Моя тусня» — нажми, чтобы дальше играла только очередь"
+              title={`Играет «${$waveDisplayName}» - нажми, чтобы дальше играла только очередь`}
               on:click={() => stopWave()}
             >
               <Radio size={18} />

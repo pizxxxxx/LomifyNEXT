@@ -30,11 +30,9 @@
  *   related.rs       → getYandexSimilar
  *   playlist*.rs     → getYandexLikes (та же схема: список id → гидрация чанками)
  *
- * Почему запросы идут не через `safeFetch` из api.ts: у того последним шагом стоит
- * `corsproxy.io`. Для публичного SoundCloud API это нормально, а здесь в заголовке лежит
- * OAuth-токен от аккаунта Яндекса — отправлять его на чужой прокси нельзя ни при каких
- * обстоятельствах. Поэтому свой fetch — Tauri-клиент, который и так ходит в сеть мимо CORS
- * и, в отличие от `window.fetch`, умеет выставить `User-Agent` (см. `ymFetch`).
+ * Запросы Яндекса используют отдельный `ymFetch`: он держит OAuth-токен только в запросах
+ * к Яндекс Музыке и проверяет её собственные ошибки авторизации. Tauri-клиент ходит мимо
+ * CORS и, в отличие от `window.fetch`, умеет выставить `User-Agent`.
  */
 
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
@@ -580,6 +578,7 @@ export function mapYandexTrack(raw: any): any | null {
     // чтобы фильтр волны не делал отдельный сетевой запрос для каждого кандидата.
     lyricsAvailable,
     lyricsLanguage: lyricsLanguage || undefined,
+    backgroundVideoUri: normalizeYandexVideoUri(t.backgroundVideoUri),
     // `null`, а не ноль. Счётчиков прослушиваний и лайков по трекам API Музыки не отдаёт
     // вовсе, а ноль — это утверждение «трек не слушали ни разу», и интерфейс честно его
     // печатал: «Прослушиваний SC: 0» на треке из Яндекса. Интерфейс проверяет `!= null` и с
@@ -595,6 +594,112 @@ export function mapYandexTrack(raw: any): any | null {
     transcodings: [],
     source: 'yandex',
     isBanned: t.available === false,
+  };
+}
+
+/** Видеошот приходит как готовый MP4-адрес. Не передаём в WebView произвольные URL из ответа. */
+export function normalizeYandexVideoUri(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  try {
+    const url = new URL(value);
+    // Каталог возвращает и старый strm.yandex.ru, и runtime.strm.yandex.ru.
+    return url.protocol === 'https:'
+      && (url.hostname === 'strm.yandex.ru' || url.hostname === 'runtime.strm.yandex.ru')
+      && url.pathname.toLowerCase().endsWith('.mp4')
+      ? url.href : '';
+  } catch {
+    return '';
+  }
+}
+
+export async function getYandexTrackVideoUri(rawToken: string, trackId: string): Promise<string> {
+  const token = normalizeYandexToken(rawToken);
+  if (!token || !/^\d+$/.test(trackId)) return '';
+  const result = await ymJson(`${API}/tracks?trackIds=${encodeURIComponent(trackId)}`, token);
+  return normalizeYandexVideoUri(Array.isArray(result) ? result[0]?.backgroundVideoUri : null);
+}
+
+export interface YandexPlaylistSummary {
+  ownerId: string;
+  kind: string;
+  title: string;
+}
+
+/** Список плейлистов привязанного аккаунта, без изменения данных на Яндексе. */
+export async function getYandexPlaylists(rawToken: string): Promise<YandexPlaylistSummary[]> {
+  const token = normalizeYandexToken(rawToken);
+  const uid = await accountUid(token);
+  const result = await ymJson(`${API}/users/${uid}/playlists/list`, token);
+  if (!Array.isArray(result)) throw new Error('Яндекс Музыка не вернула список плейлистов.');
+  const summaries: YandexPlaylistSummary[] = result.map((playlist: any) => ({
+    ownerId: `${playlist?.owner?.uid ?? playlist?.owner?.id ?? uid}`,
+    kind: `${playlist?.kind ?? ''}`,
+    title: `${playlist?.title ?? ''}`.trim()
+  })).filter((playlist: YandexPlaylistSummary) => playlist.kind && playlist.title);
+  const seen = new Set<string>();
+  return summaries.filter(playlist => {
+    const identity = `${playlist.ownerId}:${playlist.kind}`;
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+}
+
+function yandexPlaylistAddress(link: string): { ownerId: string; kind: string; uuid?: string } {
+  let url: URL;
+  try { url = new URL(link); } catch { throw new Error('Вставь ссылку на плейлист Яндекс Музыки.'); }
+  if (!['music.yandex.ru', 'music.yandex.com'].includes(url.hostname) || url.protocol !== 'https:') {
+    throw new Error('Нужна ссылка с music.yandex.ru на плейлист.');
+  }
+  const parts = url.pathname.split('/').filter(Boolean);
+  if (parts[0] === 'users' && parts[2] === 'playlists' && parts[1] && parts[3]) {
+    return { ownerId: parts[1], kind: parts[3] };
+  }
+  if (parts[0] === 'playlists' && parts[1]) return { ownerId: '', kind: '', uuid: parts[1] };
+  throw new Error('Открой плейлист в Яндекс Музыке и скопируй его ссылку.');
+}
+
+export async function importYandexPlaylistByUrl(rawToken: string, link: string) {
+  return importYandexPlaylist(rawToken, yandexPlaylistAddress(link));
+}
+
+/** Импортирует полный список в порядке Яндекса; короткие карточки догружает пачками. */
+export async function importYandexPlaylist(
+  rawToken: string,
+  address: { ownerId: string; kind: string; uuid?: string }
+) {
+  const token = normalizeYandexToken(rawToken);
+  if (!token) throw new Error('Сначала подключи Яндекс Музыку в настройках.');
+  const path = address.uuid
+    ? `${API}/playlist/${encodeURIComponent(address.uuid)}`
+    : `${API}/users/${encodeURIComponent(address.ownerId)}/playlists/${encodeURIComponent(address.kind)}`;
+  const playlist = await ymJson(path, token);
+  if (!playlist || typeof playlist !== 'object') throw new Error('Плейлист не найден или недоступен этому аккаунту.');
+  const ownerId = `${playlist.owner?.uid ?? playlist.owner?.id ?? address.ownerId}`;
+  const kind = `${playlist.kind ?? address.kind}`;
+  const entries = Array.isArray(playlist.tracks) ? playlist.tracks : [];
+  if (!ownerId || !kind || (Number(playlist.trackCount) > 0 && entries.length < Number(playlist.trackCount))) {
+    throw new Error('Не удалось получить треки плейлиста. Проверь доступ к нему и попробуй ещё раз.');
+  }
+  const missing: string[] = [...new Set<string>(entries
+    .filter((entry: any) => !entry?.track && !entry?.title)
+    .map((entry: any) => `${entry?.id ?? ''}`)
+    .filter(Boolean))];
+  const hydrated = new Map<string, any>();
+  for (let i = 0; i < missing.length; i += 100) {
+    const batch = await ymJson(`${API}/tracks?trackIds=${missing.slice(i, i + 100).map(encodeURIComponent).join(',')}`, token);
+    if (!Array.isArray(batch)) throw new Error('Не удалось получить треки плейлиста. Попробуй ещё раз.');
+    for (const track of batch) hydrated.set(`${track?.id}`, track);
+  }
+  const tracks = entries
+    .map((entry: any) => mapYandexTrack(entry?.track ?? hydrated.get(`${entry?.id}`) ?? (entry?.title ? entry : null)))
+    .filter(Boolean);
+  if (entries.length && !tracks.length) throw new Error('В плейлисте нет доступных треков.');
+  return {
+    id: `ym_playlist_${ownerId}_${kind}`,
+    title: `${playlist.title ?? 'Плейлист Яндекс Музыки'}`,
+    coverUrl: ymCover(playlist.cover?.uri ?? playlist.coverUri ?? playlist.ogImage) || tracks[0]?.coverUrl || '',
+    tracks
   };
 }
 

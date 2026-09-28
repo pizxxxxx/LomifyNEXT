@@ -9,7 +9,7 @@ use rodio::Player;
 use crate::audio::analyser::AnalyserBuffer;
 use crate::audio::device::open_device_sink;
 use crate::audio::types::{
-    AudioThreadCmd, EqParams, FloatingCommentEvent, LyricsTimingLine, MediaCmd,
+    AudioThreadCmd, EqParams, FloatingCommentEvent, LyricsTimingLine, MediaCmd, SpatialParams,
 };
 
 pub struct LyricsTimelineState {
@@ -109,6 +109,7 @@ pub struct AudioState {
     pub player: Mutex<Option<Player>>,
     pub mixer: Arc<Mutex<Mixer>>,
     pub eq_params: Arc<RwLock<EqParams>>,
+    pub spatial_params: Arc<RwLock<SpatialParams>>,
     pub normalization_enabled: AtomicBool,
     pub normalization_gain: Mutex<f32>,
     pub volume: Mutex<f32>,
@@ -268,6 +269,7 @@ pub fn init() -> AudioState {
         player: Mutex::new(None),
         mixer: shared_mixer,
         eq_params: Arc::new(RwLock::new(EqParams::default())),
+        spatial_params: Arc::new(RwLock::new(SpatialParams::default())),
         normalization_enabled: AtomicBool::new(true),
         normalization_gain: Mutex::new(1.0),
         volume: Mutex::new(0.25),

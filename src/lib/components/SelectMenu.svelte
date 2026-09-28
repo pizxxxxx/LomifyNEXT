@@ -15,6 +15,7 @@
   export let options: SelectMenuOption[] = [];
   export let ariaLabel: string;
   export let disabled = false;
+  export let onChange: ((value: string | number) => void) | undefined = undefined;
 
   let root: HTMLElement;
   let trigger: HTMLButtonElement;
@@ -80,6 +81,7 @@
 
   function choose(option: SelectMenuOption) {
     value = option.value;
+    onChange?.(option.value);
     close();
     void tick().then(() => trigger?.focus());
   }
