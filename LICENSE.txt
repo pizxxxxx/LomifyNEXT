@@ -1,0 +1,2 @@
+Лицензия
+Copyright (C) 2026 pizx. Проект распространяется по лицензии GNU GPL версии 3 или любой более поздней версии (https://github.com/pizxxxxx/LomifyNEXT/blob/main/LICENSE) (GPL-3.0-or-later).

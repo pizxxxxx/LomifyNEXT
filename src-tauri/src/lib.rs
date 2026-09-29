@@ -202,6 +202,12 @@ pub fn run() {
             network::call::manage_state(app.handle(), call_state.clone());
             network::call::maybe_autostart(app.handle(), call_state);
 
+            if let Some(main_win) = app.get_webview_window("main") {
+                if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../icons/taskbar.png")) {
+                    let _ = main_win.set_icon(icon);
+                }
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| match event {

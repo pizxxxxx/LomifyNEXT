@@ -1,6 +1,6 @@
 [package]
 name = "lomifynext-tauri"
-version = "9.4.9"
+version = "9.4.92"
 description = "LomifyNEXT"
 authors = ["dopaminegdev"]
 license = "GPL-3.0-or-later"
@@ -24,7 +24,7 @@ tauri-build = { version = "2", features = [] }
 # enables the inspector automatically on debug builds, so `cargo tauri dev` is
 # unaffected; a shipped `cargo tauri build` now simply has no inspector to open.
 # Need it in a release build to chase a bug? `cargo tauri build --features devtools`.
-tauri = { version = "2", features = ["protocol-asset", "tray-icon", "macos-private-api"] }
+tauri = { version = "2", features = ["protocol-asset", "tray-icon", "macos-private-api", "image-png"] }
 tauri-plugin-opener = "2"
 tauri-plugin-liquid-glass = "0.1"
 serde = { version = "1", features = ["derive"] }

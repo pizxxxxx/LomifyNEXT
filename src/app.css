@@ -4054,10 +4054,10 @@ body[data-perf="light"] .lyrics-backdrop-callout.is-departing {
   padding: 0;
   border: 0;
   background: none;
-  font-family: 'Unbounded Variable', var(--font-ui);
-  font-size: 13px;
-  font-weight: 680;
-  letter-spacing: -0.035em;
+  font-family: 'Rubik Variable', var(--font-ui);
+  font-size: 14.5px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
   color: #fff;
   text-align: left;
   cursor: pointer;
@@ -4076,9 +4076,10 @@ body[data-perf="light"] .lyrics-backdrop-callout.is-departing {
 }
 
 .player-track-artist {
-  font-family: 'Unbounded Variable', var(--font-ui);
-  font-weight: 550;
-  letter-spacing: -0.025em;
+  font-family: 'Rubik Variable', var(--font-ui);
+  font-size: 12.5px;
+  font-weight: 450;
+  letter-spacing: -0.01em;
 }
 
 /* ── Fullscreen hero ─────────────────────────────────────────────────────────

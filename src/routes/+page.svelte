@@ -217,9 +217,89 @@
     const refreshLastFmTaste = () => void loadFeed();
     window.addEventListener(LASTFM_TASTE_UPDATED_EVENT, refreshLastFmTaste);
 
+    let lastNavTime = 0;
+    const triggerNav = (direction: 'back' | 'forward', source: string) => {
+      const now = Date.now();
+      if (now - lastNavTime < 250) return;
+      lastNavTime = now;
+      if (direction === 'back') {
+        goBack();
+      } else {
+        goForward();
+      }
+    };
+
+    const handleMouseNav = (e: MouseEvent | PointerEvent) => {
+      const isBack = e.button === 3 || (e.buttons & 8) !== 0;
+      const isForward = e.button === 4 || (e.buttons & 16) !== 0;
+
+      if (isBack) {
+        e.preventDefault();
+        e.stopPropagation();
+        triggerNav('back', e.type);
+      } else if (isForward) {
+        e.preventDefault();
+        e.stopPropagation();
+        triggerNav('forward', e.type);
+      }
+    };
+
+    const handleKeyNav = (e: KeyboardEvent) => {
+      if (e.key === 'BrowserBack' || (e.altKey && e.key === 'ArrowLeft')) {
+        const target = e.target as HTMLElement | null;
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+          if (e.altKey) return;
+        }
+        e.preventDefault();
+        triggerNav('back', e.key);
+      } else if (e.key === 'BrowserForward' || (e.altKey && e.key === 'ArrowRight')) {
+        const target = e.target as HTMLElement | null;
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+          if (e.altKey) return;
+        }
+        e.preventDefault();
+        triggerNav('forward', e.key);
+      }
+    };
+
+    const handlePopState = (e: PopStateEvent) => {
+      const now = Date.now();
+      if (now - lastNavTime < 250) return;
+      lastNavTime = now;
+      if (e.state && e.state.view) {
+        $isHistoryNavigation = true;
+        $currentArtist = e.state.artist || '';
+        $searchQueryStore = e.state.search || '';
+        $currentView = e.state.view;
+      } else {
+        goBack();
+      }
+    };
+
+    if (typeof window !== 'undefined' && window.history && !window.history.state) {
+      try {
+        window.history.replaceState({ view: $currentView, artist: $currentArtist, search: $searchQueryStore }, '');
+      } catch {}
+    }
+
+    window.addEventListener('pointerdown', handleMouseNav, { capture: true });
+    window.addEventListener('pointerup', handleMouseNav, { capture: true });
+    window.addEventListener('mousedown', handleMouseNav, { capture: true });
+    window.addEventListener('mouseup', handleMouseNav, { capture: true });
+    window.addEventListener('auxclick', handleMouseNav, { capture: true });
+    window.addEventListener('keydown', handleKeyNav);
+    window.addEventListener('popstate', handlePopState);
+
     return () => {
       unsubscribeSettings();
       window.removeEventListener(LASTFM_TASTE_UPDATED_EVENT, refreshLastFmTaste);
+      window.removeEventListener('pointerdown', handleMouseNav, { capture: true });
+      window.removeEventListener('pointerup', handleMouseNav, { capture: true });
+      window.removeEventListener('mousedown', handleMouseNav, { capture: true });
+      window.removeEventListener('mouseup', handleMouseNav, { capture: true });
+      window.removeEventListener('auxclick', handleMouseNav, { capture: true });
+      window.removeEventListener('keydown', handleKeyNav);
+      window.removeEventListener('popstate', handlePopState);
     };
   });
 
@@ -252,6 +332,11 @@
       if (windowKey(currentState) !== windowKey(lastState) && !$isHistoryNavigation) {
         navHistory.update(h => [...h, lastState]);
         navFuture.set([]);
+        if (typeof window !== 'undefined' && window.history) {
+          try {
+            window.history.pushState({ ...currentState }, '');
+          } catch {}
+        }
       }
       lastState = { ...currentState };
       if ($isHistoryNavigation) $isHistoryNavigation = false;
@@ -259,6 +344,10 @@
   }
 
   function goBack() {
+    if ($currentView === 'fullscreen') {
+      $currentView = $previousView && $previousView !== 'fullscreen' ? $previousView : 'home';
+      return;
+    }
     if ($navHistory.length > 0) {
       const history = $navHistory;
       const prev = history.pop();
@@ -276,6 +365,7 @@
   }
 
   function goForward() {
+    if ($currentView === 'fullscreen') return;
     if ($navFuture.length > 0) {
       const future = $navFuture;
       const next = future.pop();
