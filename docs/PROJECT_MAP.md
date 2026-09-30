@@ -1,7 +1,7 @@
 # LomifyNEXT project map
 
 Last verified: 2026-09-30  
-Repository version at verification: 9.5.1
+Repository version at verification: 9.5.0
 
 This file is the navigation index for the repository. Read it before broad exploration.
 It explains where a change normally belongs; source code is still the final authority.
@@ -85,7 +85,7 @@ Svelte routes/components
 | `utils/` | Rust helper crates referenced from `src-tauri/Cargo.toml`. |
 | `static/` | Files copied into the frontend build as static assets. |
 | `permissions/` | Additional permission definitions kept at repository root. |
-| `README.md` | User-facing project overview and build instructions. |
+| `README.md` | User-facing project overview, features and download links. |
 | `src/lib/changelog.ts` | Current and historical release notes shown in the app. |
 
 Generated, dependency, and local-only paths that should not be used for architecture
@@ -488,6 +488,11 @@ pushes it. Agents must not run it unless the user explicitly asks for that exact
 The desktop application tracks `src-tauri/Cargo.lock`. Tauri and its plugins are pinned in
 `src-tauri/Cargo.toml` and `package.json` to the matching versions verified for the release.
 Keep both lockfiles when building installers; update the native and JavaScript packages together.
+
+Desktop 9.5.0 is still in preparation. `docs/releases/v9.5.0.md` contains pending notes;
+Windows installer publication is deferred while the remaining desktop work is unfinished.
+The prematurely published desktop 9.5.1 release and tag
+were withdrawn; the Android 1.0.14 release remains published in the mobile repository.
 
 When changing the application version, verify all of these locations:
 
