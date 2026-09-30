@@ -46,6 +46,7 @@ Svelte routes/components
 | Task | First files to inspect |
 | --- | --- |
 | App startup, global theme, window-level effects | `src/routes/+layout.svelte`, `src/app.css` |
+| Windows taskbar, shortcut and executable icons | `src-tauri/icons/taskbar.png`, `src-tauri/icons/icon.ico`, `src-tauri/tauri.conf.json`, `src-tauri/src/lib.rs`, `src-tauri/src/app/tray.rs` |
 | Page/view navigation and home layout | `src/routes/+page.svelte`, `src/lib/stores.ts` |
 | Player controls, listening time or queue behavior | `src/lib/components/Player.svelte`, `src/lib/stores.ts`, `src/lib/wave.ts`, `src-tauri/src/audio/commands.rs` |
 | Native playback, seeking, volume, crossfade | `src-tauri/src/audio/commands.rs`, `src-tauri/src/audio/engine.rs`, `src-tauri/src/audio/state.rs` |
@@ -223,6 +224,12 @@ order; do not scan the whole frontend before them:
   both the command annotation in its module and the `generate_handler!` list in `lib.rs`.
 
 ### Native modules
+
+Windows icons: `src-tauri/icons/taskbar.png` is the existing transparent artwork used
+by the main window and tray. Bundle PNGs (32, 64, 128, 256) and `icon.ico` use the same
+artwork so executable/shortcut icons match the running window. Keep ICO layers 16,
+24, 32, 48, 64 and 128 as 32-bit BMP DIB with alpha/AND mask; 256 is PNG. This preserves
+the NSIS icon format correction from 9.4.92. macOS and mobile artwork are separate.
 
 | Module | Responsibility |
 | --- | --- |
