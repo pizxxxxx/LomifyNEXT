@@ -15,6 +15,7 @@ rockium-dev.conf.json
 src-tauri/target/
 **/target/
 **/Cargo.lock
+!src-tauri/Cargo.lock
 src-tauri/gen/schemas/
 
 # Separate Rust TUI project, kept local only

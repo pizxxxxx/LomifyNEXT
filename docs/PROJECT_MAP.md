@@ -485,6 +485,10 @@ pushes it. Agents must not run it unless the user explicitly asks for that exact
 
 ## 10. Release/version synchronization
 
+The desktop application tracks `src-tauri/Cargo.lock`. Tauri and its plugins are pinned in
+`src-tauri/Cargo.toml` and `package.json` to the matching versions verified for the release.
+Keep both lockfiles when building installers; update the native and JavaScript packages together.
+
 When changing the application version, verify all of these locations:
 
 1. `package.json` and the root package in `package-lock.json` - npm/package version.
