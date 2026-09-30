@@ -136,6 +136,34 @@
     }
   }
 
+  /**
+   * Одна автоматическая попытка повтора - ровно то, что человек и сделал бы сам, нажав
+   * «Повторить» на экране ошибки. Первый запрос главной уходит в тот момент, когда сеть
+   * ещё поднимается (свежий запуск системы, переподключение Wi-Fi, только что включённый
+   * обход блокировки), и чаще всего второй запрос через полсекунды уже проходит. Показывать
+   * ради этого экран отказа - заставлять нажимать кнопку вместо приложения.
+   *
+   * Попытка только одна и только для автоматических загрузок: ручные «Повторить» и
+   * «Обновить рекомендации» остаются одним запросом на одно нажатие, иначе человек не
+   * понимает, сколько всего сделало приложение. Счётчик сбрасывается после успеха, так что
+   * право на бесплатную вторую попытку возвращается к следующему обрыву связи.
+   */
+  let homeAutoRetryUsed = false;
+  const HOME_AUTO_RETRY_DELAY = 600;
+
+  async function loadFeedAuto() {
+    await loadFeed();
+    if (!homeError) {
+      homeAutoRetryUsed = false;
+      return;
+    }
+    if (homeAutoRetryUsed) return;
+    homeAutoRetryUsed = true;
+    await new Promise((resolve) => setTimeout(resolve, HOME_AUTO_RETRY_DELAY));
+    await loadFeed();
+    if (!homeError) homeAutoRetryUsed = false;
+  }
+
   // Полки ниже — необязательные. Каждая грузится отдельно и своим провалом не роняет ни
   // главную ленту, ни соседнюю полку: раньше всё это жило в одной цепочке await, и
   // первая же ошибка не доходила до `isLoadingHome = false`.
@@ -196,7 +224,7 @@
     // Четыре независимых загрузки вместо одной цепочки: лента, локальные авторы, новые
     // релизы и данные десктопной оболочки больше не ждут друг друга и не тянут друг
     // друга за собой при ошибке.
-    loadFeed();
+    loadFeedAuto();
     loadSimilarArtists();
     loadNewReleases();
     loadDesktopInfo();
@@ -211,10 +239,10 @@
       const key = `${s.searchSource}:${s.yandexToken ? 'auth' : 'anon'}`;
       if (feedSource === null || feedSource === key) { feedSource = key; return; }
       feedSource = key;
-      loadFeed();
+      loadFeedAuto();
       loadNewReleases();
     });
-    const refreshLastFmTaste = () => void loadFeed();
+    const refreshLastFmTaste = () => void loadFeedAuto();
     window.addEventListener(LASTFM_TASTE_UPDATED_EVENT, refreshLastFmTaste);
 
     let lastNavTime = 0;

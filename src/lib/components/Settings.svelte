@@ -1,4 +1,6 @@
 <script lang="ts">
+  import PlaylistSyncSettings from './PlaylistSyncSettings.svelte';
+  import { playlistSyncStatus, syncPlaylists } from '$lib/playlistSync';
   import { settings, waveDisplayName, automaticPerformanceMode, playlists, listenStats, notify, dislikedTracks, currentView, activeLibraryTab, rebootCurrentTrack } from '$lib/stores';
   import { clearAllDislikes } from '$lib/dislikes';
   import {
@@ -52,7 +54,7 @@
     && '__TAURI_INTERNALS__' in window
     && /Win/i.test(navigator.platform);
   type SoundCloudBypassStatus = {
-    state: 'idle' | 'testing' | 'running' | 'watching' | 'waiting' | 'external' | 'direct' | 'failed' | 'stopped';
+    state: 'idle' | 'testing' | 'running' | 'watching' | 'waiting' | 'external' | 'direct' | 'failed' | 'stopped' | 'stopping';
     message: string;
     strategy: string;
     index: number;
@@ -63,6 +65,10 @@
     diagnosisMessage: string;
     diagnosisAt: number;
     autoEnabled: boolean;
+    /** Пошаговый отчёт подбора: что пробовали и чем это кончилось. */
+    report: string;
+    /** 'auto' или 'force' - режим последнего запуска. */
+    mode: string;
   };
   type SoundCloudConnectionTest = {
     reachable: boolean;
@@ -70,19 +76,23 @@
   };
   let soundCloudBypassStatus: SoundCloudBypassStatus = {
     state: 'idle', message: '', strategy: '', index: 0, total: 0, catalogCount: 0, catalogUpdatedAt: 0,
-    diagnosisState: '', diagnosisMessage: '', diagnosisAt: 0, autoEnabled: false
+    diagnosisState: '', diagnosisMessage: '', diagnosisAt: 0, autoEnabled: false, report: '', mode: ''
   };
   let soundCloudBypassBusy = false;
   let soundCloudConnectionBusy = false;
   let soundCloudConnection: SoundCloudConnectionTest | null = null;
+  let soundCloudReportOpen = false;
+  $: soundCloudBypassOn = $settings.soundcloudBypassEnabled !== false;
+  /** Идёт ли прямо сейчас работа, которую можно прервать. */
+  $: soundCloudBypassActive = ['testing', 'running', 'watching', 'waiting'].includes(soundCloudBypassStatus.state);
   $: soundCloudStatusTitle = ({
     idle: 'Обход не включён', testing: 'Подбираю стратегию', running: 'Обход работает',
     watching: 'SoundCloud отвечает', waiting: 'Ожидаю повторной проверки',
-    failed: 'Обход не запустился', stopped: 'Обход выключен',
+    failed: 'Обход не запустился', stopped: 'Обход выключен', stopping: 'Останавливаю',
     external: 'SoundCloud отвечает', direct: 'SoundCloud отвечает'
   } as Record<string, string>)[soundCloudBypassStatus.state] || 'Состояние обхода';
   $: soundCloudStatusTone = soundCloudBypassStatus.state === 'running' ? 'success'
-    : soundCloudBypassStatus.state === 'testing' || soundCloudBypassStatus.state === 'waiting' ? 'progress'
+    : soundCloudBypassStatus.state === 'testing' || soundCloudBypassStatus.state === 'waiting' || soundCloudBypassStatus.state === 'stopping' ? 'progress'
     : soundCloudBypassStatus.state === 'failed' ? 'error'
     : soundCloudBypassStatus.state === 'watching' ? 'ready' : 'idle';
 
@@ -109,13 +119,16 @@
   }
 
   async function toggleSoundCloudBypass() {
-    if (soundCloudBypassBusy || soundCloudConnectionBusy) return;
+    if (soundCloudBypassBusy) return;
     soundCloudBypassBusy = true;
     try {
-      if (['running', 'watching', 'waiting', 'testing'].includes(soundCloudBypassStatus.state)) {
+      if (soundCloudBypassActive || soundCloudBypassStatus.state === 'stopping') {
         await invoke('soundcloud_bypass_stop');
       } else {
-        await invoke('soundcloud_bypass_start');
+        // Принудительный режим передаётся при каждом запуске, а не запоминается на стороне
+        // Rust: переключатель рядом, и человек вправе поменять решение между попытками.
+        await invoke('soundcloud_bypass_start', { force: $settings.soundcloudBypassForce === true });
+        soundCloudReportOpen = true;
       }
       await refreshSoundCloudBypassStatus();
     } catch (error) {
@@ -123,6 +136,24 @@
       await refreshSoundCloudBypassStatus();
     } finally {
       soundCloudBypassBusy = false;
+    }
+  }
+
+  /**
+   * Главный выключатель раздела. Выключение обязано ещё и остановить то, что уже работает:
+   * иначе настройка говорила бы «выключено», пока в системе продолжает крутиться winws с
+   * правами администратора - ровно то расхождение, из-за которого таким переключателям
+   * перестают верить.
+   */
+  async function setSoundCloudBypassEnabled(value: boolean) {
+    $settings.soundcloudBypassEnabled = value;
+    if (value) return;
+    try {
+      await invoke('soundcloud_bypass_stop');
+      await refreshSoundCloudBypassStatus();
+      notify('Обход блокировки SoundCloud выключен полностью.', 'info');
+    } catch (error) {
+      notify(`Не удалось остановить обход: ${error}`, 'error');
     }
   }
   let dataPath = '';
@@ -386,7 +417,12 @@
     refreshOutputs();
     void refreshCacheStats();
     void refreshSoundCloudBypassStatus();
-    const bypassStatusTimer = setInterval(() => void refreshSoundCloudBypassStatus(), 1500);
+    // Опрос состояния идёт только при включённом разделе: выключенный обход ничего не
+    // меняет в файле статуса, и читать его дважды в секунду незачем.
+    const bypassStatusTimer = setInterval(() => {
+      if ($settings.soundcloudBypassEnabled === false) return;
+      void refreshSoundCloudBypassStatus();
+    }, 1500);
     return () => {
       clearInterval(bypassStatusTimer);
       window.removeEventListener('lomify:open-support', openSupportFromSidebar);
@@ -481,15 +517,7 @@
         try {
           const { importSoundCloudPlaylistByUrl } = await import('$lib/api');
           const pl = await importSoundCloudPlaylistByUrl(url);
-          playlists.update(existing => {
-            const idx = existing.findIndex(p => p.id === pl.id || (p.title === pl.title && String(p.id).startsWith('sc_playlist_')));
-            if (idx !== -1) {
-              const copy = [...existing];
-              copy[idx] = pl;
-              return copy;
-            }
-            return [pl, ...existing];
-          });
+          await saveImportedPlaylists([pl]);
           notify(`Плейлист «${pl.title}» импортирован (${withCount(pl.tracks.length, 'трек', 'трека', 'треков')}).`, 'success');
           scInputUrl = '';
         } catch (err: any) {
@@ -510,16 +538,8 @@
       $settings.scUser = user;
       notify('Профиль SoundCloud подключён.', 'success');
 
-      const userPlaylists = await getUserPlaylists(user.id);
-      if (userPlaylists.length > 0) {
-        playlists.update(p => {
-          const updatedMap = new Map(userPlaylists.map((up: any) => [up.id, up]));
-          const updatedExisting = p.map((existing: any) => updatedMap.get(existing.id) || existing);
-          const brandNew = userPlaylists.filter((up: any) => !p.some((existing: any) => existing.id === up.id));
-          return [...brandNew, ...updatedExisting];
-        });
-        notify(`Импортировано ${withCount(userPlaylists.length, 'плейлист', 'плейлиста', 'плейлистов')}.`, 'success');
-      }
+      const imported = await syncPlaylists('soundcloud');
+      notify(`Новых плейлистов: ${imported}.`, 'success');
 
       // Лайки тянет сверка, а не отдельный проход по списку. Она делает то же самое (берёт
       // из профиля то, чего здесь нет), но заодно заводит снимок, по которому дальше видно
@@ -553,19 +573,8 @@
     if (!$settings.scUser) return;
     scLoading = true;
     try {
-      const { getUserPlaylists } = await import('$lib/api');
-      const userPlaylists = await getUserPlaylists($settings.scUser.id);
-      if (userPlaylists.length > 0) {
-        playlists.update(p => {
-          const updatedMap = new Map(userPlaylists.map((up: any) => [up.id, up]));
-          const updatedExisting = p.map((existing: any) => updatedMap.get(existing.id) || existing);
-          const brandNew = userPlaylists.filter((up: any) => !p.some((existing: any) => existing.id === up.id));
-          return [...brandNew, ...updatedExisting];
-        });
-        notify(`Обновлено ${withCount(userPlaylists.length, 'плейлист', 'плейлиста', 'плейлистов')}.`, 'success');
-      } else {
-        notify('Плейлисты не найдены или уже актуальны.', 'info');
-      }
+      await syncPlaylists('soundcloud');
+      notify($playlistSyncStatus.soundcloud.error || 'Сверка плейлистов SoundCloud завершена.', $playlistSyncStatus.soundcloud.error ? 'error' : 'success');
     } catch (e) {
       notify('Не удалось обновить плейлисты SoundCloud. Попробуй ещё раз.', 'error');
     }
@@ -614,39 +623,10 @@
     ymPlaylistsLoading = true;
     ymPlaylistsProgress = 'Получаю список плейлистов...';
     try {
-      const summaries = await getYandexPlaylists($settings.yandexToken);
-      if (!summaries.length) {
-        notify('В аккаунте нет плейлистов для импорта.', 'info');
-        return;
-      }
-      const imported: any[] = [];
-      const failed: string[] = [];
-      let firstFailure = '';
-      for (let i = 0; i < summaries.length; i++) {
-        const summary = summaries[i];
-        ymPlaylistsProgress = `${i + 1} из ${summaries.length}: ${summary.title}`;
-        try {
-          imported.push(await importYandexPlaylist($settings.yandexToken, summary));
-        } catch (error) {
-          console.warn('[yandex] не удалось импортировать плейлист', summary.title, error);
-          failed.push(summary.title);
-          if (!firstFailure) firstFailure = error instanceof Error ? error.message : String(error);
-        }
-      }
-      if (imported.length) {
-        ymPlaylistsProgress = 'Сохраняю плейлисты...';
-        await tick();
-        await saveImportedPlaylists(imported);
-      }
-      if (imported.length === 0 && failed.length) {
-        notify(`Не удалось импортировать ни один плейлист (${failed.length}). ${firstFailure}`, 'error');
-      } else {
-        notify(`Импортировано ${withCount(imported.length, 'плейлист', 'плейлиста', 'плейлистов')}${failed.length ? `, не удалось: ${failed.length}` : ''}.`, failed.length ? 'info' : 'success');
-        if (imported.length) {
-          activeLibraryTab.set('playlists');
-          currentView.set('library');
-        }
-      }
+      const imported = await syncPlaylists('yandex');
+      notify($playlistSyncStatus.yandex.error || `Новых плейлистов: ${imported}. Подробности сверки показаны ниже.`, $playlistSyncStatus.yandex.error ? 'error' : 'success');
+      activeLibraryTab.set('playlists');
+      currentView.set('library');
     } catch (error: any) {
       notify(error?.message || 'Не удалось получить плейлисты Яндекс Музыки.', 'error');
     } finally {
@@ -874,7 +854,9 @@
     { id: 'martian-dust', name: 'Brick', color: '#ff7e5f' },
     { id: 'blood-moon', name: 'Wine', color: '#8a0303' },
     { id: 'electric-indigo', name: 'Space', color: '#6600ff' },
-    { id: 'dracula', name: 'Dracula', color: '#bd93f9' }
+    { id: 'dracula', name: 'Dracula', color: '#bd93f9' },
+    // Единственная тема со своей базой, а не только акцентом (см. app.css).
+    { id: 'obsidian', name: 'Obsidian', color: '#7dd3fc' }
   ];
 
   function clearLyricsCache() {
@@ -1513,58 +1495,140 @@
                 <div class="setting-hint">
                   После включения Lomify проверяет сбои воспроизведения треков SoundCloud, ищет сетевую причину и подбирает обход. Работающий сторонний Zapret не останавливается. Для своего обхода Windows запросит права администратора.
                 </div>
-                <div class="sc-bypass-status" data-tone={soundCloudStatusTone} role="status" aria-live="polite">
-                  <div class="sc-bypass-status-head">
-                    <span class="sc-bypass-status-dot" aria-hidden="true"></span>
-                    <strong>{soundCloudStatusTitle}</strong>
-                    {#if soundCloudBypassStatus.state === 'testing' && soundCloudBypassStatus.total > 0}
-                      <span class="sc-bypass-status-count">{soundCloudBypassStatus.index} из {soundCloudBypassStatus.total}</span>
+
+                {#if !soundCloudBypassOn}
+                  <div class="sc-bypass-status" data-tone="idle" role="status">
+                    <div class="sc-bypass-status-head">
+                      <span class="sc-bypass-status-dot" aria-hidden="true"></span>
+                      <strong>Раздел выключен</strong>
+                    </div>
+                    <p>Lomify не запускает обход, не подбирает стратегии и не запрашивает права администратора. Включите переключатель справа, если SoundCloud перестанет открываться.</p>
+                  </div>
+                {:else}
+                  <div class="sc-bypass-status" data-tone={soundCloudStatusTone} role="status" aria-live="polite">
+                    <div class="sc-bypass-status-head">
+                      <span class="sc-bypass-status-dot" aria-hidden="true"></span>
+                      <strong>{soundCloudStatusTitle}</strong>
+                      {#if soundCloudBypassStatus.state === 'testing' && soundCloudBypassStatus.total > 0}
+                        <span class="sc-bypass-status-count">{soundCloudBypassStatus.index} из {soundCloudBypassStatus.total}</span>
+                      {/if}
+                    </div>
+                    <p>{soundCloudBypassStatus.message || (soundCloudBypassStatus.autoEnabled ? 'Автоподбор включён. Проверю сеть, когда трек SoundCloud не запустится.' : 'Нажмите «Подобрать и включить», чтобы запустить проверку.')}</p>
+                    {#if soundCloudBypassStatus.strategy && soundCloudBypassStatus.strategy !== 'direct' && soundCloudBypassStatus.strategy !== 'external'}
+                      <div class="sc-bypass-strategy">Стратегия <strong>{soundCloudBypassStatus.strategy}</strong></div>
+                    {/if}
+                    {#if soundCloudBypassStatus.mode === 'force' && ['running', 'watching'].includes(soundCloudBypassStatus.state)}
+                      <div class="sc-bypass-strategy">Подбор был принудительным: SoundCloud открывался и без обхода, поэтому выбрана самая быстрая из проверенных стратегий, а не единственная работающая.</div>
+                    {/if}
+                    {#if soundCloudBypassStatus.diagnosisMessage}
+                      <div class="sc-bypass-diagnosis" data-kind={soundCloudBypassStatus.diagnosisState}>
+                        <strong>Проверка трека</strong>
+                        <span>{soundCloudBypassStatus.diagnosisMessage}</span>
+                      </div>
                     {/if}
                   </div>
-                  <p>{soundCloudBypassStatus.message || (soundCloudBypassStatus.autoEnabled ? 'Автоподбор включён. Проверю сеть, когда трек SoundCloud не запустится.' : 'Нажмите «Подобрать и включить», чтобы запустить проверку.')}</p>
-                  {#if soundCloudBypassStatus.strategy && soundCloudBypassStatus.strategy !== 'direct' && soundCloudBypassStatus.strategy !== 'external'}
-                    <div class="sc-bypass-strategy">Стратегия <strong>{soundCloudBypassStatus.strategy}</strong></div>
+
+                  <!-- Отчёт отвечает на вопрос «а что именно не получилось»: без него неудачный
+                       подбор выглядел как одна строка «стратегия не найдена». Свёрнут по
+                       умолчанию, потому что при удачном подборе читать его незачем. -->
+                  {#if soundCloudBypassStatus.report}
+                    <details class="sc-bypass-report" bind:open={soundCloudReportOpen}>
+                      <summary>Отчёт о подборе</summary>
+                      <pre>{soundCloudBypassStatus.report}</pre>
+                    </details>
                   {/if}
-                  {#if soundCloudBypassStatus.diagnosisMessage}
-                    <div class="sc-bypass-diagnosis" data-kind={soundCloudBypassStatus.diagnosisState}>
-                      <strong>Проверка трека</strong>
-                      <span>{soundCloudBypassStatus.diagnosisMessage}</span>
+
+                  {#if soundCloudBypassStatus.catalogCount > 0}
+                    <div class="setting-hint">Набор Flowseal: {soundCloudBypassStatus.catalogCount} стратегий, обновлён {new Date(soundCloudBypassStatus.catalogUpdatedAt * 1000).toLocaleString('ru-RU')}.</div>
+                  {/if}
+                  {#if soundCloudConnection}
+                    <div class="sc-bypass-test" data-tone={soundCloudConnection.reachable ? 'success' : 'error'} role="status">
+                      <strong>{soundCloudConnection.reachable ? 'Соединение с SoundCloud есть' : soundCloudConnection.checks.some(check => check.reachable) ? 'Соединение с SoundCloud работает не полностью' : 'SoundCloud недоступен'}</strong>
+                      <div class="sc-bypass-test-checks">
+                        {#each soundCloudConnection.checks as check}
+                          <span class:check-ok={check.reachable}>{check.service}: {check.reachable ? `доступен (${check.detail})` : check.detail}</span>
+                        {/each}
+                      </div>
+                      <div class="sc-bypass-test-note">Этот тест проверяет серверы. При сбое воспроизведения отдельно проверяется поток трека.</div>
                     </div>
                   {/if}
-                </div>
-                {#if soundCloudBypassStatus.catalogCount > 0}
-                  <div class="setting-hint">Набор Flowseal: {soundCloudBypassStatus.catalogCount} стратегий, обновлён {new Date(soundCloudBypassStatus.catalogUpdatedAt * 1000).toLocaleString('ru-RU')}.</div>
-                {/if}
-                {#if soundCloudConnection}
-                  <div class="sc-bypass-test" data-tone={soundCloudConnection.reachable ? 'success' : 'error'} role="status">
-                    <strong>{soundCloudConnection.reachable ? 'Соединение с SoundCloud есть' : soundCloudConnection.checks.some(check => check.reachable) ? 'Соединение с SoundCloud работает не полностью' : 'SoundCloud недоступен'}</strong>
-                    <div class="sc-bypass-test-checks">
-                      {#each soundCloudConnection.checks as check}
-                        <span class:check-ok={check.reachable}>{check.service}: {check.reachable ? `доступен (${check.detail})` : check.detail}</span>
-                      {/each}
+
+                  <div class="sc-bypass-options">
+                    <div class="sc-bypass-option">
+                      <div>
+                        <div class="setting-title !text-xs !mb-0.5">Подбирать, даже если SoundCloud открывается</div>
+                        <div class="setting-hint !text-[11px] !mt-0 text-neutral-400">
+                          Нужно, если у вас уже работает свой Zapret: тогда проверка доступа проходит всегда и обычный подбор просто ничего не делает. Приложение переберёт все стратегии, замерит время ответа и включит самую быструю. Какая из них помогает на самом деле, в этом режиме определить нельзя.
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-label="Подбирать, даже если SoundCloud открывается"
+                        aria-checked={$settings.soundcloudBypassForce === true}
+                        class="switch"
+                        on:click={() => $settings.soundcloudBypassForce = !($settings.soundcloudBypassForce === true)}
+                      >
+                        <span class="switch-knob"></span>
+                      </button>
                     </div>
-                    <div class="sc-bypass-test-note">Этот тест проверяет серверы. При сбое воспроизведения отдельно проверяется поток трека.</div>
+                    <div class="sc-bypass-option">
+                      <div>
+                        <div class="setting-title !text-xs !mb-0.5">Включать обход при запуске приложения</div>
+                        <div class="setting-hint !text-[11px] !mt-0 text-neutral-400">
+                          Обход поднимется сразу при старте Lomify, не дожидаясь первого сорванного трека. Windows будет запрашивать права администратора при каждом запуске приложения.
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-label="Включать обход при запуске приложения"
+                        aria-checked={$settings.soundcloudBypassAutoStart === true}
+                        class="switch"
+                        on:click={() => $settings.soundcloudBypassAutoStart = !($settings.soundcloudBypassAutoStart === true)}
+                      >
+                        <span class="switch-knob"></span>
+                      </button>
+                    </div>
                   </div>
+
+                  <div class="setting-hint">Новые стратегии Flowseal загружаются каждые 6 часов. Перехват ограничен IP SoundCloud; если другой Zapret тоже обрабатывает эти адреса, результат зависит от совместной работы фильтров.</div>
                 {/if}
-                <div class="setting-hint">Новые стратегии Flowseal загружаются каждые 6 часов. Перехват ограничен IP SoundCloud; если другой Zapret тоже обрабатывает эти адреса, результат зависит от совместной работы фильтров.</div>
               </div>
-              <div class="flex shrink-0 flex-col gap-2">
+              <div class="flex shrink-0 flex-col items-end gap-2">
                 <button
                   type="button"
-                  class="settings-action-button"
-                  disabled={soundCloudConnectionBusy || soundCloudBypassBusy || soundCloudBypassStatus.state === 'testing'}
-                  on:click={testSoundCloudConnection}
+                  role="switch"
+                  aria-label="Обход блокировки SoundCloud"
+                  aria-checked={soundCloudBypassOn}
+                  class="switch"
+                  on:click={() => void setSoundCloudBypassEnabled(!soundCloudBypassOn)}
                 >
-                  {soundCloudConnectionBusy ? 'Проверяю соединение...' : 'Тест соединения'}
+                  <span class="switch-knob"></span>
                 </button>
-                <button
-                  type="button"
-                  class="settings-action-button"
-                  disabled={soundCloudBypassBusy || soundCloudConnectionBusy}
-                  on:click={toggleSoundCloudBypass}
-                >
-                  {soundCloudBypassStatus.state === 'testing' ? 'Остановить подбор' : ['running', 'watching', 'waiting'].includes(soundCloudBypassStatus.state) ? 'Выключить' : 'Подобрать и включить'}
-                </button>
+                {#if soundCloudBypassOn}
+                  <button
+                    type="button"
+                    class="settings-action-button"
+                    disabled={soundCloudConnectionBusy || soundCloudBypassStatus.state === 'testing'}
+                    on:click={testSoundCloudConnection}
+                  >
+                    {soundCloudConnectionBusy ? 'Проверяю соединение...' : 'Тест соединения'}
+                  </button>
+                  <!-- Кнопка отмены намеренно не блокируется ожиданием запуска: именно это
+                       и делало отмену недоступной, пока Windows спрашивала про права. -->
+                  <button
+                    type="button"
+                    class="settings-action-button"
+                    disabled={soundCloudBypassStatus.state === 'stopping' || (soundCloudBypassBusy && !soundCloudBypassActive)}
+                    on:click={toggleSoundCloudBypass}
+                  >
+                    {soundCloudBypassStatus.state === 'testing' ? 'Отменить подбор'
+                      : soundCloudBypassStatus.state === 'stopping' ? 'Останавливаю...'
+                      : ['running', 'watching', 'waiting'].includes(soundCloudBypassStatus.state) ? 'Выключить'
+                      : $settings.soundcloudBypassForce === true ? 'Перебрать все стратегии' : 'Подобрать и включить'}
+                  </button>
+                {/if}
               </div>
             </div>
           {/if}
@@ -1648,6 +1712,7 @@
                   <button type="button" class="is-danger" on:click={() => $settings.scUser = null}>Отвязать</button>
                 </div>
               </div>
+              <PlaylistSyncSettings provider="soundcloud" />
               <p class="provider-import-note">
                 Лайки обновляются при запуске приложения. Изменения из Lomify не отправляются
                 обратно в SoundCloud, потому что публичный профиль не даёт такого доступа.
@@ -1774,6 +1839,7 @@
                 </button>
                 {#if ymPlaylistsProgress}<span class="provider-import-note" role="status">{ymPlaylistsProgress}</span>{/if}
               </div>
+              <PlaylistSyncSettings provider="yandex" />
             </div>
           {:else}
             <div class="provider-import-body">

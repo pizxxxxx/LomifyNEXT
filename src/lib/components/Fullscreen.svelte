@@ -24,7 +24,14 @@
   let vizGrad: CanvasGradient | null = null;
   let vizGradKey = '';
 
-  let showLyrics = $settings.showLyricsByDefault ?? true;
+  /**
+   * Панель текста закрыта на входе, даже когда настройка «показывать сразу» включена.
+   * Разворачивает её реактивное правило ниже - и только после того, как текст реально
+   * нашёлся. Раньше здесь стояло `$settings.showLyricsByDefault`, и панель открывалась
+   * до ответа баз: на треке без текста человек попадал в пустую половину экрана и закрывал
+   * её руками на каждом втором треке. Настройка обещает текст, а не место под текст.
+   */
+  let showLyrics = false;
   let showSettings = false;
   let activeModule: 'spatial' | 'lyrics' | 'adlibs' | 'speed' | 'layout' | null = null;
 
@@ -184,9 +191,31 @@
         ? 'Ищу текст...'
         : 'Показать текст';
 
+  /**
+   * Автооткрытие текста по настройке. Условие ровно одно: текст подтверждён (`found`).
+   * `loading` и `unknown` не считаются - на них ответ ещё неизвестен, а `none` означает,
+   * что открывать нечего.
+   *
+   * `lyricsTouched` ставит ручной выбор выше настройки: закрыл панель на этом треке - она
+   * не откроется обратно сама. Флаг снимается на смене трека, поэтому на следующем треке
+   * настройка снова работает, а не остаётся выключенной до конца сеанса.
+   */
+  let lyricsTouched = false;
+  let lyricsAutoTrack: unknown = null;
+
+  $: if ($currentTrack !== lyricsAutoTrack) {
+    lyricsAutoTrack = $currentTrack;
+    lyricsTouched = false;
+  }
+
+  $: if (!showLyrics && !lyricsTouched && $settings.showLyricsByDefault && $lyricsStatus === 'found') {
+    showLyrics = true;
+  }
+
   /** Переключить текст, если его есть что показывать. */
   function toggleLyrics() {
     if (noLyrics) return;
+    lyricsTouched = true;
     showLyrics = !showLyrics;
   }
 

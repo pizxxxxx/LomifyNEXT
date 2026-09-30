@@ -362,6 +362,27 @@ body[data-lyrics-font="rubik"] {
   --color-primary: #b00000; /* Bordeaux */
 }
 
+/* ── «Обсидиан» ─────────────────────────────────────────────────────────────
+   Единственная тема, которая трогает не только акцент, но и саму базу: чернильный
+   фон вместо угольного и холодный стальной акцент. Остальные темы по устройству -
+   одна переменная оттенка, и на глаз они отличаются только цветом кнопок.
+
+   Объявлено через `html body[data-theme="obsidian"]` (0,2,1), а не `[data-theme=...]`
+   (0,1,0): иначе `body[data-global-theme="true"]` ниже перебивал бы базу обратно, и
+   тема выглядела бы сломанной при включённой «глубине темы». Вторым правилом эта
+   пара восстанавливается - подмешивание акцента в фон остаётся рабочим, просто
+   считается от чернильной базы. */
+html body[data-theme="obsidian"] {
+  --color-primary: #7dd3fc;
+  --color-dark: #04060b;
+  --color-dark-gradient: #101722;
+}
+
+html body[data-theme="obsidian"][data-global-theme="true"] {
+  --color-dark: color-mix(in srgb, #04060b 92%, var(--color-primary));
+  --color-dark-gradient: color-mix(in srgb, #101722 85%, var(--color-primary));
+}
+
 body[data-global-theme="true"] {
   --color-dark: color-mix(in srgb, #0a0a0c 92%, var(--color-primary));
   --color-dark-gradient: color-mix(in srgb, #1d1d1f 85%, var(--color-primary));
@@ -593,9 +614,56 @@ html, body {
 .sc-bypass-test-checks span.check-ok { color: #93dfb2; }
 .sc-bypass-test-note { margin-top: 8px; color: rgba(255, 255, 255, 0.48); }
 
+/* ── Отчёт о подборе и подпереключатели обхода ──────────────────────────────
+   Отчёт приходит из PowerShell готовым многострочным текстом, поэтому живёт в
+   `pre`: переносить его по словам нельзя, порядок строк и есть смысл. Свёрнутый
+   `details` держит длинный лог настроек вне поля зрения, пока он не нужен. */
+.sc-bypass-report {
+  margin-top: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(8, 10, 17, 0.6);
+}
+.sc-bypass-report > summary {
+  padding: 9px 13px;
+  color: rgba(255, 255, 255, 0.66);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+.sc-bypass-report > summary::-webkit-details-marker { display: none; }
+.sc-bypass-report > summary::before { content: '▸ '; color: rgba(255, 255, 255, 0.42); }
+.sc-bypass-report[open] > summary::before { content: '▾ '; }
+.sc-bypass-report > summary:hover { color: rgba(255, 255, 255, 0.86); }
+.sc-bypass-report pre {
+  max-height: 210px;
+  margin: 0;
+  padding: 0 13px 12px;
+  overflow: auto;
+  color: rgba(255, 255, 255, 0.62);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.sc-bypass-options { display: grid; gap: 12px; margin-top: 14px; }
+.sc-bypass-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 11px 13px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.022);
+}
+.sc-bypass-option > div:first-child { min-width: 0; flex: 1 1 auto; }
+
 @media (max-width: 650px) {
   .sc-bypass-row { align-items: stretch; flex-direction: column; }
-  .sc-bypass-row > div:last-child { flex-direction: row; flex-wrap: wrap; }
+  .sc-bypass-row > div:last-child { align-items: stretch; flex-direction: row; flex-wrap: wrap; }
 }
 
 /* ── Кастомные кнопки окна ──────────────────────────────────────────────────
@@ -2506,6 +2574,23 @@ textarea:focus-visible,
 .interactive-item:active::before,
 .interactive-item:active::after {
   opacity: 1;
+}
+
+/* Плитка треков из вдавливания исключена, и это исправление попаданий, а не вкуса.
+   Усадка по Z считается от точки нажатия и уменьшает всю карточку вместе с её кнопками
+   ровно в момент `mousedown`. На плитке кнопки маленькие и стоят вплотную: кнопка,
+   на которую человек нажал, успевала уехать из-под курсора, `mouseup` приходил уже в
+   соседнюю, и браузер отдавал клик их общему предку. Отсюда и ощущение, что попадание
+   «съезжает куда-то в середину».
+
+   Отклик на нажатие остаётся, но живёт в свете обложки, а не в геометрии: яркость не
+   двигает ни одного хитбокса. */
+.track-tile.interactive-item:active {
+  transform: none;
+}
+
+.track-tile.interactive-item:active .tile-cover-image {
+  filter: brightness(0.92);
 }
 
 /* ── Строка трека ────────────────────────────────────────────────────────────
@@ -4855,11 +4940,19 @@ body[data-perf="light"] .lyrics-backdrop-callout.is-departing {
    for it, and the artwork gets the depth (shadow + hairline) instead of the text. */
 .track-tile {
   isolation: isolate;
-  /* Карточки независимы по геометрии и стилям. Chromium не рендерит карточки далеко
-     за пределами экрана (content-visibility: auto), не сжигая память GPU и циклы отрисовки.
-     contain-intrinsic-size держит расчетный размер, чтобы полоса прокрутки не прыгала. */
-  content-visibility: auto;
-  contain-intrinsic-size: auto 240px;
+  /* Здесь НЕТ `content-visibility: auto` — и это осознанно, а не забыли.
+     Карточка сетки — квадратная обложка плюс две строки текста, то есть её высота равна
+     ширине колонки (`minmax(168px, 1fr)`, то есть от 168px до ~250px) плюс ~52px метаданных.
+     Ни одно фиксированное `contain-intrinsic-size` под такую карточку не подходит: при 240px
+     заглушка совпадает с реальной высотой ровно на одной ширине окна, а на любой другой
+     промахивается на десятки пикселей. Пока строка «пропущена», сетка считает её по заглушке;
+     как только строка доезжает до экрана, высота меняется — и все карточки ниже съезжают.
+     Отрисованная картинка и дерево попаданий при этом расходятся на кадр и больше, поэтому
+     курсор стоял в центре карточки, а клик уходил в нижнюю панель действий (или вовсе в
+     соседнюю карточку — отсюда и «трек сам удаляется из лайков»). Смена вкладки чинила это
+     только потому, что вызывала полную переверстку.
+     Экономия при этом и не нужна: сетка лайков рендерится порциями (`rowBudget`/`visibleLiked`
+     в Library.svelte), а обложки грузятся через `loading="lazy"`. */
   contain: layout style;
   min-width: 0;
   padding: 0.5rem 0.5rem 0.65rem;
@@ -4907,6 +5000,9 @@ body[data-perf="light"] .lyrics-backdrop-callout.is-departing {
   transition: transform 240ms var(--ease-out);
 }
 
+/* Слой затемнения ничего не нажимает сам: он только рисует. Пока у него были обычные
+   события указателя, клик по обложке приходил в него, а не в плитку, и вся геометрия
+   попаданий зависела от того, какой прозрачный прямоугольник оказался сверху. */
 .tile-cover-overlay {
   position: absolute;
   inset: 0;
@@ -4918,6 +5014,7 @@ body[data-perf="light"] .lyrics-backdrop-callout.is-departing {
     radial-gradient(circle at 50% 55%, rgba(0, 0, 0, 0.04), rgba(0, 0, 0, 0.48) 78%),
     linear-gradient(180deg, rgba(6, 7, 10, 0.08), rgba(6, 7, 10, 0.3));
   opacity: 0;
+  pointer-events: none;
   transition: opacity 180ms var(--ease-out);
 }
 
@@ -4935,6 +5032,11 @@ body[data-perf="light"] .lyrics-backdrop-callout.is-departing {
   box-shadow: 0 12px 28px -10px rgba(0, 0, 0, 0.8),
               0 0 24px -8px color-mix(in srgb, var(--color-primary) 70%, transparent);
   opacity: 0;
+  /* Невидимая кнопка не должна ловить нажатия. Пока этого не было, нижняя треть
+     обложки и её правый верхний угол оставались кнопками «скачать», «убрать из
+     любимых» и «пауза» даже тогда, когда на экране их не было: человек целился в
+     обложку, а попадал в действие, которого не видел. */
+  pointer-events: none;
   transform: translate3d(0, 8px, 0) scale(0.96);
   transition: transform 180ms var(--ease-out), opacity 160ms var(--ease-out);
 }
@@ -4960,6 +5062,7 @@ body[data-perf="light"] .lyrics-backdrop-callout.is-departing {
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   opacity: 0;
+  pointer-events: none;
   transform: translate3d(0, 6px, 0);
   transition: transform 180ms var(--ease-out),
               opacity 160ms var(--ease-out),
@@ -4969,6 +5072,7 @@ body[data-perf="light"] .lyrics-backdrop-callout.is-departing {
 .tile-like-button.is-liked {
   color: var(--color-primary);
   opacity: 1;
+  pointer-events: auto;
   transform: translate3d(0, 0, 0);
 }
 
@@ -5003,6 +5107,7 @@ body[data-perf="light"] .lyrics-backdrop-callout.is-departing {
   .track-tile:hover .tile-play-button,
   .track-tile:hover .tile-like-button {
     opacity: 1;
+    pointer-events: auto;
     transform: translate3d(0, 0, 0) scale(1);
   }
 }
@@ -5329,10 +5434,12 @@ body[data-perf="light"] .lyrics-backdrop-callout.is-departing {
   display: none !important;
 }
 
+/* Меню плейлистов раскрывается за границы карточки, поэтому на время открытия снимаем
+   и `contain`, и обрезку. `content-visibility` у карточек больше нет (см. `.track-tile`),
+   отменять его здесь нечего. */
 .library-track-tile.has-open-menu,
 .track-tile.has-open-menu {
   z-index: 100 !important;
-  content-visibility: visible;
   contain: none !important;
   overflow: visible !important;
 }
@@ -5392,6 +5499,15 @@ body[data-perf="light"] .lyrics-backdrop-callout.is-departing {
   -webkit-backdrop-filter: blur(10px);
 }
 
+/* Панель действий занимает нижнюю треть обложки. Два свойства здесь важнее вида:
+   `pointer-events` и неподвижность.
+
+   1. Пока панель просто гасла по прозрачности, её кнопки продолжали принимать нажатия.
+      Невидимое сердце «убрать из любимых» лежало ровно там, куда человек целится, чтобы
+      включить трек, и один промах молча выкидывал трек из любимых.
+   2. Панель въезжала снизу на 7px за 190 мс. Всё это время видимая кнопка и её область
+      нажатия находились в разных местах: нажатие уходило соседу. Появление оставлено
+      только по прозрачности - область нажатия теперь неподвижна с первого кадра. */
 .library-tile-actions {
   position: absolute;
   right: 0.35rem;
@@ -5410,8 +5526,8 @@ body[data-perf="light"] .lyrics-backdrop-callout.is-departing {
   -webkit-backdrop-filter: blur(14px) saturate(125%);
   box-shadow: 0 10px 24px -14px rgba(0, 0, 0, 0.92);
   opacity: 0;
-  transform: translate3d(0, 7px, 0);
-  transition: opacity 160ms var(--ease-out), transform 190ms var(--ease-out);
+  pointer-events: none;
+  transition: opacity 160ms var(--ease-out);
 }
 
 .library-tile-actions.has-export {
@@ -5553,6 +5669,7 @@ body[data-perf="light"] .lyrics-backdrop-callout.is-departing {
 .library-track-tile:focus-within .library-tile-actions,
 .library-track-tile.has-open-menu .library-tile-actions {
   opacity: 1;
+  pointer-events: auto;
   transform: translate3d(0, 0, 0);
 }
 
@@ -5604,6 +5721,7 @@ body[data-perf="light"] .lyrics-backdrop-callout.is-departing {
 @media (hover: none) {
   .library-tile-actions {
     opacity: 1;
+    pointer-events: auto;
     transform: none;
   }
 
@@ -5613,6 +5731,7 @@ body[data-perf="light"] .lyrics-backdrop-callout.is-departing {
 
   .library-track-tile .tile-play-button {
     opacity: 1;
+    pointer-events: auto;
     transform: none;
   }
 }

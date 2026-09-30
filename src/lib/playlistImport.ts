@@ -18,6 +18,13 @@ export async function importLinkedPlaylist(urlText: string, yandexToken: string)
 
 export async function saveImportedPlaylists(imported: any[]): Promise<void> {
   await playlistsReady;
+  try {
+    const key = 'lomifynext_playlist_sync_excluded';
+    const value = JSON.parse(localStorage.getItem(key) || '[]');
+    const ids = new Set(imported.map(item => String(item.id)));
+    if (Array.isArray(value)) localStorage.setItem(key, JSON.stringify(value.filter(entry =>
+      typeof entry === 'string' && !ids.has(entry.split(':').slice(2).join(':')))));
+  } catch { /* Import still works if exclusions have not been stored. */ }
   playlists.update(existing => {
     const updated = dedupePlaylists(existing);
     let newCount = 0;
@@ -25,6 +32,7 @@ export async function saveImportedPlaylists(imported: any[]): Promise<void> {
       const key = playlistIdentity(playlist);
       const index = key ? updated.findIndex(item => playlistIdentity(item) === key) : -1;
       if (index >= 0) {
+        if (updated[index].sync) continue;
         const customCoverUrl = updated[index].customCoverUrl;
         updated[index] = customCoverUrl ? { ...playlist, customCoverUrl } : playlist;
       }

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { notifications } from '$lib/stores';
+  import { notifications, dismissNotification } from '$lib/stores';
   import { CheckCircle2, AlertCircle, Info } from 'lucide-svelte';
   import { fly } from 'svelte/transition';
   import { cubicOut, cubicIn } from 'svelte/easing';
@@ -45,6 +45,48 @@
         <Info size={18} class="text-blue-400" />
       {/if}
       <span class="text-sm font-medium text-white">{notification.message}</span>
+      {#if notification.action}
+        <!-- Кнопка стоит справа и уводит плашку сразу после нажатия: отмена либо сработала,
+             либо нет, и висящая плашка про это уже ничего не сообщает. -->
+        <button
+          type="button"
+          class="notification-action"
+          on:click={() => {
+            notification.action?.run();
+            dismissNotification(notification.id);
+          }}
+        >
+          {notification.action.label}
+        </button>
+      {/if}
     </div>
   {/each}
 </div>
+
+<style>
+  .notification-action {
+    margin-left: auto;
+    flex-shrink: 0;
+    padding: 0.25rem 0.625rem;
+    border-radius: 0.625rem;
+    border: 1px solid color-mix(in srgb, var(--color-primary) 45%, transparent);
+    background: color-mix(in srgb, var(--color-primary) 16%, transparent);
+    color: #fff;
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1.2;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 140ms var(--ease-out), border-color 140ms var(--ease-out);
+  }
+
+  .notification-action:hover {
+    background: color-mix(in srgb, var(--color-primary) 30%, transparent);
+    border-color: color-mix(in srgb, var(--color-primary) 70%, transparent);
+  }
+
+  .notification-action:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+</style>

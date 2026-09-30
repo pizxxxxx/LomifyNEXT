@@ -59,6 +59,8 @@ const defaultSettings = {
    */
   crossPlatformSync: true,
   yandexToken: '', // OAuth token for Yandex Music
+  syncYandexPlaylists: false,
+  syncSoundCloudPlaylists: false,
   // Кто привязан. Лежит рядом с токеном, чтобы настройки показывали аккаунт сразу, не
   // дёргая /account/status при каждом открытии — сеть тут только для проверки при вводе.
   // `avatarUrl` необязателен: у аккаунтов, привязанных до его появления, поля в сохранённых
@@ -183,6 +185,32 @@ const defaultSettings = {
   showStartupNotice: true,
   /** Автоматическая проверка обновлений при запуске и в фоне во время работы (по умолчанию включено). */
   autoCheckUpdates: true,
+  /**
+   * Показывать и использовать встроенный обход блокировки SoundCloud.
+   *
+   * Выключатель нужен тем, у кого сеть и так в порядке или уже настроена своими средствами:
+   * при `false` раздел в настройках свёрнут до одного переключателя, фоновый подбор не
+   * запускается, а уже работающий обход останавливается. Читается как `!== false`, поэтому
+   * в старых сохранённых настройках без ключа раздел остаётся на месте.
+   */
+  soundcloudBypassEnabled: true,
+  /**
+   * Поднимать обход сразу при запуске приложения, не дожидаясь первого сорванного трека.
+   *
+   * По умолчанию выключено, и это не осторожность ради осторожности: запуск требует прав
+   * администратора, то есть системного окна подтверждения при каждом старте приложения.
+   * Такое можно включать только осознанно.
+   */
+  soundcloudBypassAutoStart: false,
+  /**
+   * Перебирать стратегии даже тогда, когда SoundCloud открывается сам.
+   *
+   * Нужно при уже работающем стороннем Zapret: проверка доступа в таком случае проходит
+   * всегда, обычный режим отвечает «всё в порядке» и ничего не подбирает. Подтвердить, что
+   * помогает именно выбранная стратегия, в этом режиме нельзя - приложение об этом прямо
+   * говорит и выбирает самую быструю из проверенных.
+   */
+  soundcloudBypassForce: false,
   showLyricsByDefault: false,
   enableHoverPreview: true,
   hoverPreviewDelay: 1000,
@@ -498,13 +526,28 @@ export async function flushPlaylistStorage(): Promise<void> {
 }
 
 // Notifications
-export const notifications = writable<{id: number, message: string, type: 'success'|'info'|'error'}[]>([]);
-export function notify(message: string, type: 'success'|'info'|'error' = 'info') {
+/**
+ * Необязательная кнопка в плашке. Нужна там, где действие уже произошло и единственный
+ * честный выход - дать его отменить на месте: человек не должен искать по интерфейсу, как
+ * вернуть то, что он снял случайным нажатием.
+ */
+export type NotificationAction = { label: string; run: () => void };
+
+export const notifications = writable<{id: number, message: string, type: 'success'|'info'|'error', action?: NotificationAction}[]>([]);
+
+export function dismissNotification(id: number) {
+  notifications.update(n => n.filter(x => x.id !== id));
+}
+
+export function notify(message: string, type: 'success'|'info'|'error' = 'info', action?: NotificationAction) {
   const id = Date.now() + Math.random();
-  notifications.update(n => [...n, { id, message, type }]);
+  notifications.update(n => [...n, { id, message, type, action }]);
+  // Плашка без кнопки живёт три секунды - этого хватает, чтобы её прочитать. Плашку с
+  // кнопкой за то же время нужно ещё и заметить, довести до неё курсор и нажать, поэтому
+  // ей даётся вдвое больше времени.
   setTimeout(() => {
     notifications.update(n => n.filter(x => x.id !== id));
-  }, 3000);
+  }, action ? 7000 : 3000);
 }
 export const currentArtist = writable<string>('');
 export const searchQuery = writable('');

@@ -705,6 +705,9 @@
 
   function reportSoundCloudPlaybackFailure(track: any, phase: 'resolve' | 'stream', url: string | null, error: unknown) {
     if (track?.source !== 'soundcloud') return;
+    // Раздел настроек выключен - значит выключен целиком: ни проверки сети, ни запроса прав
+    // администратора за спиной у человека, который эту галку снял.
+    if ($settings.soundcloudBypassEnabled === false) return;
     if (url) {
       try {
         const host = new URL(url).hostname.toLowerCase();

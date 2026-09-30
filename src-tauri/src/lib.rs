@@ -310,6 +310,7 @@ pub fn run() {
             network::soundcloud_bypass::soundcloud_bypass_status,
             network::soundcloud_bypass::soundcloud_bypass_test_connection,
             network::soundcloud_bypass::soundcloud_bypass_report_playback_failure,
+            network::soundcloud_bypass::soundcloud_bypass_strategy_options,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {

@@ -1717,6 +1717,62 @@ export async function resolveSoundCloudProfile(profileUrl: string) {
   return null;
 }
 
+
+
+/** Complete public snapshots for sync. A failed page never masquerades as an empty library. */
+export async function getSoundCloudSyncPlaylists(userId: number): Promise<any[]> {
+  const clientId = await getSoundCloudClientId();
+  let url: string | null = `https://api-v2.soundcloud.com/users/${userId}/playlists?client_id=${clientId}&limit=50&representation=full`;
+  const result: any[] = [];
+  const seen = new Set<string>();
+  for (let page = 0; url && page < 100; page++) {
+    const endpoint = new URL(url);
+    if (endpoint.protocol !== 'https:' || endpoint.hostname !== 'api-v2.soundcloud.com') throw new Error('SoundCloud вернул неизвестный адрес списка.');
+    endpoint.searchParams.set('client_id', clientId);
+    if (seen.has(endpoint.href)) throw new Error('SoundCloud повторяет страницу списка. Повтори позже.');
+    seen.add(endpoint.href);
+    const response = await safeFetch(endpoint.href, { method: 'GET' });
+    if (!response.ok) throw new Error('Не удалось обновить плейлисты SoundCloud. Проверь соединение и повтори.');
+    const data = await response.json();
+    const collection = Array.isArray(data) ? data : data.collection;
+    if (!Array.isArray(collection)) throw new Error('SoundCloud вернул неполный список плейлистов.');
+    for (let item of collection) {
+      if (!item.id || !item.title) throw new Error('SoundCloud вернул неполные сведения о плейлисте.');
+      if (!Array.isArray(item.tracks) || item.tracks.length !== Number(item.track_count ?? item.tracks.length)) {
+        const detail = await safeFetch(`https://api-v2.soundcloud.com/playlists/${item.id}?client_id=${clientId}&representation=full`, { method: 'GET' });
+        if (!detail.ok) throw new Error('Не удалось загрузить все треки SoundCloud. Местная копия сохранена.');
+        item = await detail.json();
+      }
+      if (!Array.isArray(item.tracks) || item.tracks.length !== Number(item.track_count ?? item.tracks.length)) throw new Error('Загрузились не все треки SoundCloud. Местная копия сохранена.');
+      const hydrated = new Map<string, any>();
+      const missing = item.tracks.filter((track: any) => !track.title).map((track: any) => track.id);
+      for (let start = 0; start < missing.length; start += 50) {
+        const response = await safeFetch(`https://api-v2.soundcloud.com/tracks?ids=${missing.slice(start, start + 50).join(',')}&client_id=${clientId}`, { method: 'GET' });
+        if (!response.ok) throw new Error('Не удалось обновить сведения о треках SoundCloud.');
+        const tracks = await response.json();
+        if (!Array.isArray(tracks)) throw new Error('SoundCloud вернул неполные сведения о треках.');
+        for (const track of tracks) hydrated.set(String(track.id), track);
+      }
+      const tracks = item.tracks.map((raw: any) => {
+        const track = hydrated.get(String(raw.id)) || raw;
+        if (!track.id) throw new Error('SoundCloud не сообщил номер трека. Местная копия сохранена.');
+        return { id: track.id, title: track.title || 'Недоступный трек',
+          artist: track.user?.username || '', source: 'soundcloud',
+          coverUrl: (track.artwork_url || item.artwork_url || '').replace('large', 't500x500'),
+          permalinkUrl: track.permalink_url || '', duration: track.duration || 0,
+          audioUrl: findBestTranscoding(track.media),
+          transcodings: track.media?.transcodings?.map((entry: any) => `${entry.url}?client_id=${clientId}`) || [],
+          unavailable: !track.title };
+      });
+      result.push({ id: `sc_playlist_${item.id}`, title: item.title, tracks,
+        coverUrl: (item.artwork_url || '').replace('large', 't500x500') || tracks[0]?.coverUrl || '' });
+    }
+    url = typeof data.next_href === 'string' && data.next_href ? data.next_href : null;
+  }
+  if (url) throw new Error('Список SoundCloud слишком большой для одной сверки. Местные плейлисты сохранены.');
+  return result;
+}
+
 export async function getUserPlaylists(userId: number) {
   try {
     const clientId = await getSoundCloudClientId();

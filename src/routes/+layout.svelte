@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { startPlaylistSync } from '$lib/playlistSync';
   import '../app.css';
   import { settings, initStore, currentTrack, isPlaying, effectivePerformanceMode } from '$lib/stores';
   import { get } from 'svelte/store';
@@ -45,6 +46,7 @@
   let likesSyncTask: ReturnType<typeof setTimeout> | null = null;
   let likesSyncInterval: ReturnType<typeof setInterval> | null = null;
   let cacheCleanupTask: ReturnType<typeof setTimeout> | null = null;
+  let bypassAutoStartTask: ReturnType<typeof setTimeout> | null = null;
   let updateCheckInterval: ReturnType<typeof setInterval> | null = null;
   let onWindowFocusUpdateCheck: (() => void) | null = null;
   let lastLikesSyncAt = 0;
@@ -188,6 +190,7 @@
 
   onMount(() => {
     initStore();
+    const releasePlaylistSync = startPlaylistSync();
     const initialSettings = get(settings);
     if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
       import('@tauri-apps/api/core').then(({ invoke }) => {
@@ -292,6 +295,26 @@
         });
       }, 6000);
 
+      // Обход блокировки SoundCloud при запуске - только по явному выбору в настройках:
+      // за ним стоит запрос прав администратора, а окно Windows поверх первого экрана без
+      // просьбы человека выглядит как поведение зловреда, а не музыкального плеера.
+      //
+      // Через три секунды, а не сразу: в первую секунду поднимается главная, и окно UAC
+      // перехватило бы фокус ровно на отрисовке полок. Повторный запуск при уже работающем
+      // обходе безопасен - Rust видит свой статус и не поднимает второй winws.
+      if (
+        initialSettings.soundcloudBypassEnabled !== false &&
+        initialSettings.soundcloudBypassAutoStart === true
+      ) {
+        bypassAutoStartTask = setTimeout(() => {
+          import('@tauri-apps/api/core').then(({ invoke }) => {
+            invoke('soundcloud_bypass_start', {
+              force: initialSettings.soundcloudBypassForce === true
+            }).catch((e) => console.warn('[soundcloud] автозапуск обхода не удался', e));
+          });
+        }, 3000);
+      }
+
       // Яндекс не присылает push-событие о лайке, поставленном на другом устройстве, поэтому
       // держим лёгкую фоновую сверку. Она не чаще раза в минуту, не работает без токена и
       // дополнительно срабатывает при возврате фокуса в окно.
@@ -359,6 +382,7 @@
     }
 
     return () => {
+      releasePlaylistSync();
       downloadedCoversDisposed = true;
       releaseDownloadedCovers?.();
       releaseDevLock();
@@ -369,6 +393,7 @@
       if (likesSyncTask !== null) clearTimeout(likesSyncTask);
       if (likesSyncInterval !== null) clearInterval(likesSyncInterval);
       if (cacheCleanupTask !== null) clearTimeout(cacheCleanupTask);
+      if (bypassAutoStartTask !== null) clearTimeout(bypassAutoStartTask);
       if (updateCheckInterval !== null) clearInterval(updateCheckInterval);
       if (onWindowFocusUpdateCheck !== null) {
         window.removeEventListener('focus', onWindowFocusUpdateCheck);

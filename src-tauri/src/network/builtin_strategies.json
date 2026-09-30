@@ -1,0 +1,44 @@
+[
+  {
+    "name": "fake",
+    "scope": "host",
+    "desc": "подставляю обманный первый пакет рукопожатия",
+    "args": ["--dpi-desync=fake", "--dpi-desync-fooling=badseq", "--dpi-desync-repeats=6"]
+  },
+  {
+    "name": "multisplit",
+    "scope": "host",
+    "desc": "разрезаю рукопожатие на несколько частей",
+    "args": ["--dpi-desync=multisplit", "--dpi-desync-split-pos=1,midsld"]
+  },
+  {
+    "name": "fake + multisplit",
+    "scope": "host",
+    "desc": "обманный пакет вместе с разрезанием",
+    "args": ["--dpi-desync=fake,multisplit", "--dpi-desync-repeats=6", "--dpi-desync-split-pos=1,midsld"]
+  },
+  {
+    "name": "multidisorder",
+    "scope": "host",
+    "desc": "разрезаю рукопожатие и отправляю части не по порядку",
+    "args": ["--dpi-desync=fake,multidisorder", "--dpi-desync-split-pos=midsld", "--dpi-desync-repeats=6", "--dpi-desync-fooling=badseq,md5sig"]
+  },
+  {
+    "name": "hostfakesplit",
+    "scope": "host",
+    "desc": "разрезаю имя сайта внутри рукопожатия",
+    "args": ["--dpi-desync=hostfakesplit", "--dpi-desync-hostfakesplit-midhost=midsld"]
+  },
+  {
+    "name": "syndata",
+    "scope": "ip",
+    "desc": "подмешиваю данные в первый пакет соединения",
+    "args": ["--dpi-desync=syndata"]
+  },
+  {
+    "name": "syndata + fake",
+    "scope": "ip",
+    "desc": "данные в первом пакете и обманный пакет",
+    "args": ["--dpi-desync=syndata,fake", "--dpi-desync-repeats=6"]
+  }
+]

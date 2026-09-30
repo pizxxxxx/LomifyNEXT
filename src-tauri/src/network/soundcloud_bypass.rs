@@ -31,6 +31,15 @@ pub struct BypassStatus {
     pub diagnosis_at: u64,
     #[serde(default, rename = "autoEnabled")]
     pub auto_enabled: bool,
+    /// Пошаговый отчёт подбора от PowerShell: что пробовали и чем это кончилось. Короткое
+    /// `message` отвечает на вопрос «что сейчас», а отчёт — на «почему так вышло»; без него
+    /// неудачный подбор выглядел как одна строка «стратегия не найдена» без причин.
+    #[serde(default)]
+    pub report: String,
+    /// `auto` или `force` — режим последнего запуска. Нужен интерфейсу, чтобы не выдавать
+    /// результат принудительного подбора за доказанный.
+    #[serde(default)]
+    pub mode: String,
 }
 
 impl BypassStatus {
@@ -48,8 +57,86 @@ impl BypassStatus {
             diagnosis_message: String::new(),
             diagnosis_at: 0,
             auto_enabled: false,
+            report: String::new(),
+            mode: String::new(),
         }
     }
+}
+
+/// Встроенные стратегии описаны одним файлом и вшиты в приложение на сборке. Раньше тот же
+/// список лежал ещё и в PowerShell, и любое расхождение между ними означало бы, что человек
+/// выбирает в списке одно, а запускается другое. Скрипт получает этот список от приложения
+/// отдельным аргументом: файла на диске нет, значит и подменять нечего.
+const BUILTIN_STRATEGIES_JSON: &str = include_str!("builtin_strategies.json");
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct BuiltinStrategy {
+    pub name: String,
+    pub scope: String,
+    pub desc: String,
+    pub args: Vec<String>,
+}
+
+fn builtin_strategies() -> Vec<BuiltinStrategy> {
+    serde_json::from_str(BUILTIN_STRATEGIES_JSON).unwrap_or_default()
+}
+
+/// Пункт списка «выбрать стратегию вручную». Аргументы наружу не отдаются: человеку нужно
+/// название и понятное описание, а не строка запуска winws.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StrategyOption {
+    pub name: String,
+    pub description: String,
+    pub origin: String,
+}
+
+/// Имя стратегии из интерфейса. Проверяется здесь, а не только в скрипте: имя уходит в
+/// командную строку запуска с правами администратора, и всё, что не похоже на имя из
+/// собственного списка, до неё доходить не должно.
+fn valid_strategy_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().count() <= 80
+        && value
+            .chars()
+            .all(|symbol| symbol.is_ascii_alphanumeric() || " +()_.-".contains(symbol))
+}
+
+#[tauri::command]
+pub fn soundcloud_bypass_strategy_options(app: AppHandle) -> Result<Vec<StrategyOption>, String> {
+    let (_, status_path, _) = paths(&app)?;
+    let mut options: Vec<StrategyOption> = builtin_strategies()
+        .into_iter()
+        .map(|strategy| StrategyOption {
+            name: strategy.name,
+            description: strategy.desc,
+            origin: "Встроенная".into(),
+        })
+        .collect();
+    if let Ok(bytes) = std::fs::read(status_path.with_file_name("soundcloud-bypass-strategies.json"))
+    {
+        if let Ok(catalog) =
+            serde_json::from_slice::<super::zapret_catalog::StrategyCatalog>(&bytes)
+        {
+            for strategy in catalog.strategies {
+                if !valid_strategy_name(&strategy.name) {
+                    continue;
+                }
+                let origin = strategy
+                    .name
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("Каталог")
+                    .to_string();
+                options.push(StrategyOption {
+                    name: strategy.name,
+                    description: "готовый набор из каталога стратегий".into(),
+                    origin,
+                });
+            }
+        }
+    }
+    Ok(options)
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -157,11 +244,14 @@ pub async fn soundcloud_bypass_report_playback_failure(
     if needs_bypass && status_path.with_file_name("soundcloud-bypass-enabled").exists() {
         let status = read_status(&status_path);
         let active = status.owner_pid == std::process::id()
-            && matches!(status.state.as_str(), "testing" | "running" | "watching" | "waiting");
+            && matches!(
+                status.state.as_str(),
+                "elevating" | "testing" | "running" | "watching" | "waiting"
+            );
         let now = now_millis();
         if !active && now.saturating_sub(LAST_AUTO_START.load(Ordering::Relaxed)) > 600_000 {
             LAST_AUTO_START.store(now, Ordering::Relaxed);
-            let _ = soundcloud_bypass_start(app).await;
+            let _ = soundcloud_bypass_start(app, Some(false), None).await;
         }
     }
     Ok(())
@@ -251,8 +341,19 @@ fn read_status(path: &Path) -> BypassStatus {
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_else(BypassStatus::idle);
     let max_age = match status.state.as_str() {
+        // «Ожидаю подтверждения Windows» пишет само приложение и больше не трогает, пока
+        // человек не ответит системному окну. Само окно Windows снимает примерно через две
+        // минуты, после чего запуск возвращает отказ и состояние перепишется настоящей
+        // ошибкой; четыре минуты здесь - только страховка на случай, если и этого не
+        // случилось, чтобы «жду подтверждения» не висело вечно.
+        "elevating" => Some(std::time::Duration::from_secs(240)),
         "testing" => Some(std::time::Duration::from_secs(120)),
         "running" | "watching" | "waiting" => Some(std::time::Duration::from_secs(90)),
+        // «Останавливаю» — единственное состояние, которое пишет не скрипт, а само
+        // приложение, чтобы отмена отвечала сразу, а не через тридцать секунд. Скрипт
+        // подтверждает её собственным `stopped` за секунду-две. Если подтверждения нет,
+        // значит останавливать было уже нечего — и «останавливаю» навсегда висеть не должно.
+        "stopping" => Some(std::time::Duration::from_secs(20)),
         _ => None,
     };
     if let Some(max_age) = max_age {
@@ -262,8 +363,17 @@ fn read_status(path: &Path) -> BypassStatus {
             .and_then(|modified| modified.elapsed().ok())
             .is_some_and(|age| age > max_age);
         if stale {
-            status.state = "failed".into();
-            status.message = "Проверка обхода прервалась. Запустите её снова.".into();
+            if status.state == "stopping" {
+                status.state = "stopped".into();
+                status.message = "Обход и автоматическая проверка выключены".into();
+            } else if status.state == "elevating" {
+                status.state = "failed".into();
+                status.message = "Запуск с правами администратора так и не начался. Нажмите кнопку ещё раз, а если Windows покажет окно с вопросом - ответьте «Да»."
+                    .into();
+            } else {
+                status.state = "failed".into();
+                status.message = "Проверка обхода прервалась. Запустите её снова.".into();
+            }
             status.strategy.clear();
         }
     }
@@ -323,22 +433,71 @@ pub fn soundcloud_bypass_status(app: AppHandle) -> Result<BypassStatus, String> 
     Ok(status)
 }
 
+/// Отмена подбора.
+///
+/// Раньше команда только создавала файл-флаг и молчала: скрипт читал его редко, статус
+/// оставался прежним, и человек видел неизменное «проверяю стратегию» - то есть отмена с
+/// виду не работала. Теперь состояние переписывается здесь же, до всякого ожидания, а флаг
+/// скрипт читает пять раз в секунду и подтверждает остановку своим `stopped`.
 #[tauri::command]
 pub fn soundcloud_bypass_stop(app: AppHandle) -> Result<(), String> {
-    let (_, _, stop_path) = paths(&app)?;
+    let (_, status_path, stop_path) = paths(&app)?;
     let _ = std::fs::remove_file(stop_path.with_file_name("soundcloud-bypass-enabled"));
-    std::fs::write(stop_path, b"stop").map_err(|error| error.to_string())
+    std::fs::write(&stop_path, b"stop").map_err(|error| error.to_string())?;
+    let previous = read_status(&status_path);
+    let running = matches!(
+        previous.state.as_str(),
+        "elevating" | "testing" | "running" | "watching" | "waiting" | "stopping"
+    );
+    let _ = write_status(
+        &status_path,
+        &BypassStatus {
+            state: if running { "stopping".into() } else { "stopped".into() },
+            message: if running {
+                "Останавливаю подбор".into()
+            } else {
+                "Обход и автоматическая проверка выключены".into()
+            },
+            owner_pid: std::process::id(),
+            report: previous.report,
+            mode: previous.mode,
+            ..BypassStatus::idle()
+        },
+    );
+    Ok(())
 }
 
 #[cfg(windows)]
 #[tauri::command]
-pub async fn soundcloud_bypass_start(app: AppHandle) -> Result<(), String> {
+pub async fn soundcloud_bypass_start(
+    app: AppHandle,
+    force: Option<bool>,
+    strategy: Option<String>,
+) -> Result<(), String> {
+    let force = force.unwrap_or(false);
+    // Ручной выбор старше принудительного перебора: если человек назвал стратегию, перебирать
+    // нечего - её и надо включить.
+    let pick = strategy
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if let Some(ref name) = pick {
+        if !valid_strategy_name(name) {
+            return Err("Такой стратегии нет в списке".into());
+        }
+    }
+    let mode = if pick.is_some() {
+        "manual"
+    } else if force {
+        "force"
+    } else {
+        "auto"
+    };
     let (root, status_path, stop_path) = paths(&app)?;
     let previous = read_status(&status_path);
     if previous.owner_pid == std::process::id()
         && matches!(
             previous.state.as_str(),
-            "testing" | "running" | "watching" | "waiting"
+            "elevating" | "testing" | "running" | "watching" | "waiting"
         )
     {
         return Ok(());
@@ -355,27 +514,31 @@ pub async fn soundcloud_bypass_start(app: AppHandle) -> Result<(), String> {
         }
     }
     let _ = std::fs::remove_file(&stop_path);
+    // Отдельное состояние, а не «подбираю стратегию»: пока идёт запрос прав, ничего не
+    // подбирается, и подписью про подбор это ожидание выглядело как зависшая проверка.
+    // Формулировка условная: на части систем Windows выдаёт права молча, без всякого окна,
+    // и обещать человеку окно, которого он никогда не увидит, нельзя.
+    const WAITING_FOR_UAC: &str =
+        "Запускаю обход с правами администратора. Если Windows спросит разрешение, нажмите «Да» - её окно может открыться позади Lomify.";
     write_status(
         &status_path,
         &BypassStatus {
-            state: "testing".into(),
-            message: "Ожидаю подтверждения Windows".into(),
-            strategy: String::new(),
-            index: 0,
-            total: 0,
+            state: "elevating".into(),
+            message: WAITING_FOR_UAC.into(),
+            strategy: pick.clone().unwrap_or_default(),
             owner_pid: std::process::id(),
-            catalog_count: 0,
-            catalog_updated_at: 0,
-            diagnosis_state: String::new(),
-            diagnosis_message: String::new(),
-            diagnosis_at: 0,
-            auto_enabled: false,
+            mode: mode.into(),
+            ..BypassStatus::idle()
         },
     )?;
 
     let script = root.join("soundcloud-bypass.ps1");
+    let strategies_payload = {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(BUILTIN_STRATEGIES_JSON.as_bytes())
+    };
     let child_command = format!(
-        "if ((Get-FileHash -LiteralPath {} -Algorithm SHA256).Hash -ne '{}') {{ [IO.File]::WriteAllText({}, '{{\"state\":\"failed\",\"message\":\"Не прошла проверка скрипта обхода\",\"strategy\":\"\",\"index\":0,\"total\":0}}'); exit 1 }}; & {} -Root {} -StatusPath {} -StopPath {} -AppPid {}",
+        "if ((Get-FileHash -LiteralPath {} -Algorithm SHA256).Hash -ne '{}') {{ [IO.File]::WriteAllText({}, '{{\"state\":\"failed\",\"message\":\"Не прошла проверка скрипта обхода\",\"strategy\":\"\",\"index\":0,\"total\":0}}'); exit 1 }}; & {} -Root {} -StatusPath {} -StopPath {} -AppPid {} -Mode {} -Strategies {} -Pick {}",
         ps_literal(&script.to_string_lossy()),
         bundled_script_hash(),
         ps_literal(&status_path.to_string_lossy()),
@@ -384,6 +547,9 @@ pub async fn soundcloud_bypass_start(app: AppHandle) -> Result<(), String> {
         ps_literal(&status_path.to_string_lossy()),
         ps_literal(&stop_path.to_string_lossy()),
         std::process::id(),
+        ps_literal(mode),
+        ps_literal(&strategies_payload),
+        ps_literal(pick.as_deref().unwrap_or("")),
     );
     let encoded_child = encode_powershell(&child_command);
     let launcher_command = format!(
@@ -391,45 +557,56 @@ pub async fn soundcloud_bypass_start(app: AppHandle) -> Result<(), String> {
         encoded_child
     );
     let encoded_launcher = encode_powershell(&launcher_command);
-    let result = tokio::task::spawn_blocking(move || {
-        use std::os::windows::process::CommandExt;
-        std::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-EncodedCommand", &encoded_launcher])
-            .creation_flags(0x0800_0000)
-            .output()
-    })
-    .await
-    .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())?;
-    if !result.status.success() {
-        let message = "Windows не запустила проверку с правами администратора.";
-        let _ = write_status(
-            &status_path,
-            &BypassStatus {
-                state: "failed".into(),
-                message: message.into(),
-                strategy: String::new(),
-                index: 0,
-                total: 0,
-                owner_pid: std::process::id(),
-                catalog_count: 0,
-                catalog_updated_at: 0,
-                diagnosis_state: String::new(),
-                diagnosis_message: String::new(),
-                diagnosis_at: 0,
-                auto_enabled: false,
-            },
-        );
-        return Err(message.into());
-    }
-    std::fs::write(status_path.with_file_name("soundcloud-bypass-enabled"), b"enabled")
-        .map_err(|error| error.to_string())?;
+
+    // Запрос прав администратора показывает системное окно и держит вызов до тех пор, пока
+    // человек на него не ответит. Пока команда этого ждала, интерфейс считал подбор
+    // выполняющимся и не давал нажать «Отменить»: отменять было нечего и нечем. Ожидание
+    // ушло в отдельную задачу - команда возвращается сразу, а всё, что нужно знать
+    // интерфейсу, приходит из файла состояния, который он и так опрашивает.
+    tauri::async_runtime::spawn(async move {
+        let launched = tokio::task::spawn_blocking(move || {
+            use std::os::windows::process::CommandExt;
+            std::process::Command::new("powershell.exe")
+                .args(["-NoProfile", "-EncodedCommand", &encoded_launcher])
+                .creation_flags(0x0800_0000)
+                .output()
+        })
+        .await;
+        let started = matches!(&launched, Ok(Ok(output)) if output.status.success());
+        if started {
+            let _ = std::fs::write(
+                status_path.with_file_name("soundcloud-bypass-enabled"),
+                b"enabled",
+            );
+            return;
+        }
+        // Отказ в правах администратора виден только здесь. Перезаписываем состояние лишь
+        // тогда, когда его никто не менял с момента запроса: если скрипт всё же успел
+        // подняться и написать своё, его отчёт важнее нашего вывода.
+        let current = read_status(&status_path);
+        if current.owner_pid == std::process::id() && current.message == WAITING_FOR_UAC {
+            let _ = write_status(
+                &status_path,
+                &BypassStatus {
+                    state: "failed".into(),
+                    message: "Windows не дала прав администратора, без них обход не запустить. Нажмите «Подобрать и включить» ещё раз, а если появится окно Windows с вопросом - выберите «Да»."
+                        .into(),
+                    owner_pid: std::process::id(),
+                    ..BypassStatus::idle()
+                },
+            );
+        }
+    });
     Ok(())
 }
 
 #[cfg(not(windows))]
 #[tauri::command]
-pub async fn soundcloud_bypass_start(_app: AppHandle) -> Result<(), String> {
+pub async fn soundcloud_bypass_start(
+    _app: AppHandle,
+    _force: Option<bool>,
+    _strategy: Option<String>,
+) -> Result<(), String> {
     Err("Встроенный Zapret доступен только в Windows.".into())
 }
 

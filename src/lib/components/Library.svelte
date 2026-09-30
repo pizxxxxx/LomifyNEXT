@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PlaylistSyncControl from './PlaylistSyncControl.svelte';
   import { onMount, tick } from 'svelte';
   import { fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
@@ -196,7 +197,7 @@
   $: visibleLocal = localTracks.slice(0, rowBudget);
   let artistSort: 'liked' | 'name' | 'recent' = 'liked';
   const artistSortOptions = [
-    { value: 'liked', label: 'Больше любимых треков' },
+    { value: 'liked', label: 'Больше любимых' },
     { value: 'name', label: 'По имени' },
     { value: 'recent', label: 'Недавно добавленные' }
   ];
@@ -553,6 +554,14 @@
     isPlaying.set(true);
   }
 
+  /**
+   * Один обработчик и для кнопки, и для всей обложки плитки.
+   *
+   * Раньше по обложке висел чистый запуск, а переключение жило только на маленькой кнопке:
+   * первое нажатие по картинке включало трек, а второе включало его заново с начала, и
+   * поставить на паузу можно было лишь попав в кружок диаметром в палец. Место нажатия не
+   * должно менять смысл нажатия - по всей обложке теперь одно и то же действие.
+   */
   function toggleTrackPlayback(e: Event, track: any, list: any[]) {
     e.stopPropagation();
     const isCurrent = $currentTrack?.title === track.title && $currentTrack?.artist === track.artist;
@@ -568,7 +577,16 @@
     // Через `$lib/likes`: снятие уезжает в аккаунт Яндекса, а у SoundCloud запоминается
     // локально — иначе сверка при следующем запуске вернула бы трек обратно.
     setTrackLiked(track, false);
-    notify('Трек убран из любимых.', 'info');
+    // Снятие лайка необратимо только на вид: вернуть трек можно тем же вызовом. Кнопка в
+    // плашке избавляет от поиска трека заново после случайного нажатия - а промахнуться
+    // здесь легко, кнопки действий стоят вплотную на обложке.
+    notify('Трек убран из любимых.', 'info', {
+      label: 'Вернуть',
+      run: () => {
+        setTrackLiked(track, true);
+        notify(`Трек «${track.title}» снова в любимых.`, 'success');
+      }
+    });
   }
 
   async function restoreDislikedTrack(e: Event, track: any) {
@@ -1078,7 +1096,7 @@
                 data-track-menu-owner={i}
                 class="track-tile library-track-tile group interactive-item {isActive ? 'is-active' : ''} {track.isBanned ? 'is-banned' : ''}"
                 class:has-open-menu={activeTrackMenu?.row === i}
-                on:click={() => playTrackList(track, $likedTracks)}
+                on:click={(e) => toggleTrackPlayback(e, track, $likedTracks)}
               >
                 <div class="tile-art spec-art" class:is-active={isActive}>
                   <div class="library-tile-art-clip">
@@ -1363,6 +1381,7 @@
             </div>
           </div>
 
+          <PlaylistSyncControl playlist={openedPlaylist} />
           <div class="library-playlist-detail-section-head">
             <div>
               <span>Содержание</span>

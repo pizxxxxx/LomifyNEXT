@@ -3,7 +3,7 @@
   import { fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { Loader2, User, Disc, X, ListMusic, ChevronLeft, ChevronDown, Music2 } from 'lucide-svelte';
-  import { Play as PlayData, Pause as PauseData } from 'lucide';
+  import { Play as PlayData, Pause as PauseData, LayoutGrid as LayoutGridData, List as ListData } from 'lucide';
   import { MorphIcon } from 'morphicons/svelte';
   import { currentArtist, currentTrack, isPlaying, queue, settings, effectivePerformanceMode, globalVolume, notify } from '$lib/stores';
   import { stopWave, waveActive } from '$lib/wave';
@@ -24,6 +24,20 @@
     trackSort = value as ArtistTrackSort;
     handleMouseLeave();
     try { localStorage.setItem(ARTIST_TRACK_SORT_KEY, trackSort); } catch {}
+  }
+
+  /**
+   * Список или плитка - тот же выбор, что у любимых треков, и он запоминается отдельно от
+   * них: у артиста интересны обложки релизов, в своих лайках - быстрый просмотр названий,
+   * и один общий переключатель на два экрана каждый раз ломал бы привычку на другом.
+   */
+  const ARTIST_TRACK_VIEW_KEY = 'lomify-artist-track-view';
+  let trackView: 'list' | 'tiles' = 'list';
+
+  function toggleTrackView() {
+    trackView = trackView === 'list' ? 'tiles' : 'list';
+    handleMouseLeave();
+    try { localStorage.setItem(ARTIST_TRACK_VIEW_KEY, trackView); } catch {}
   }
   let isLoading = true;
   // Площадка страницы — локальный выбор. Переключение профиля не должно заодно менять
@@ -135,6 +149,8 @@
     try {
       const savedSort = localStorage.getItem(ARTIST_TRACK_SORT_KEY);
       if (ARTIST_TRACK_SORT_OPTIONS.some(option => option.value === savedSort)) trackSort = savedSort as ArtistTrackSort;
+      const savedView = localStorage.getItem(ARTIST_TRACK_VIEW_KEY);
+      if (savedView === 'list' || savedView === 'tiles') trackView = savedView;
     } catch {}
   });
 
@@ -459,7 +475,25 @@
       />
       <div class="artist-hero-veil"></div>
     {/if}
-    <div class="artist-source-switch">
+    <!-- Верхняя полоса шапки. Раньше здесь стоял один переключатель площадки, прижатый
+         вправо через всю ширину, а «Об артисте» висело отдельной рамкой под шапкой - две
+         почти пустые полосы одна над другой. Теперь это одна полоса: слева вход в описание,
+         справа площадка, а сам текст раскрывается ниже, под шапкой целиком. -->
+    <div class="artist-hero-top">
+      {#if artistDescription || artistLocation}
+        <button
+          type="button"
+          class="artist-about-toggle"
+          aria-expanded={aboutOpen}
+          aria-controls="artist-about-panel"
+          on:click={() => aboutOpen = !aboutOpen}
+        >
+          <span class="artist-about-chevron" aria-hidden="true"><ChevronDown size={16} /></span>
+          <span>Об артисте</span>
+          {#if artistLocation}<span class="artist-about-location">{artistLocation}</span>{/if}
+        </button>
+      {/if}
+      <div class="artist-source-switch">
       <div
         class="seg-control artist-source-control"
         style="--seg-count: 2; --seg-index: {artistSource === 'yandex' ? 1 : 0}"
@@ -494,6 +528,7 @@
           <span class="artist-source-dot is-yandex" aria-hidden="true"></span>
           Яндекс Музыка
         </button>
+      </div>
       </div>
     </div>
     <!-- Кружок с аватаром: кнопка, а не картинка, когда её есть смысл открыть. Без аватара
@@ -557,6 +592,14 @@
         </button>
       </div>
     </div>
+    <!-- Описание раскрывается последней строкой шапки во всю её ширину: читать биографию
+         в колонке рядом с аватаром неудобно, а собственной рамки под шапкой этот текст не
+         заслуживает - он закрыт почти всё время. -->
+    {#if artistDescription || artistLocation}
+      <div id="artist-about-panel" class="artist-about-collapse" class:is-open={aboutOpen} aria-hidden={!aboutOpen} inert={!aboutOpen}>
+        <div class="artist-about-body"><p>{artistDescription || artistLocation}</p></div>
+      </div>
+    {/if}
   </header>
 
   <!-- Аватар во весь экран. Закрывается кликом по фону и Escape; фокус уходит на саму
@@ -594,24 +637,6 @@
   {/if}
 
   <div class="artist-content">
-  {#if artistDescription || artistLocation}
-    <section class="artist-about">
-      <button
-        type="button"
-        class="artist-about-toggle"
-        aria-expanded={aboutOpen}
-        aria-controls="artist-about-panel"
-        on:click={() => aboutOpen = !aboutOpen}
-      >
-        <span class="artist-about-chevron" aria-hidden="true"><ChevronDown size={16} /></span>
-        <span>Об артисте</span>
-        {#if artistLocation}<span class="artist-about-location">{artistLocation}</span>{/if}
-      </button>
-      <div id="artist-about-panel" class="artist-about-collapse" class:is-open={aboutOpen} aria-hidden={!aboutOpen} inert={!aboutOpen}>
-        <div class="artist-about-body"><p>{artistDescription || artistLocation}</p></div>
-      </div>
-    </section>
-  {/if}
   {#if isLoading}
     <div class="flex-1 flex items-center justify-center text-primary">
       <Loader2 class="animate-spin" size={40} />
@@ -677,6 +702,22 @@
       {/if}
       {#if activeTab === 'tracks'}
         <div class="artist-sort-control">
+          <button
+            type="button"
+            data-press-late
+            class="library-view-toggle"
+            aria-label={trackView === 'list' ? 'Показать треки плиткой' : 'Показать треки списком'}
+            title={trackView === 'list' ? 'Показать плиткой' : 'Показать списком'}
+            on:click={toggleTrackView}
+          >
+            <MorphIcon
+              icon={trackView === 'list' ? LayoutGridData : ListData}
+              size={17}
+              spring="snappy"
+              reducedMotion="user"
+            />
+            <span>{trackView === 'list' ? 'Плиткой' : 'Списком'}</span>
+          </button>
           <SelectMenu value={trackSort} options={ARTIST_TRACK_SORT_OPTIONS} ariaLabel="Порядок треков артиста" onChange={changeTrackSort} />
         </div>
       {/if}
@@ -811,7 +852,7 @@
     {#if activeTab === 'tracks'}
       <div class="artist-pane">
         {#key `${$currentArtist}:${artistSource}:${trackSort}`}
-          <ArtistTrackList tracks={sortedTracks} source={artistSource} onplay={playTrack} onpreview={handleMouseEnter} onpreviewend={handleMouseLeave} />
+          <ArtistTrackList tracks={sortedTracks} source={artistSource} view={trackView} onplay={playTrack} onpreview={handleMouseEnter} onpreviewend={handleMouseLeave} />
         {/key}
       </div>
     {/if}
@@ -824,36 +865,44 @@
   .artist-page { width: 100%; max-width: 1200px; margin: 0 auto; }
   .artist-content { width: 100%; container: artist-content / inline-size; padding: 0 8px 24px; }
   .artist-profile-hero.artist-hero, :global(body[data-design="aurora"]) .artist-profile-hero.artist-hero {
-    display: grid; grid-template-columns: 152px minmax(0, 1fr); align-items: center; gap: 22px 28px;
-    max-width: none; min-height: 0; margin: 0 0 24px; padding: 24px;
+    display: grid; grid-template-columns: 152px minmax(0, 1fr); align-items: center; gap: 18px 28px;
+    max-width: none; min-height: 0; margin: 0 0 20px; padding: 20px 24px;
     border: 1px solid rgb(255 255 255 / 8%); border-radius: 20px; background: rgb(255 255 255 / 3%);
   }
-  .artist-profile-hero .artist-source-switch { position: static; grid-column: 1 / -1; justify-self: end; }
+  /* Верхняя полоса шапки во всю ширину: описание слева, площадка справа. Раньше площадка
+     стояла одна с `justify-self: end`, и слева от неё оставалась пустая строка во всю
+     ширину шапки - самое заметное пустое место на странице. */
+  .artist-hero-top { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 16px; }
+  .artist-profile-hero .artist-source-switch { position: static; margin-left: auto; }
   .artist-profile-hero .artist-source-control { min-width: 0; }
   .artist-profile-hero .artist-hero-media { mask-image: none; -webkit-mask-image: none; opacity: 0.22; filter: none; animation: none; }
   .artist-profile-hero .artist-hero-veil { mask-image: none; -webkit-mask-image: none; background: rgb(0 0 0 / 35%); }
   .artist-profile-hero .artist-hero-avatar { width: 152px; height: 152px; border: 1px solid rgb(255 255 255 / 12%); box-shadow: none; }
   .artist-profile-hero .artist-hero-name { font-size: clamp(28px, 3.5vw, 48px); line-height: 1.12; letter-spacing: -0.03em; overflow-wrap: anywhere; text-shadow: none; }
-  .artist-profile-label { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; color: var(--color-muted, #a3a3a3); font-size: 12px; }
-  .artist-profile-stats { display: flex; flex-wrap: wrap; gap: 14px 28px; margin: 18px 0; }
+  .artist-profile-label { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--color-muted, #a3a3a3); font-size: 12px; }
+  /* Статистики бывает и одна («Треки»), и пять. Жёсткие 18px сверху и снизу при одной
+     цифре давали полосу пустоты выше самой цифры, поэтому отступ снизу снят: кнопку
+     «Слушать» и так отделяет её собственный `mt-3`. */
+  .artist-profile-stats { display: flex; flex-wrap: wrap; gap: 12px 28px; margin: 14px 0 0; }
   .artist-profile-stats div { display: flex; flex-direction: column-reverse; gap: 4px; }
   .artist-profile-stats dt { font-size: 12px; color: var(--color-muted, #a3a3a3); }
   .artist-profile-stats dd { margin: 0; font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; }
-  .artist-about { margin-bottom: 24px; padding: 16px 20px; border: 1px solid rgb(255 255 255 / 8%); border-radius: 12px; }
-  .artist-about-toggle { display: flex; align-items: center; gap: 6px; width: 100%; padding: 0; border: 0; background: none; color: inherit; text-align: left; cursor: pointer; font: inherit; font-size: 14px; font-weight: 600; }
+  .artist-about-toggle { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 6px 12px 6px 8px; border: 1px solid rgb(255 255 255 / 10%); border-radius: 999px; background: rgb(255 255 255 / 4%); color: inherit; text-align: left; cursor: pointer; font: inherit; font-size: 13px; font-weight: 600; }
+  .artist-about-toggle:hover { background: rgb(255 255 255 / 8%); }
   .artist-about-chevron { display: inline-flex; flex: 0 0 auto; transition: transform var(--duration-quick) var(--ease-smooth-out); }
   .artist-about-toggle[aria-expanded='true'] .artist-about-chevron { transform: rotate(180deg); }
-  .artist-about-location { margin-left: 8px; color: var(--color-muted, #a3a3a3); font-size: 12px; font-weight: 400; }
-  .artist-about-collapse { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows var(--duration-quick) var(--ease-smooth-out), opacity 180ms var(--ease-smooth-out); }
+  .artist-about-location { margin-left: 4px; color: var(--color-muted, #a3a3a3); font-size: 12px; font-weight: 400; }
+  .artist-about-collapse { grid-column: 1 / -1; display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows var(--duration-quick) var(--ease-smooth-out), opacity 180ms var(--ease-smooth-out); }
   .artist-about-collapse.is-open { grid-template-rows: 1fr; opacity: 1; }
   .artist-about-body { min-height: 0; overflow: hidden; }
-  .artist-about p { max-width: 80ch; margin: 14px 0 0; white-space: pre-line; overflow-wrap: anywhere; font-size: 14px; line-height: 1.65; color: rgb(255 255 255 / 75%); }
+  .artist-about-body p { max-width: 80ch; margin: 0; padding-top: 14px; border-top: 1px solid rgb(255 255 255 / 8%); white-space: pre-line; overflow-wrap: anywhere; font-size: 14px; line-height: 1.65; color: rgb(255 255 255 / 75%); }
   .artist-list-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
   .artist-list-header .section-title { margin: 0; }
-  .artist-sort-control { display: flex; align-items: center; margin-left: auto; }
+  .artist-sort-control { display: flex; align-items: center; gap: 10px; margin-left: auto; }
   .artist-sort-control :global(.select-menu) { min-width: 172px; }
   .artist-sort-control :global(.select-menu-trigger) { min-height: 44px; }
-  .artist-about-toggle:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; border-radius: 4px; }
+  .artist-sort-control :global(.library-view-toggle) { min-height: 44px; }
+  .artist-about-toggle:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; border-radius: 999px; }
   @media (prefers-reduced-motion: reduce) {
     .artist-about-collapse { transition: opacity var(--duration-micro) var(--ease-smooth-out); }
     .artist-about-chevron { transition: none; }
@@ -864,7 +913,9 @@
   }
   @media (max-width: 540px) {
     .artist-profile-hero.artist-hero, :global(body[data-design="aurora"]) .artist-profile-hero.artist-hero { grid-template-columns: minmax(0, 1fr); }
-    .artist-profile-hero .artist-source-switch { justify-self: start; max-width: 100%; }
+    /* На узком окне полоса переносится в две строки, и прижимать площадку вправо больше
+       не к чему - она встаёт под кнопкой описания и растягивается по ширине. */
+    .artist-profile-hero .artist-source-switch { margin-left: 0; max-width: 100%; }
     .artist-content { padding-inline: 0; }
   }
 </style>

@@ -22,7 +22,7 @@ function yandexContentIdentity(playlist: any): string | null {
 }
 
 /** Remove copies of the same playlist without merging lists that only share a title. */
-export function dedupePlaylists<T extends { id?: unknown; tracks?: unknown }>(items: T[]): T[] {
+export function dedupePlaylists<T extends { id?: unknown; tracks?: unknown; sync?: unknown }>(items: T[]): T[] {
   const byId: T[] = [];
   const positions = new Map<string, number>();
   for (const item of items) {
@@ -45,7 +45,7 @@ export function dedupePlaylists<T extends { id?: unknown; tracks?: unknown }>(it
   const unique: T[] = [];
   const contentPositions = new Map<string, number>();
   for (const item of byId) {
-    const key = yandexContentIdentity(item);
+    const key = item.sync ? '' : yandexContentIdentity(item);
     const index = key ? contentPositions.get(key) : undefined;
     if (index === undefined) {
       if (key) contentPositions.set(key, unique.length);
