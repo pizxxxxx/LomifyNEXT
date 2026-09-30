@@ -71,6 +71,14 @@ windows = { version = "0.44", features = ["Win32_Foundation", "Win32_UI_WindowsA
 webview2-com = "0.38"
 windows-core = "0.61"
 
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+# On Windows `updater::install_update` runs the downloaded installer directly, so the
+# `open` call sits behind `cfg(not(target_os = "windows"))` — where it launches the file
+# through the OS handler instead. Scoping the crate the same way keeps the Windows build
+# from pulling it in and was previously the reason the non-Windows branch failed to
+# compile (the crate was never declared, only present as a transitive dependency).
+open = "5"
+
 [features]
 # Opt-in escape hatch: `cargo tauri build --features devtools` puts the inspector back
 # into a release build for local debugging. Off by default so shipped builds stay locked.
