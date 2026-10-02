@@ -1,9 +1,13 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { ChevronRight, Home, Search, Library, Settings, Sliders, HeartHandshake } from '@lucide/svelte';
+  import { ChevronRight, Home, Search, Library, Settings, Sliders, HeartHandshake, Star } from '@lucide/svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { currentView, settings } from '$lib/stores';
+  import { openUrl } from '@tauri-apps/plugin-opener';
+  import { currentView, settings, notify } from '$lib/stores';
   import { LASTFM_TASTE_UPDATED_EVENT, getLastFmSession, type LastFmSession } from '$lib/lastfm';
+
+  /** Страница проекта. Звезда ставится на ней же, отдельного адреса для этого нет. */
+  const GITHUB_URL = 'https://github.com/pizxxxxx/LomifyNEXT';
 
   let osUsername = 'User';
   let lastFmSession: LastFmSession | null = null;
@@ -58,6 +62,24 @@
     currentView.set('settings');
     await tick();
     window.dispatchEvent(new Event('lomify:open-support'));
+  }
+
+  /**
+   * Страница проекта открывается в системном браузере, а не внутри окна: звезда ставится из
+   * аккаунта, и просить человека входить в него внутри плеера неправильно.
+   */
+  async function openGithub() {
+    try {
+      if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+        await openUrl(GITHUB_URL);
+      } else {
+        const externalWindow = window.open(GITHUB_URL, '_blank', 'noopener,noreferrer');
+        if (!externalWindow) throw new Error('Popup blocked');
+      }
+    } catch (e) {
+      console.warn('Не удалось открыть страницу проекта', e);
+      notify('Не удалось открыть страницу проекта. Проверьте подключение к интернету.', 'error');
+    }
   }
 </script>
 
@@ -115,6 +137,11 @@
     {/each}
 
     <div class="sidebar-foot">
+      <button type="button" class="sidebar-star" on:click={openGithub} aria-label="Открыть страницу проекта на GitHub, чтобы поставить звезду">
+        <span class="sidebar-star-icon" aria-hidden="true"><Star size={16} /></span>
+        <span class="sidebar-star-copy"><strong>Поставьте звезду на GitHub</strong><small>Откроется в браузере</small></span>
+        <ChevronRight size={16} aria-hidden="true" />
+      </button>
       <button type="button" class="sidebar-support" on:click={openSupport} aria-label="Поддержать проект через ЮMoney">
         <span class="sidebar-support-icon" aria-hidden="true"><HeartHandshake size={18} /></span>
         <span class="sidebar-support-copy"><strong>Поддержать проект</strong><small>Через ЮMoney</small></span>

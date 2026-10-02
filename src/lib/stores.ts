@@ -291,24 +291,44 @@ export const waveDisplayName = derived(settings, ($settings) => {
   return `Моя ${customName || 'тусня'}`;
 });
 
+/**
+ * Подсказка про слабый компьютер - и только подсказка. Порог стоит на пределе, ниже
+ * которого живое размытие действительно не укладывается в кадр; прежние `<= 4` ловили
+ * обычный четырёхъядерный ноутбук и любую машину, про которую Chromium сообщает 4 ГиБ
+ * (а он округляет к степени двойки и обрезает на 8, так что 4 там показывают и пять
+ * гигабайт памяти).
+ *
+ * `deviceMemory` доступен только в защищённом контексте, и origin у сборок разный
+ * (`http://127.0.0.1:1420` в разработке против `http://tauri.localhost` в готовом
+ * приложении). Поэтому свойство может быть и числом, и `undefined` - вместе с отдельным
+ * localStorage на каждый origin это и давало «в разработке размытие есть, в релизе нет».
+ */
 function detectLowEndDevice(): boolean {
   if (typeof navigator === 'undefined') return false;
   const nav = navigator as Navigator & { deviceMemory?: number };
   const memoryGb = nav.deviceMemory;
   const logicalCores = nav.hardwareConcurrency;
-  return (typeof memoryGb === 'number' && memoryGb <= 4)
-    || (typeof logicalCores === 'number' && logicalCores <= 4);
+  return (typeof memoryGb === 'number' && memoryGb <= 2)
+    || (typeof logicalCores === 'number' && logicalCores <= 2);
 }
 
 /**
- * Runtime-only safeguard for genuinely weak machines. It does not rewrite the user's
- * saved preference, but expensive CSS, previews and per-frame effects all read the same
- * effective value. Strong machines retain the chosen visual mode.
+ * Совет, а не решение. Раньше этот флаг входил в `effectivePerformanceMode` через `||`, и
+ * на любой машине, которую эвристика сочла слабой, облегчённый режим включался НАВСЕГДА:
+ * тумблер в настройках при этом ещё и стоял `disabled`, так что выключить его было нечем.
+ * Снаружи это выглядело как пропавшее размытие левой панели и панелей настроек в
+ * полноэкранном режиме - ровно те две поверхности, которым `body[data-perf="light"]`
+ * подменяет стекло плотной заливкой.
+ *
+ * Теперь режим читает только сохранённый выбор. Эвристика осталась, чтобы показать в
+ * настройках строку «на этом компьютере режим может помочь», и ни на что больше не влияет.
+ * Это и есть поведение, которое описано у самой настройки: красота по умолчанию, облегчение
+ * по необходимости.
  */
 export const automaticPerformanceMode = readable(detectLowEndDevice());
 export const effectivePerformanceMode = derived(
-  [settings, automaticPerformanceMode],
-  ([$settings, automatic]) => $settings.perfMode === true || automatic
+  settings,
+  ($settings) => $settings.perfMode === true
 );
 
 // Stats state

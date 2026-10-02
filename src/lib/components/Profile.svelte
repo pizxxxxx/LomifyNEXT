@@ -12,7 +12,7 @@
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { listenStats, currentTrack, isPlaying, settings, pageAtmosphere, likedTracks, playlists, type ListenHistoryEntry, type PageAtmosphere } from '$lib/stores';
   import { stopWave, waveActive } from '$lib/wave';
-  import { BarChart3, Check, Clock, Cloud, Disc3, Edit2, ExternalLink, Headphones, Heart, Image as ImageIcon, ListMusic, Loader2, Music, Pause, Play, RefreshCw, Trophy, X } from '@lucide/svelte';
+  import { BarChart3, Check, ChevronDown, Clock, Cloud, Disc3, Edit2, ExternalLink, Headphones, Heart, History, Image as ImageIcon, ListMusic, Loader2, Music, Pause, Play, RefreshCw, Trophy, X } from '@lucide/svelte';
   import {
     LASTFM_TASTE_UPDATED_EVENT,
     getCachedLastFmOverview,
@@ -86,6 +86,15 @@
 
   let topTracks: ListenHistoryEntry[] = [];
   let uniqueTracks = 0;
+
+  // История прослушивания. Отдельного журнала нет: статистика хранит по одной записи на
+  // трек, и у записи есть время последнего проигрывания. Поэтому история - это те же
+  // записи, отсортированные по времени. Трек в ней один раз, с последним прослушиванием;
+  // повторы показывает счётчик. Записи старых сборок без времени просто пропускаем.
+  let recentTracks: ListenHistoryEntry[] = [];
+  let historyExpanded = false;
+  const HISTORY_COLLAPSED = 8;
+  const HISTORY_LIMIT = 40;
 
   /**
    * Баннер профиля по приоритету: своя ссылка → шапка привязанного SoundCloud → обложка
@@ -273,6 +282,60 @@
     topTracks = Object.values($listenStats.history)
       .sort((a, b) => b.count - a.count)
       .slice(0, 5);
+    recentTracks = Object.values($listenStats.history || {})
+      .filter((entry) => typeof entry.lastPlayedAt === 'number' && entry.lastPlayedAt > 0)
+      .sort((a, b) => (b.lastPlayedAt || 0) - (a.lastPlayedAt || 0))
+      .slice(0, HISTORY_LIMIT);
+  }
+
+  $: visibleHistory = historyExpanded ? recentTracks : recentTracks.slice(0, HISTORY_COLLAPSED);
+  $: historyGroups = groupHistoryByDay(visibleHistory);
+
+  function dayKey(timestamp: number) {
+    const date = new Date(timestamp);
+    return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+  }
+
+  function dayLabel(timestamp: number) {
+    const now = new Date();
+    if (dayKey(now.getTime()) === dayKey(timestamp)) return 'Сегодня';
+    const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+    if (dayKey(yesterday.getTime()) === dayKey(timestamp)) return 'Вчера';
+    const date = new Date(timestamp);
+    const sameYear = date.getFullYear() === now.getFullYear();
+    return date.toLocaleDateString('ru-RU', sameYear
+      ? { day: 'numeric', month: 'long' }
+      : { day: 'numeric', month: 'long', year: 'numeric' });
+  }
+
+  function timeLabel(timestamp: number) {
+    return new Date(timestamp).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  // Список уже отсортирован по убыванию времени, поэтому дни идут подряд и достаточно
+  // сравнивать соседние записи - группировать через словарь и потом пересортировывать не нужно.
+  function groupHistoryByDay(entries: ListenHistoryEntry[]) {
+    const groups: { key: string; label: string; items: ListenHistoryEntry[] }[] = [];
+    for (const entry of entries) {
+      const timestamp = entry.lastPlayedAt || 0;
+      const key = dayKey(timestamp);
+      const last = groups[groups.length - 1];
+      if (last && last.key === key) last.items.push(entry);
+      else groups.push({ key, label: dayLabel(timestamp), items: [entry] });
+    }
+    return groups;
+  }
+
+  function plays(count: number) {
+    const tail = count % 100;
+    if (tail >= 11 && tail <= 14) return 'прослушиваний';
+    switch (count % 10) {
+      case 1: return 'прослушивание';
+      case 2:
+      case 3:
+      case 4: return 'прослушивания';
+      default: return 'прослушиваний';
+    }
   }
 
   function playTrack(track: any) {
@@ -697,6 +760,74 @@
           {/each}
         </div>
       </div>
+    {/if}
+  </section>
+
+  <section aria-labelledby="profile-history-title">
+    <div class="profile-section-head">
+      <div>
+        <span class="profile-section-kicker">Недавно на этом компьютере</span>
+        <h2 id="profile-history-title" class="section-title">История прослушивания</h2>
+      </div>
+      {#if recentTracks.length}<span class="profile-section-count">{uniqueTracks} треков всего</span>{/if}
+    </div>
+
+    {#if recentTracks.length === 0}
+      <div class="plate profile-empty-state">
+        <span class="profile-empty-icon"><History size={24} /></span>
+        <div>
+          <h3 class="display-title">История пока пустая</h3>
+          <p class="empty-hint">Трек появится здесь, когда ты послушаешь его хотя бы минуту.</p>
+        </div>
+      </div>
+    {:else}
+      <div class="plate profile-history">
+        {#each historyGroups as group (group.key)}
+          <div class="profile-history-day">{group.label}</div>
+          {#each group.items as track (track.title + '|' + track.artist)}
+            {@const isActive = $currentTrack?.title === track.title && $currentTrack?.artist === track.artist}
+            <button
+              type="button"
+              class="profile-history-row"
+              class:active={isActive}
+              on:click={() => playTrack(track)}
+              title={`${track.title} - ${track.artist}`}
+            >
+              <span class="profile-history-cover">
+                {#if track.coverUrl}
+                  <img src={track.coverUrl} alt="" width="44" height="44" loading="lazy" decoding="async" />
+                {:else}
+                  <Music size={17} />
+                {/if}
+                {#if isActive}
+                  <span class="profile-history-playing">
+                    {#if $isPlaying}<Pause size={12} fill="currentColor" />{:else}<Play size={12} fill="currentColor" />{/if}
+                  </span>
+                {/if}
+              </span>
+              <span class="profile-history-copy">
+                <strong>{track.title}</strong>
+                <span><ArtistTag artist={track.artist} artists={track.artists} /></span>
+              </span>
+              <!-- Счётчик и время в одной прижатой вправо группе: иначе у строк без счётчика
+                   время заняло бы колонку счётчика и сдвинулось относительно соседних строк. -->
+              <span class="profile-history-meta">
+                {#if track.count > 1}
+                  <span class="profile-history-count">{track.count} {plays(track.count)}</span>
+                {/if}
+                <span class="profile-history-time">{timeLabel(track.lastPlayedAt || 0)}</span>
+              </span>
+            </button>
+          {/each}
+        {/each}
+      </div>
+
+      {#if recentTracks.length > HISTORY_COLLAPSED}
+        <button type="button" class="profile-history-more" on:click={() => (historyExpanded = !historyExpanded)}>
+          {historyExpanded ? 'Свернуть' : `Показать ещё ${recentTracks.length - HISTORY_COLLAPSED}`}
+          <ChevronDown size={15} class={historyExpanded ? 'profile-history-chevron is-open' : 'profile-history-chevron'} />
+        </button>
+      {/if}
     {/if}
   </section>
   </div>

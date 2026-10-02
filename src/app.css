@@ -661,6 +661,14 @@ html, body {
 }
 .sc-bypass-option > div:first-child { min-width: 0; flex: 1 1 auto; }
 
+/* Выпадающий список не встаёт в строку рядом с текстом: ему нужна вся ширина плашки, иначе
+   длинные имена стратегий («Flowseal general (ALT4)») обрезаются до нечитаемого огрызка. */
+.sc-bypass-option.is-stacked {
+  align-items: stretch;
+  flex-direction: column;
+  gap: 10px;
+}
+
 @media (max-width: 650px) {
   .sc-bypass-row { align-items: stretch; flex-direction: column; }
   .sc-bypass-row > div:last-child { align-items: stretch; flex-direction: row; flex-wrap: wrap; }
@@ -1020,6 +1028,8 @@ html, body {
   text-align: center;
 }
 
+/* Размытие фона приезжает вместе с окном: значение подставляет переход (`--backdrop-blur` в
+   Settings.svelte), а запасное - на случай, когда перехода нет, - стоит прямо здесь. */
 .support-dialog-backdrop {
   position: fixed;
   inset: 0;
@@ -1028,22 +1038,25 @@ html, body {
   place-items: center;
   padding: 24px;
   background: rgba(4, 5, 8, 0.68);
-  backdrop-filter: blur(14px) saturate(90%);
-  -webkit-backdrop-filter: blur(14px) saturate(90%);
+  backdrop-filter: var(--backdrop-blur, blur(14px) saturate(90%));
+  -webkit-backdrop-filter: var(--backdrop-blur, blur(14px) saturate(90%));
 }
 
 .support-dialog {
   width: min(520px, 100%);
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--color-primary) 28%, rgba(255, 255, 255, 0.09));
+  border: 1px solid color-mix(in srgb, var(--color-primary) 22%, rgba(255, 255, 255, 0.085));
   border-radius: 24px;
   color: #fff;
   background:
-    radial-gradient(circle at 10% 0%, color-mix(in srgb, var(--color-primary) 15%, transparent), transparent 42%),
+    radial-gradient(circle at 12% -10%, color-mix(in srgb, var(--color-primary) 10%, transparent), transparent 46%),
     #101015;
   box-shadow:
     0 34px 90px -34px rgba(0, 0, 0, 0.96),
     inset 0 1px 0 rgba(255, 255, 255, 0.065);
+  /* Переход задаёт `transform`, поэтому точка роста важна: окно поднимается снизу, и расти
+     ему логично от того же края. */
+  transform-origin: 50% 92%;
 }
 
 .support-dialog[tabindex]:focus-visible {
@@ -1145,26 +1158,33 @@ html, body {
   background: color-mix(in srgb, var(--color-primary) 8%, rgba(255, 255, 255, 0.035));
 }
 
+/* Нажатие уводит строку на глубину целиком. Сдвиг вниз на один пиксель, который стоял здесь
+   раньше, на строке высотой 76px читается не как нажатие, а как дрожание разметки. */
 .support-method:active {
-  transform: translateY(1px);
+  transform: scale(0.985);
+}
+
+body[data-fx-press="off"] .support-method:active {
+  transform: none;
 }
 
 .support-method.is-quick {
   grid-template-columns: auto minmax(0, 1fr) auto auto;
-  border-color: color-mix(in srgb, var(--color-primary) 26%, rgba(255, 255, 255, 0.07));
-  background: color-mix(in srgb, var(--color-primary) 7%, rgba(255, 255, 255, 0.025));
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.045);
 }
 
 .support-method-icon {
   width: 40px;
   height: 40px;
   border-radius: 13px;
-}
-
-.support-method-icon.is-wallet {
+  /* Оба способа - это один и тот же ЮMoney, поэтому и плитки у них одного цвета, цвета
+     самого сервиса. Раньше быстрый платёж был в акцентном цвете приложения, а кошелёк -
+     лиловым, и два несвязанных цвета в списке из двух строк выглядели как разные разделы.
+     Отличает строки теперь только цена, а не раскраска. */
   color: #b99aff;
-  border-color: rgba(112, 47, 244, 0.28);
-  background: rgba(112, 47, 244, 0.13);
+  border-color: rgba(112, 47, 244, 0.26);
+  background: rgba(112, 47, 244, 0.12);
 }
 
 .support-method-copy {
@@ -2625,10 +2645,12 @@ textarea:focus-visible,
 .track-row-card {
   position: relative;
   isolation: isolate;
-  /* Long artist/search lists may contain hundreds of rows. Chromium can keep their DOM
-     semantics while skipping layout, paint and image raster for rows far off screen. */
-  content-visibility: auto;
-  contain-intrinsic-size: auto 60px;
+  /* Здесь тоже нет `content-visibility: auto` — убрано вместе с таким же свойством у
+     `.track-tile` выше (там же разбор причины). Строка считалась по заглушке в 60px, но
+     реальная высота зависит от шрифта и масштаба интерфейса, и ошибка копилась вниз по
+     списку: нарисованная строка и дерево попаданий расходились, нажатие по строке уходило в
+     кнопки соседней. Длинные списки это не ломает — лайки и так отдаются порциями
+     (`rowBudget`/`visibleLiked` в Library.svelte), обложки идут через `loading="lazy"`. */
   display: flex;
   align-items: center;
   gap: 10px;
@@ -2674,8 +2696,6 @@ textarea:focus-visible,
 
 .track-row-card.has-open-menu {
   z-index: 100;
-  content-visibility: visible !important;
-  contain: none !important;
   background-color: rgba(255, 255, 255, 0.052);
   border-color: rgba(255, 255, 255, 0.04);
 }
@@ -4016,6 +4036,131 @@ body[data-perf="light"] .lyrics-backdrop-callout.is-departing {
    волосяная рамка и крупный радиус. Прежние три копии меню были плоскими плашками
    `bg-neutral-800/900` — единственное место в приложении, где всплывающий слой не стеклянный,
    и на фоне обложек это сразу читалось как чужой элемент. */
+/* ── Подсказка над кнопкой ───────────────────────────────────────────────────
+   Атрибут `title` отдаёт подсказку операционной системе, и она рисует её своей светлой
+   плашкой с системным шрифтом - поверх тёмной обложки это самый чужой элемент на экране,
+   причём появляется он у курсора, а не у кнопки, и перекрывает ровно то, на что человек
+   смотрит. Здесь та же подпись, но своя: тёмное стекло, кегль интерфейса, появление над
+   кнопкой.
+
+   Включается классом `ui-tip` и читает текст из `data-tip` - так одна пара правил работает
+   и для кнопок строки действий на плитке, и для открывашки меню плейлистов. `title` на этих
+   кнопках должен быть снят: иначе над своей подсказкой встанет ещё и системная.
+
+   `aria-label` при этом остаётся на кнопке: `::after` с `content` программы чтения экрана
+   не озвучивают, и подпись для них нужна отдельная. */
+.ui-tip {
+  position: relative;
+}
+
+.ui-tip[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 0.45rem);
+  left: 50%;
+  z-index: 70;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 0.55rem;
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(14, 14, 18, 0.92);
+  backdrop-filter: blur(10px) saturate(130%);
+  -webkit-backdrop-filter: blur(10px) saturate(130%);
+  box-shadow: 0 10px 24px -12px rgba(0, 0, 0, 0.9);
+  font-size: 11px;
+  font-weight: 560;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  /* Подсказка не должна вести себя как содержимое кнопки: от масштаба она не зависит, и
+     `translate3d` держит её на своём слое, чтобы появление не перерисовывало плитку. */
+  transform: translate3d(-50%, 0.2rem, 0) scale(0.96);
+  transform-origin: 50% 100%;
+  transition:
+    opacity 140ms var(--ease-out),
+    transform 180ms var(--ease-out);
+}
+
+.ui-tip[data-tip]:hover::after,
+.ui-tip[data-tip]:focus-visible::after {
+  opacity: 1;
+  transform: translate3d(-50%, 0, 0) scale(1);
+}
+
+/* Открытое меню само объясняет, что это за кнопка. Подсказка поверх него только мешала бы. */
+.ui-tip.is-open[data-tip]::after,
+.ui-tip[data-tip][aria-expanded="true"]::after {
+  opacity: 0;
+  transform: translate3d(-50%, 0.2rem, 0) scale(0.96);
+}
+
+/* Крайние кнопки строки действий: подсказка шире самой кнопки и у края обложки уезжала бы
+   за плитку. Прижимаем её к своему краю вместо центрирования по кнопке. */
+.ui-tip[data-tip][data-tip-align="start"]::after {
+  left: 0;
+  transform: translate3d(0, 0.2rem, 0) scale(0.96);
+  transform-origin: 0 100%;
+}
+
+.ui-tip[data-tip][data-tip-align="start"]:hover::after,
+.ui-tip[data-tip][data-tip-align="start"]:focus-visible::after {
+  transform: translate3d(0, 0, 0) scale(1);
+}
+
+.ui-tip[data-tip][data-tip-align="end"]::after {
+  left: auto;
+  right: 0;
+  transform: translate3d(0, 0.2rem, 0) scale(0.96);
+  transform-origin: 100% 100%;
+}
+
+.ui-tip[data-tip][data-tip-align="end"]:hover::after,
+.ui-tip[data-tip][data-tip-align="end"]:focus-visible::after {
+  transform: translate3d(0, 0, 0) scale(1);
+}
+
+/* Значок «скачан» стоит в левом верхнем углу обложки: над ним места нет, и подсказка
+   выезжала бы за карточку вверх. Ей туда и не надо - она уходит под значок. */
+.ui-tip[data-tip][data-tip-side="bottom"]::after {
+  top: calc(100% + 0.4rem);
+  bottom: auto;
+  transform: translate3d(-50%, -0.2rem, 0) scale(0.96);
+  transform-origin: 50% 0;
+}
+
+.ui-tip[data-tip][data-tip-side="bottom"]:hover::after,
+.ui-tip[data-tip][data-tip-side="bottom"]:focus-visible::after {
+  transform: translate3d(-50%, 0, 0) scale(1);
+}
+
+/* Прижатие к краю и сторона задаются разными атрибутами, поэтому их сочетание нужно описать
+   отдельно: иначе правило стороны перебило бы горизонтальный сдвиг прижатой подсказки. */
+.ui-tip[data-tip][data-tip-side="bottom"][data-tip-align="start"]::after {
+  transform: translate3d(0, -0.2rem, 0) scale(0.96);
+  transform-origin: 0 0;
+}
+
+.ui-tip[data-tip][data-tip-side="bottom"][data-tip-align="start"]:hover::after,
+.ui-tip[data-tip][data-tip-side="bottom"][data-tip-align="start"]:focus-visible::after {
+  transform: translate3d(0, 0, 0) scale(1);
+}
+
+.ui-tip[data-tip][data-tip-side="bottom"][data-tip-align="end"]::after {
+  transform: translate3d(0, -0.2rem, 0) scale(0.96);
+  transform-origin: 100% 0;
+}
+
+.ui-tip[data-tip][data-tip-side="bottom"][data-tip-align="end"]:hover::after,
+.ui-tip[data-tip][data-tip-side="bottom"][data-tip-align="end"]:focus-visible::after {
+  transform: translate3d(0, 0, 0) scale(1);
+}
+
+body[data-perf="light"] .ui-tip[data-tip]::after {
+  background: #15151b;
+}
+
 .pl-menu {
   position: relative;
   display: inline-flex;
@@ -4952,8 +5097,16 @@ body[data-perf="light"] .lyrics-backdrop-callout.is-departing {
      соседнюю карточку — отсюда и «трек сам удаляется из лайков»). Смена вкладки чинила это
      только потому, что вызывала полную переверстку.
      Экономия при этом и не нужна: сетка лайков рендерится порциями (`rowBudget`/`visibleLiked`
-     в Library.svelte), а обложки грузятся через `loading="lazy"`. */
-  contain: layout style;
+     в Library.svelte), а обложки грузятся через `loading="lazy"`.
+
+     По той же причине здесь нет и `contain`. В первый раз убрали только
+     `content-visibility: auto`, а `contain: layout style` оставили — и баг не ушёл до конца,
+     попадание всё равно уезжало «к верху кнопки плей». Так и должно было получиться:
+     `content-visibility: auto` по описанию означает ровно `contain: size layout style paint`,
+     то есть из четырёх ограничений сняли два, а два оставшихся продолжали отрезать карточку от
+     общего пересчёта разметки. Заменять их нечем и не нужно: `isolation: isolate` выше уже
+     создаёт свой контекст наложения, а позиционирование абсолютных слоёв внутри держит
+     `.interactive-item` со своим `position: relative`. */
   min-width: 0;
   padding: 0.5rem 0.5rem 0.65rem;
   border: 1px solid rgba(255, 255, 255, 0.055);
@@ -5435,13 +5588,20 @@ body[data-perf="light"] .lyrics-backdrop-callout.is-departing {
 }
 
 /* Меню плейлистов раскрывается за границы карточки, поэтому на время открытия снимаем
-   и `contain`, и обрезку. `content-visibility` у карточек больше нет (см. `.track-tile`),
-   отменять его здесь нечего. */
+   обрезку. Ни `content-visibility`, ни `contain` у самой карточки больше нет
+   (см. `.track-tile`), отменять их здесь нечего - обрезку даёт `overflow` у обложки. */
 .library-track-tile.has-open-menu,
 .track-tile.has-open-menu {
   z-index: 100 !important;
-  contain: none !important;
   overflow: visible !important;
+}
+
+/* Подсказка кнопки шире самой кнопки, поэтому у края обложки она выходит за плитку. Соседняя
+   плитка в сетке рисуется позже и накрыла бы подсказку своей обложкой, так что плитка под
+   курсором поднимается над соседями - тем же приёмом, что и открытое меню выше, но слабее,
+   чтобы меню по-прежнему было выше любой подсказки. */
+.library-track-tile:hover {
+  z-index: 60;
 }
 
 .library-track-tile.is-banned {
@@ -12608,6 +12768,7 @@ body[data-perf="light"] .playlist-create-dialog {
 
 .profile-favorite-card,
 .profile-ranking,
+.profile-history,
 .profile-empty-state {
   border-radius: 22px;
   background: rgba(255, 255, 255, 0.038);
@@ -12825,6 +12986,168 @@ body[data-perf="light"] .playlist-create-dialog {
   align-items: center;
   gap: 16px;
   padding: 26px;
+}
+
+/* История прослушивания. Строка живёт в одной сетке с заголовком дня, поэтому дни и
+   треки выровнены по левому краю обложки. Счётчик повторов скрывается на узких окнах
+   раньше времени: время важнее, без него строка теряет смысл. */
+.profile-history {
+  display: grid;
+  gap: 1px;
+  padding: 8px;
+}
+
+.profile-history-day {
+  padding: 12px 11px 6px;
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.profile-history-day:first-child {
+  padding-top: 4px;
+}
+
+.profile-history-row {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 7px 11px;
+  border-radius: 13px;
+  text-align: left;
+  transition: background 160ms ease;
+}
+
+.profile-history-row:hover,
+.profile-history-row.active {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.profile-history-row.active {
+  color: var(--color-primary);
+}
+
+.profile-history-cover {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  overflow: hidden;
+  border-radius: 10px;
+  color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.profile-history-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.profile-history-playing {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.52);
+}
+
+.profile-history-copy {
+  min-width: 0;
+}
+
+.profile-history-copy strong,
+.profile-history-copy > span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-history-copy strong {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 13.5px;
+  font-weight: 570;
+}
+
+.profile-history-row.active .profile-history-copy strong {
+  color: var(--color-primary);
+}
+
+.profile-history-copy > span {
+  margin-top: 3px;
+  color: rgba(255, 255, 255, 0.38);
+  font-size: 11.5px;
+}
+
+.profile-history-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.profile-history-count {
+  padding: 3px 8px;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.05);
+  white-space: nowrap;
+}
+
+.profile-history-time {
+  color: rgba(255, 255, 255, 0.34);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.profile-history-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+  padding: 9px 16px;
+  border-radius: 12px;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 12.5px;
+  font-weight: 560;
+  background: rgba(255, 255, 255, 0.045);
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.profile-history-more:hover {
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.profile-history-chevron {
+  transition: transform 180ms ease;
+}
+
+.profile-history-chevron.is-open {
+  transform: rotate(180deg);
+}
+
+.profile-history-row:focus-visible,
+.profile-history-more:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-primary) 75%, white 10%);
+  outline-offset: 2px;
+}
+
+@media (max-width: 760px) {
+  .profile-history-count {
+    display: none;
+  }
 }
 
 .profile-empty-icon {
@@ -13172,6 +13495,87 @@ body[data-ui-style="style2"] .sidebar-shell {
   margin-top: 0.75rem;
   padding-top: 0.75rem;
   border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Просьба про звезду стоит рядом с поддержкой, но спорить с ней цветом не должна: лиловая
+   плашка в панели одна, и второй акцент того же веса превратил бы низ колонки в два баннера.
+   Поэтому здесь обычная плашка панели, и единственный цвет - у самой звезды. */
+.sidebar-star {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  min-height: 44px;
+  margin-bottom: 0.5rem;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 0.85rem;
+  background: rgba(255, 255, 255, 0.035);
+  color: rgba(255, 255, 255, 0.78);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 180ms var(--ease-out), background-color 180ms var(--ease-out), color 180ms var(--ease-out), transform 180ms var(--ease-out);
+}
+
+.sidebar-star:hover {
+  border-color: rgba(255, 255, 255, 0.14);
+  background-color: rgba(255, 255, 255, 0.07);
+  color: #fff;
+  transform: translateX(2px);
+}
+
+.sidebar-star:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.55);
+  outline-offset: 2px;
+}
+
+.sidebar-star-icon {
+  display: grid;
+  place-items: center;
+  width: 1.85rem;
+  height: 1.85rem;
+  flex: 0 0 1.85rem;
+  border: 1px solid rgba(255, 196, 61, 0.2);
+  border-radius: 0.6rem;
+  color: #ffce5c;
+  background: rgba(255, 196, 61, 0.12);
+  transition: border-color 180ms var(--ease-out), background-color 180ms var(--ease-out), color 180ms var(--ease-out);
+}
+
+.sidebar-star:hover .sidebar-star-icon {
+  border-color: rgba(255, 196, 61, 0.34);
+  background: rgba(255, 196, 61, 0.2);
+  color: #ffd880;
+}
+
+/* Звезда пустая, пока на кнопку не наведён курсор, и заливается под ним: контур читается как
+   «ещё не поставлена», а заливка показывает, что будет после нажатия. Заливку задаёт CSS, а
+   не атрибут иконки, - у неё `fill="none"` в разметке, и правило стиля его перебивает. */
+.sidebar-star-icon svg {
+  fill: transparent;
+  transition: fill 180ms var(--ease-out);
+}
+
+.sidebar-star:hover .sidebar-star-icon svg {
+  fill: currentColor;
+}
+
+.sidebar-star-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.sidebar-star-copy strong {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.sidebar-star-copy small {
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 10px;
 }
 
 .sidebar-support {

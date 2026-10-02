@@ -23,6 +23,12 @@
   export let iconSize = 18;
   /** Классы кнопки-открывашки: у каждого списка своя логика показа по наведению. */
   export let buttonClass = '';
+  /**
+   * Куда прижать подсказку над кнопкой. По умолчанию она центрируется по кнопке; у края
+   * контейнера с `overflow: hidden` подпись шире кнопки и её надо прижать к своему краю,
+   * иначе срежется.
+   */
+  export let tipAlign: 'start' | 'end' | undefined = undefined;
   export let open = false;
 
   let computedPlacement = placement;
@@ -164,12 +170,13 @@
 <span class="pl-menu" bind:this={root} on:click|stopPropagation>
   <button
     type="button"
-    class="pl-menu-trigger {buttonClass}"
+    class="pl-menu-trigger ui-tip {buttonClass}"
     class:is-open={open}
     aria-haspopup="menu"
     aria-expanded={open}
     aria-label="Добавить в плейлист"
-    title="Добавить в плейлист"
+    data-tip="Добавить в плейлист"
+    data-tip-align={tipAlign}
     on:pointerdown|stopPropagation
     on:click={toggle}
   >

@@ -156,6 +156,13 @@ const GLARE_FRAME_MS = 1000 / 60;
 const EPS_POS = 0.01;
 const EPS_VEL = 0.05;
 
+/**
+ * Насколько курсор может уйти за бокс обёртки, прежде чем это считается устаревшей геометрией.
+ * Курсор бывает вне бокса законно - на всплывающем меню внутри карточки, - поэтому порог
+ * заметно больше погрешности округления, но меньше типичного зазора между карточками сетки.
+ */
+const OUTSIDE_SLACK = 24;
+
 const VARS = [
   '--mouse-x',
   '--mouse-y',
@@ -199,6 +206,11 @@ interface Card {
   ny: number;
   /** Курсор ещё на карточке. */
   held: boolean;
+  /**
+   * Бокс уже перечитан после того, как курсор оказался вне него. Нужен один раз за наведение:
+   * чтение `getBoundingClientRect` на каждое движение мыши — это принудительный layout.
+   */
+  verified: boolean;
   /** Уже записанные округлённые значения — одинаковое значение не инвалидирует стили. */
   painted: Partial<Record<StyleVar, string>>;
   /** Время последней перерисовки paint-зависимых градиентов. */
@@ -389,6 +401,7 @@ function acquire(root: HTMLElement, x: number, y: number): Card {
     // Курсор вернулся на карточку, которая ещё едет домой: подхватываем её на ходу, из
     // текущего положения — перезапуск с нуля выглядел бы как рывок.
     existing.held = true;
+    existing.verified = false;
     measure(existing);
     return existing;
   }
@@ -407,6 +420,7 @@ function acquire(root: HTMLElement, x: number, y: number): Card {
     nx: 0,
     ny: 0,
     held: true,
+    verified: false,
     painted: {},
     glarePaintedAt: Number.NEGATIVE_INFINITY,
   };
@@ -446,8 +460,24 @@ function onMouseMove(e: MouseEvent) {
   stale = false;
 
   const card = current!;
-  const lx = e.clientX - card.left;
-  const ly = e.clientY - card.top;
+  let lx = e.clientX - card.left;
+  let ly = e.clientY - card.top;
+
+  // Закешированный бокс мог устареть не от прокрутки и не от смены размера окна: сетка лайков
+  // дописывает строки порциями, и карточка под курсором переезжает сама, без события, на
+  // которое подписан `invalidate`. Признак — курсор заметно вне бокса, хотя событие пришло
+  // именно от этой карточки. Тогда перечитываем бокс один раз за наведение: иначе наклон
+  // считается от чужого центра и карточка «дёргается» в сторону.
+  if (!card.verified) {
+    const outside = Math.max(-lx, lx - card.width, -ly, ly - card.height);
+    if (outside > OUTSIDE_SLACK) {
+      card.verified = true;
+      measure(card);
+      lx = e.clientX - card.left;
+      ly = e.clientY - card.top;
+    }
+  }
+
   if (fxGlare) {
     card.gx.to = lx;
     card.gy.to = ly;

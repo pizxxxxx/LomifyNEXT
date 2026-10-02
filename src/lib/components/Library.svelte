@@ -21,6 +21,7 @@
   import { stopWave, waveActive } from '$lib/wave';
   import { goToArtist } from '$lib/utils/navigation';
   import { splitArtists } from '$lib/utils/artists';
+  import { pointerMissed } from '$lib/utils/hitGuard';
   import { saveTrack, getTracks, removeTrack } from '$lib/db';
   import { getAudioUrl } from '$lib/api';
   import { setTrackLiked, isTrackLiked } from '$lib/likes';
@@ -572,6 +573,33 @@
     playTrackList(track, list);
   }
 
+  /**
+   * Страховка панели действий на карточке и в строке.
+   *
+   * Кнопки действий стоят вплотную к области запуска: в плитке - прямо на обложке, в строке -
+   * в её же полосе. Когда дерево попаданий отстаёт от кадра (переход в настройки и обратно,
+   * дописывание строк в сетку), нажатие по обложке приходит в кнопку, до которой курсор не
+   * доставал. Поэтому перед действием сверяем точку курсора со свежей рамкой кнопки: если
+   * курсор вне неё, нажатие до обработчика не доходит и выполняется то, чего человек и хотел
+   * от обложки - запуск или пауза.
+   *
+   * Сверяем рамку именно кнопки, а не всей панели: внутри панели живёт ещё и раскрытое меню
+   * плейлистов, которое выходит далеко за её границы, и нажатия в нём промахами не являются.
+   *
+   * Обработчик стоит на перехвате, поэтому успевает отменить нажатие раньше, чем до него
+   * доберётся собственный обработчик кнопки.
+   */
+  const TRACK_ACTION_SELECTOR = 'button.library-tile-action, button.track-row-action';
+
+  function guardTrackActions(event: MouseEvent, track: any, list: any[]) {
+    const target = event.target instanceof Element ? event.target : null;
+    const button = target?.closest(TRACK_ACTION_SELECTOR) ?? null;
+    if (!button || !pointerMissed(event, button)) return;
+    event.stopImmediatePropagation();
+    event.preventDefault();
+    toggleTrackPlayback(event, track, list);
+  }
+
   function removeLikedTrack(e: Event, track: any) {
     e.stopPropagation();
     // Через `$lib/likes`: снятие уезжает в аккаунт Яндекса, а у SoundCloud запоминается
@@ -969,21 +997,22 @@
                 <div class="flex items-center gap-2">
                   <span class="track-row-title">{track.title}</span>
                   {#if cached}
-                    <span title="Скачан" class="track-row-saved"><Check size={13} /></span>
+                    <span class="track-row-saved ui-tip" aria-label="Файл скачан" data-tip="Файл скачан"><Check size={13} /></span>
                   {/if}
                 </div>
                 <span class="track-row-artist"><ArtistTag artist={track.artist} artists={track.artists} /></span>
               </div>
-              <div class="track-row-actions">
+              <!-- svelte-ignore a11y-no-static-element-interactions -->
+              <div class="track-row-actions" on:click|capture={(e) => guardTrackActions(e, track, $likedTracks)}>
                 {#if $settings.exportEnabled}
                   {@const expUrn = trackUrn(track)}
                   {@const isExporting = $exportingUrns.has(expUrn)}
                   <button
                     type="button"
-                    class="track-row-action"
+                    class="track-row-action ui-tip"
                     disabled={isExporting}
-                    title={isExporting ? 'Экспортирую...' : 'Экспортировать трек в файл'}
                     aria-label="Экспортировать трек в файл"
+                    data-tip={isExporting ? 'Экспортирую...' : 'Экспорт в файл'}
                     on:click|stopPropagation={() => exportTrackToFile(track)}
                   >
                     {#if isExporting}
@@ -995,20 +1024,21 @@
                 {/if}
                 {#if !cached}
                   <button
-                    class="track-row-action"
+                    class="track-row-action ui-tip"
                     on:click|stopPropagation={(e) => downloadTrack(e, track)}
                     aria-label="Скачать"
+                    data-tip="Скачать"
                   >
                     <Download size={18} />
                   </button>
                 {:else}
                   <button
                     type="button"
-                    class="track-row-action is-saved cache-state-control"
+                    class="track-row-action is-saved cache-state-control ui-tip"
                     class:is-busy={isRemovingCachedTrack(track)}
                     on:click|stopPropagation={(e) => removeDownloadedTrack(e, track)}
                     aria-label={`Удалить скачанный файл «${track.title}»`}
-                    title="Удалить скачанный файл"
+                    data-tip="Удалить файл"
                     disabled={isRemovingCachedTrack(track)}
                   >
                     {#if isRemovingCachedTrack(track)}
@@ -1025,11 +1055,12 @@
                 <div class="track-row-menu-slot" data-track-menu-owner={i}>
                   <button
                     type="button"
-                    class="track-row-action"
+                    class="track-row-action ui-tip"
                     class:is-open={activeTrackMenu?.row === i && activeTrackMenu?.kind === 'info'}
                     aria-label="Информация"
                     aria-haspopup="dialog"
                     aria-expanded={activeTrackMenu?.row === i && activeTrackMenu?.kind === 'info'}
+                    data-tip="Информация"
                     on:click={(event) => toggleInfoMenu(event, i)}
                   >
                     <Info size={18} />
@@ -1048,9 +1079,11 @@
                 </span>
 
                 <button
-                  class="track-row-action is-danger is-liked"
+                  class="track-row-action is-danger is-liked ui-tip"
                   on:click|stopPropagation={(e) => removeLikedTrack(e, track)}
                   aria-label="Убрать из любимых"
+                  data-tip="Убрать из любимых"
+                  data-tip-align="end"
                 >
                   <Heart size={18} fill="currentColor" />
                 </button>
@@ -1127,21 +1160,33 @@
                   </div>
 
                   {#if cached}
-                    <span class="library-tile-cached" title="Скачан" aria-label="Скачан">
+                    <span
+                      class="library-tile-cached ui-tip"
+                      aria-label="Файл скачан"
+                      data-tip="Файл скачан"
+                      data-tip-side="bottom"
+                      data-tip-align="start"
+                    >
                       <Check size={13} />
                     </span>
                   {/if}
 
-                  <div class="library-tile-actions" class:has-export={$settings.exportEnabled}>
+                  <!-- svelte-ignore a11y-no-static-element-interactions -->
+                  <div
+                    class="library-tile-actions"
+                    class:has-export={$settings.exportEnabled}
+                    on:click|capture={(e) => guardTrackActions(e, track, $likedTracks)}
+                  >
                     {#if $settings.exportEnabled}
                       {@const expUrn = trackUrn(track)}
                       {@const isExporting = $exportingUrns.has(expUrn)}
                       <button
                         type="button"
-                        class="library-tile-action"
+                        class="library-tile-action ui-tip"
                         disabled={isExporting}
-                        title={isExporting ? 'Экспортирую...' : 'Экспортировать трек в файл'}
                         aria-label="Экспортировать трек в файл"
+                        data-tip={isExporting ? 'Экспортирую...' : 'Экспорт в файл'}
+                        data-tip-align="start"
                         on:click|stopPropagation={() => exportTrackToFile(track)}
                       >
                         {#if isExporting}
@@ -1154,9 +1199,10 @@
                     {#if !cached}
                       <button
                         type="button"
-                        class="library-tile-action"
+                        class="library-tile-action ui-tip"
                         aria-label="Скачать"
-                        title="Скачать"
+                        data-tip="Скачать"
+                        data-tip-align={$settings.exportEnabled ? undefined : 'start'}
                         on:click|stopPropagation={(e) => downloadTrack(e, track)}
                       >
                         <Download size={tileActionIconSize} />
@@ -1164,10 +1210,11 @@
                     {:else}
                       <button
                         type="button"
-                        class="library-tile-action is-saved cache-state-control"
+                        class="library-tile-action is-saved cache-state-control ui-tip"
                         class:is-busy={isRemovingCachedTrack(track)}
                         aria-label={`Удалить скачанный файл «${track.title}»`}
-                        title="Удалить скачанный файл"
+                        data-tip="Удалить файл"
+                        data-tip-align={$settings.exportEnabled ? undefined : 'start'}
                         disabled={isRemovingCachedTrack(track)}
                         on:click|stopPropagation={(e) => removeDownloadedTrack(e, track)}
                       >
@@ -1182,11 +1229,12 @@
 
                     <button
                       type="button"
-                      class="library-tile-action"
+                      class="library-tile-action ui-tip"
                       class:is-open={activeTrackMenu?.row === i && activeTrackMenu?.kind === 'info'}
                       aria-label="Информация"
                       aria-haspopup="dialog"
                       aria-expanded={activeTrackMenu?.row === i && activeTrackMenu?.kind === 'info'}
+                      data-tip="Информация"
                       on:click={(event) => toggleInfoMenu(event, i)}
                     >
                       <Info size={tileActionIconSize} />
@@ -1204,9 +1252,10 @@
 
                     <button
                       type="button"
-                      class="library-tile-action is-liked"
+                      class="library-tile-action is-liked ui-tip"
                       aria-label="Убрать из любимых"
-                      title="Убрать из любимых"
+                      data-tip="Убрать из любимых"
+                      data-tip-align="end"
                       on:click|stopPropagation={(e) => removeLikedTrack(e, track)}
                     >
                       <Heart size={tileActionIconSize} fill="currentColor" />

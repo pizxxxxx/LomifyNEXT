@@ -83,10 +83,30 @@
   }
 
   /**
+   * Запись переключателя на `<body>` только на смену значения.
+   *
+   * Реактивный блок настроек ниже выполняется на каждое их сохранение - то есть и на
+   * переключение вкладки внутри настроек. Десяток `setAttribute` подряд с теми же значениями
+   * всё равно помечает на пересчёт стилей всё дерево под `<body>`: эти атрибуты участвуют в
+   * селекторах. Это и лишняя работа, и лишняя переверстка ровно в тот момент, когда человек
+   * возвращается из настроек в медиатеку.
+   */
+  function setBodyFlag(name: string, value: string) {
+    if (document.body.getAttribute(name) === value) return;
+    document.body.setAttribute(name, value);
+  }
+
+  /**
    * Нативный zoom WebView меняет layout viewport и заново растеризует текст/иконки — в
    * отличие от CSS transform ничего не мылится, а `100vw`, fixed-окна и порталы продолжают
    * совпадать с краями приложения. В обычном браузерном dev-режиме масштаб не подменяем:
    * CSS zoom нарушил бы размеры `w-screen`/`h-screen`; выбранное значение применит Tauri.
+   *
+   * Вызов приходит из общего реактивного блока настроек, то есть на каждое сохранение любого
+   * пункта: переключил вкладку в настройках — функция снова здесь. Поэтому всё внутри
+   * срабатывает только на настоящую смену значения. Лишний `setZoom` переcобирает layout
+   * viewport целиком, а это ровно та переверстка, после которой дерево попаданий какое-то
+   * время отвечает по старой геометрии и нажатие по карточке уходит в соседние кнопки.
    */
   async function applyInterfaceScale(
     mode: string | undefined,
@@ -95,19 +115,28 @@
   ) {
     if (typeof document === 'undefined') return;
     const scale = resolveInterfaceScale(mode, viewportWidth, viewportHeight);
-    const request = ++interfaceScaleRequest;
 
-    document.body.setAttribute('data-ui-scale', String(Math.round(scale * 100)));
-    if (!('__TAURI_INTERNALS__' in window) || Math.abs(scale - appliedInterfaceScale) < 0.001) {
-      return;
-    }
+    // Запись того же значения в атрибут `<body>` всё равно помечает на пересчёт стилей всё
+    // дерево под ним, поэтому пишем только на смену.
+    setBodyFlag('data-ui-scale', String(Math.round(scale * 100)));
+
+    if (!('__TAURI_INTERNALS__' in window)) return;
+    if (Math.abs(scale - appliedInterfaceScale) < 0.001) return;
+
+    // Счётчик увеличиваем здесь, уже после проверки на смену: иначе вызов с тем же масштабом
+    // успевал обогнать ещё не доехавший предыдущий и отменял его, ничего не применив вместо
+    // него. Отметку ставим до ожидания — раньше она ставилась только на успешном пути, и
+    // любая ошибка оставляла её старой, так что один и тот же масштаб уезжал в окно повторно.
+    const request = ++interfaceScaleRequest;
+    appliedInterfaceScale = scale;
 
     try {
       const { getCurrentWebview } = await import('@tauri-apps/api/webview');
       if (request !== interfaceScaleRequest) return;
       await getCurrentWebview().setZoom(scale);
-      if (request === interfaceScaleRequest) appliedInterfaceScale = scale;
     } catch (e) {
+      // Не применилось — отметку снимаем, иначе следующий вызов решит, что работа уже сделана.
+      if (request === interfaceScaleRequest) appliedInterfaceScale = 0;
       console.warn('[ui-scale] не удалось применить масштаб интерфейса', e);
     }
   }
@@ -411,9 +440,9 @@
         $settings.uiStyle = 'style1';
       }
       if ($settings.theme) {
-        document.body.setAttribute('data-theme', $settings.theme);
+        setBodyFlag('data-theme', $settings.theme);
       }
-      document.body.setAttribute('data-ui-style', $settings.uiStyle || 'style1');
+      setBodyFlag('data-ui-style', $settings.uiStyle || 'style1');
       // Размеры передаются явно: Svelte видит обе зависимости и пересчитывает автоматику
       // не только при смене пункта настройки, но и при переносе окна на другой монитор.
       void applyInterfaceScale(
@@ -423,15 +452,15 @@
       );
       // Пользовательская гарнитура относится только к словам песни. Интерфейс остаётся
       // стабильным по метрикам: переключение текста не двигает меню, кнопки и карточки.
-      document.body.setAttribute('data-lyrics-font', $settings.fontFamily || 'inter');
-      document.body.setAttribute('data-global-theme', $settings.globalThemeEffect ? 'true' : 'false');
+      setBodyFlag('data-lyrics-font', $settings.fontFamily || 'inter');
+      setBodyFlag('data-global-theme', $settings.globalThemeEffect ? 'true' : 'false');
       // Глобальный дизайн — отдельная ось от uiStyle/theme: он переопределяет сами
       // материалы и типографику (src/design-aurora.css), а не только оттенок.
-      document.body.setAttribute('data-design', $settings.design === 'aurora' ? 'aurora' : 'classic');
+      setBodyFlag('data-design', $settings.design === 'aurora' ? 'aurora' : 'classic');
 
       // Режим производительности. Снимает самые дорогие эффекты (живое размытие фона под
       // панелями) без потери визуального строя: вместо стекла — плотная тёмная заливка.
-      document.body.setAttribute('data-perf', $effectivePerformanceMode ? 'light' : 'full');
+      setBodyFlag('data-perf', $effectivePerformanceMode ? 'light' : 'full');
 
       // Эффекты движения. Атрибут ставится всегда, а не только в положении «выключено»:
       // селектор `body[data-fx-glare="off"]` читается однозначно, а `body:not([data-fx-glare])`
@@ -447,10 +476,10 @@
       // тумблер молча стирал бы четыре других, и восстанавливать их пришлось бы руками.
       const lite = $effectivePerformanceMode;
       const fx = (on: boolean) => (on && !lite ? 'on' : 'off');
-      document.body.setAttribute('data-fx-tilt', fx($settings.coverTilt !== false));
-      document.body.setAttribute('data-fx-glare', fx($settings.coverGlare !== false));
-      document.body.setAttribute('data-fx-sheen', fx($settings.cardSheen !== false));
-      document.body.setAttribute('data-fx-press', fx($settings.panelPress !== false));
+      setBodyFlag('data-fx-tilt', fx($settings.coverTilt !== false));
+      setBodyFlag('data-fx-glare', fx($settings.coverGlare !== false));
+      setBodyFlag('data-fx-sheen', fx($settings.cardSheen !== false));
+      setBodyFlag('data-fx-press', fx($settings.panelPress !== false));
     }
   }
 

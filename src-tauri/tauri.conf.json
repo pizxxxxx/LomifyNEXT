@@ -40,7 +40,7 @@
     ],
     "publisher": "lomify",
     "copyright": "Copyright © 2026 pizx",
-    "licenseFile": "resources/LICENSE.txt",
+    "licenseFile": "installer/license.rtf",
     "resources": [
       "resources/zapret/*"
     ],
@@ -53,6 +53,9 @@
     ],
     "windows": {
       "nsis": {
+        "template": "installer/installer.nsi",
+        "headerImage": "installer/header.bmp",
+        "sidebarImage": "installer/sidebar.bmp",
         "installerIcon": "icons/icon.ico",
         "uninstallerIcon": "icons/icon.ico",
         "installMode": "currentUser",

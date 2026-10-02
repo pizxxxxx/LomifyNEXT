@@ -70,6 +70,8 @@ Svelte routes/components
 | Spotify account/library import | `src/lib/spotify.ts`, `src/lib/musicImport.ts`, `src/lib/components/SpotifyImport.svelte`, `src-tauri/src/import/spotify.rs` |
 | Last.fm account, cloud reports, recommendations, scrobbling | `src/lib/lastfm.ts`, `src/lib/components/LastFmConnect.svelte`, `src/lib/components/Profile.svelte`, `src/lib/components/Player.svelte`, `src/lib/api.ts` |
 | Auto-updates and GitHub releases | `src/lib/updater.ts`, `src-tauri/src/app/updater.rs`, `src/routes/+layout.svelte`, `src/lib/components/Settings.svelte` |
+| Windows installer appearance, pages, artwork, licence text | `src-tauri/installer/installer.nsi`, `src-tauri/installer/`, `scripts/build-installer-assets.ps1`, `src-tauri/tauri.conf.json` |
+| Mis-aimed clicks after a relayout, card tilt drift | `src/lib/utils/hitGuard.ts`, `src/lib/utils/tilt.ts`, `src/lib/components/Library.svelte`, `src/routes/+layout.svelte` |
 | Release/version update | `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, `src/lib/version.ts`, changelog |
 
 ## 3. Repository layout
@@ -83,6 +85,8 @@ Svelte routes/components
 | `src/lib/utils/` | Small frontend helpers for artists, navigation, visual effects, and formatting. |
 | `src-tauri/src/` | Active Rust/Tauri application. |
 | `src-tauri/capabilities/` | Tauri permission/capability declarations. |
+| `src-tauri/installer/` | Windows NSIS installer assets: forked `installer.nsi` template, `header.bmp`, `sidebar.bmp`, `license.rtf`. Referenced from `bundle.windows.nsis` in `src-tauri/tauri.conf.json`. |
+| `scripts/` | Repository helper scripts run by hand, not by the app. |
 | `utils/` | Rust helper crates referenced from `src-tauri/Cargo.toml`. |
 | `static/` | Files copied into the frontend build as static assets. |
 | `permissions/` | Additional permission definitions kept at repository root. |
@@ -129,7 +133,7 @@ and `artist`. When adding a view, update the union types, navigation history log
 | `Equalizer.svelte` | Ten-band equalizer UI and presets. |
 | `ArtistPage.svelte` | Artist profile with source metadata/biography, releases/albums and persisted track sorting; the compact photo header does not publish a page atmosphere. |
 | `ArtistTrackList.svelte` | Shared artist/album track rows with dates, duration, available play counts, likes, expandable metadata and progressive rendering. |
-| `Profile.svelte` | User profile dashboard, local listening/likes/playlist statistics, ranked tracks, SoundCloud/Yandex/Last.fm identity, and cloud Last.fm period reports. |
+| `Profile.svelte` | User profile dashboard, local listening/likes/playlist statistics, ranked tracks, listening history grouped by day, SoundCloud/Yandex/Last.fm identity, and cloud Last.fm period reports. The history reuses `listenStats.history` (one record per track with `count` and `lastPlayedAt`) sorted by time, so a track appears once with its latest play; there is no separate chronological journal. |
 | `Sidebar.svelte` | Main view navigation, support entry to the existing Settings dialog, and the same account-identity precedence as the profile header. |
 | `Titlebar.svelte` | Custom Tauri window controls, persisted Windows/macOS-style placement, and window-state saving. |
 | `WaveHero.svelte` | Home-page Yandex “My Wave” hero and visual presentation. |
@@ -169,6 +173,13 @@ order; do not scan the whole frontend before them:
    `body[data-perf="light"]` block near the end of `src/app.css` — performance mode stops
    the Wave render loop, card preview/animation work, tilt/glare, blur, and large backdrop
    layers while preserving the normal-mode card appearance.
+   `effectivePerformanceMode` in `src/lib/stores.ts` reads the saved `perfMode` preference
+   only. `automaticPerformanceMode` (the `detectLowEndDevice` heuristic) is advisory and feeds
+   a hint line in Settings; it must not be OR-ed back into the effective mode. It used to be,
+   which latched light mode on permanently with the toggle disabled, and that is what removed
+   the blur from the sidebar and from fullscreen settings panels in release builds only
+   (`navigator.deviceMemory` needs a secure context, and dev and release run on different
+   origins, so dev and release disagreed).
 
 ### State and data modules
 
@@ -198,6 +209,8 @@ order; do not scan the whole frontend before them:
 | `src/lib/utils/playlistOrder.ts` | Immutable random/smart shuffle and order-only undo, preserving current tracks and metadata; smart artist scheduling uses a heap and bounded candidate selection. |
 | `src/lib/utils/playlistSearch.ts` | Full-playlist title/artist matching with case and ё normalization; preserves source indices for numbering and playback from a search result. |
 | `src/lib/utils/artistTracks.ts` | Artist track sorting, release-date/duration formatting and the sort preference key. |
+| `src/lib/utils/hitGuard.ts` | `pointerMissed(event, element)` rejects clicks whose cursor point is outside the element's fresh `getBoundingClientRect`. Guards against the WebView hit-tree lagging behind a relayout (settings round-trip, tab switch, incremental grid rows); used from `Library.svelte` on the track action rows in capture phase. |
+| `src/lib/utils/tilt.ts` | Pointer tilt/glare for track cards. Caches the hovered card's box and re-measures it once per hover when the cursor is more than `OUTSIDE_SLACK` px outside, so cards that move during incremental loading stop tilting from a stale centre. |
 | `src/lib/fft.ts` | Fixed-size FFT payload normalization for UI visualizers. |
 | `src/lib/updater.ts` | GitHub Releases update checking, semver comparison, asset download tracking, and installer invocation. |
 | `src/lib/changelog.ts` | Structured application changelog history, release highlights, expandable details, and agent instructions. |
@@ -259,8 +272,8 @@ the NSIS icon format correction from 9.4.92. macOS and mobile artwork are separa
 | `network/proxy_server.rs` | Local proxy server. |
 | `network/static_server.rs` | Local static/wallpaper serving. |
 | `network/server.rs` | Starts native servers and exposes their ports. |
-| `network/soundcloud_bypass.rs` | Windows-only launcher/status commands for bundled Zapret strategy checks, plus diagnosis of failed SoundCloud track streams. `soundcloud_bypass_start` takes an optional `force` flag (sweep every strategy and keep the fastest even when direct access already works) and returns immediately, waiting for the UAC prompt on a background task so cancellation stays available. Status carries `mode` and a step-by-step `report`. The helper can run beside another winws using a SoundCloud IP-scoped WinDivert filter and never controls other processes. |
-| `network/zapret_catalog.rs` | Background import of validated HTTPS strategy parameters from Flowseal GitHub; saves an app-data catalog for the elevated SoundCloud helper. |
+| `network/soundcloud_bypass.rs` | Windows-only launcher/status commands for bundled Zapret strategy checks, plus diagnosis of failed SoundCloud track streams. `soundcloud_bypass_start` takes an optional `force` flag (sweep every strategy and keep the fastest even when direct access already works) and an optional `strategy` name (run only that one); `soundcloud_bypass_strategy_options` lists the catalog for the manual picker. It returns immediately, waiting for elevation on a background task so cancellation stays available; the `elevating` state is worded so it does not promise a UAC window, which custom Windows builds may auto-approve without showing anything. Status carries `mode` (`auto`/`force`/`manual`) and a step-by-step `report`. The helper can run beside another winws using a SoundCloud IP-scoped WinDivert filter and never controls other processes. |
+| `network/zapret_catalog.rs` | Background import of validated HTTPS strategy parameters from the Flowseal and Bol-van GitHub repositories; saves an app-data catalog for the elevated SoundCloud helper, keeping each entry's origin so the UI can show where a strategy came from. |
 | `network/wallpapers.rs` | Wallpaper search sources. |
 | `shared/hls.rs` | HLS parsing/download helpers shared by playback/cache code. |
 | `shared/net.rs` | Shared network validation/helpers. |
@@ -285,7 +298,12 @@ The authoritative registration list is in `src-tauri/src/lib.rs`.
 - Call client: commands prefixed with `call_`.
 - Auth: commands prefixed with `auth_`.
 - Wallpapers/direct network: `wallpaper_search`, `net_fetch_direct`.
-- SoundCloud bypass and connection check: `soundcloud_bypass_start` (optional `force`), `soundcloud_bypass_stop`, `soundcloud_bypass_status` (including Flowseal catalog, playback diagnosis, selection `report`, and `mode`), `soundcloud_bypass_test_connection`, `soundcloud_bypass_report_playback_failure`.
+- SoundCloud bypass and connection check: `soundcloud_bypass_start` (optional `force`, optional
+  `strategy` name for manual selection), `soundcloud_bypass_stop`, `soundcloud_bypass_status`
+  (including Flowseal/Bol-van catalog, playback diagnosis, selection `report`, and `mode` of
+  `auto`/`force`/`manual`), `soundcloud_bypass_strategy_options` (name, description and origin
+  set for the manual picker), `soundcloud_bypass_test_connection`,
+  `soundcloud_bypass_report_playback_failure`.
 - Updates: `check_and_download_update`, `install_update`.
 
 Important event families:
@@ -496,10 +514,38 @@ The desktop application tracks `src-tauri/Cargo.lock`. Tauri and its plugins are
 `src-tauri/Cargo.toml` and `package.json` to the matching versions verified for the release.
 Keep both lockfiles when building installers; update the native and JavaScript packages together.
 
-Desktop 9.5.0 is still in preparation. `docs/releases/v9.5.0.md` contains pending notes;
-Windows installer publication is deferred while the remaining desktop work is unfinished.
+Desktop 9.5.0 is still in preparation. `docs/releases/v9.5.0.md` contains pending notes.
+The Windows installer itself now builds and has been verified visually: `npm run tauri build`
+produces `src-tauri/target/release/bundle/nsis/LomifyNEXT_<version>_x64-setup.exe` from the
+forked template in `src-tauri/installer/`. Publication still waits on the remaining desktop work.
 The prematurely published desktop 9.5.1 release and tag
 were withdrawn; the Android 1.0.14 release remains published in the mobile repository.
+
+### Windows installer theming
+
+`bundle.windows.nsis.template` points at `src-tauri/installer/installer.nsi`, a fork of the
+Tauri CLI 2.11.2 NSIS template with `LOMIFY`-tagged edits only. Keeping it a thin fork is
+deliberate: re-diff it against the upstream template when the pinned Tauri CLI version changes.
+
+Facts the fork depends on, all verified empirically:
+
+- NSIS page controls do not live directly under `$HWNDPARENT`. Control 1018 is a hidden
+  placeholder; the real page dialog is a `#32770` child with no control ID, so the fork walks
+  `FindWindow $0 "#32770" "" $HWNDPARENT $childAfter` in a loop and recolours every match.
+- `SetCtlColors` only records colours. A forced
+  `USER32::RedrawWindow(hwnd, 0, 0, 0x0185)` is what makes them appear on the current page.
+- `SysListView32` (the InstFiles detail list, id 1016) ignores `SetCtlColors`; it needs
+  `LVM_SETBKCOLOR`, `LVM_SETTEXTBKCOLOR` and `LVM_SETTEXTCOLOR`.
+- The installer runs without visual styles, so push buttons never receive `WM_CTLCOLORBTN`.
+  The bottom buttons, `Обзор ...`, `Детали...`, check-box squares and radio circles stay
+  native by design; recolouring them would require owner-draw.
+- Colours are `COLORREF` (`0x00BBGGRR`), i.e. reverse byte order from CSS `RRGGBB`.
+
+`scripts/build-installer-assets.ps1` regenerates the artwork and the licence page:
+`sidebar.bmp` (164x314, 24-bit `BI_RGB` - NSIS rejects other variants), `header.bmp`
+(150x57) and `license.rtf`. Run it by hand after changing the icon or wordmark; the outputs
+are committed, so a normal build does not need it. The script contains Cyrillic, so it must
+stay UTF-8 with BOM - Windows PowerShell 5.1 reads a BOM-less file as ANSI and breaks.
 
 When changing the application version, verify all of these locations:
 

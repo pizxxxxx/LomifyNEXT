@@ -44,6 +44,7 @@
   } from '$lib/updater';
   import { listOutputs, applyOutput, type AudioOutput } from '$lib/audioOutput';
   import SelectMenu from './SelectMenu.svelte';
+  import { cubicOut } from 'svelte/easing';
   import SpotifyImport from './SpotifyImport.svelte';
   import LastFmConnect from './LastFmConnect.svelte';
   import MusicServiceIcon from './MusicServiceIcon.svelte';
@@ -54,7 +55,7 @@
     && '__TAURI_INTERNALS__' in window
     && /Win/i.test(navigator.platform);
   type SoundCloudBypassStatus = {
-    state: 'idle' | 'testing' | 'running' | 'watching' | 'waiting' | 'external' | 'direct' | 'failed' | 'stopped' | 'stopping';
+    state: 'idle' | 'elevating' | 'testing' | 'running' | 'watching' | 'waiting' | 'external' | 'direct' | 'failed' | 'stopped' | 'stopping';
     message: string;
     strategy: string;
     index: number;
@@ -67,13 +68,15 @@
     autoEnabled: boolean;
     /** Пошаговый отчёт подбора: что пробовали и чем это кончилось. */
     report: string;
-    /** 'auto' или 'force' - режим последнего запуска. */
+    /** 'auto', 'force' или 'manual' - режим последнего запуска. */
     mode: string;
   };
   type SoundCloudConnectionTest = {
     reachable: boolean;
     checks: { service: string; reachable: boolean; status: number | null; detail: string }[];
   };
+  /** Один пункт списка стратегий: имя уходит в запуск, остальное - для показа. */
+  type SoundCloudStrategyOption = { name: string; description: string; origin: string };
   let soundCloudBypassStatus: SoundCloudBypassStatus = {
     state: 'idle', message: '', strategy: '', index: 0, total: 0, catalogCount: 0, catalogUpdatedAt: 0,
     diagnosisState: '', diagnosisMessage: '', diagnosisAt: 0, autoEnabled: false, report: '', mode: ''
@@ -82,19 +85,58 @@
   let soundCloudConnectionBusy = false;
   let soundCloudConnection: SoundCloudConnectionTest | null = null;
   let soundCloudReportOpen = false;
+  let soundCloudStrategies: SoundCloudStrategyOption[] = [];
+  let soundCloudStrategiesLoading = false;
+  /** Пустая строка - подбирать самому. Иначе имя стратегии из списка. */
+  let soundCloudManualStrategy = '';
   $: soundCloudBypassOn = $settings.soundcloudBypassEnabled !== false;
   /** Идёт ли прямо сейчас работа, которую можно прервать. */
-  $: soundCloudBypassActive = ['testing', 'running', 'watching', 'waiting'].includes(soundCloudBypassStatus.state);
+  $: soundCloudBypassActive = ['elevating', 'testing', 'running', 'watching', 'waiting'].includes(soundCloudBypassStatus.state);
   $: soundCloudStatusTitle = ({
-    idle: 'Обход не включён', testing: 'Подбираю стратегию', running: 'Обход работает',
+    idle: 'Обход не включён', elevating: 'Готовлю запуск', testing: 'Подбираю стратегию', running: 'Обход работает',
     watching: 'SoundCloud отвечает', waiting: 'Ожидаю повторной проверки',
     failed: 'Обход не запустился', stopped: 'Обход выключен', stopping: 'Останавливаю',
     external: 'SoundCloud отвечает', direct: 'SoundCloud отвечает'
   } as Record<string, string>)[soundCloudBypassStatus.state] || 'Состояние обхода';
   $: soundCloudStatusTone = soundCloudBypassStatus.state === 'running' ? 'success'
-    : soundCloudBypassStatus.state === 'testing' || soundCloudBypassStatus.state === 'waiting' || soundCloudBypassStatus.state === 'stopping' ? 'progress'
+    : ['elevating', 'testing', 'waiting', 'stopping'].includes(soundCloudBypassStatus.state) ? 'progress'
     : soundCloudBypassStatus.state === 'failed' ? 'error'
     : soundCloudBypassStatus.state === 'watching' ? 'ready' : 'idle';
+  /**
+   * Пункты выпадающего списка. Первый - автоподбор, дальше стратегии. Имена из каталога уже
+   * начинаются с названия набора (`Flowseal general`, `Bol-van preset1`), у встроенных его
+   * нет - им подпись источника добавляется, чтобы в одном списке было видно, что откуда.
+   */
+  $: soundCloudStrategyItems = [
+    { value: '', label: 'Подобрать автоматически' },
+    ...soundCloudStrategies.map(option => ({
+      value: option.name,
+      label: option.name.startsWith(option.origin) ? option.name : `${option.name} - ${option.origin}`
+    }))
+  ];
+  /** Описание выбранной стратегии под списком: объясняет, что именно включится. */
+  $: soundCloudManualDescription = soundCloudManualStrategy
+    ? soundCloudStrategies.find(option => option.name === soundCloudManualStrategy)?.description ?? ''
+    : '';
+
+  /** Список стратегий для ручного выбора. Тянется один раз при открытии настроек. */
+  async function loadSoundCloudStrategies() {
+    if (!soundCloudBypassSupported || soundCloudStrategiesLoading) return;
+    soundCloudStrategiesLoading = true;
+    try {
+      soundCloudStrategies = await invoke<SoundCloudStrategyOption[]>('soundcloud_bypass_strategy_options');
+      // Каталог обновляется в фоне, и выбранной стратегии в нём может уже не быть. Молча
+      // возвращаем выбор к автоподбору, иначе запуск упал бы с «такой стратегии нет».
+      if (soundCloudManualStrategy && !soundCloudStrategies.some(option => option.name === soundCloudManualStrategy)) {
+        soundCloudManualStrategy = '';
+      }
+    } catch (error) {
+      console.warn('[soundcloud] список стратегий недоступен', error);
+      soundCloudStrategies = [];
+    } finally {
+      soundCloudStrategiesLoading = false;
+    }
+  }
 
   async function testSoundCloudConnection() {
     if (soundCloudConnectionBusy || soundCloudBypassStatus.state === 'testing') return;
@@ -125,9 +167,14 @@
       if (soundCloudBypassActive || soundCloudBypassStatus.state === 'stopping') {
         await invoke('soundcloud_bypass_stop');
       } else {
-        // Принудительный режим передаётся при каждом запуске, а не запоминается на стороне
-        // Rust: переключатель рядом, и человек вправе поменять решение между попытками.
-        await invoke('soundcloud_bypass_start', { force: $settings.soundcloudBypassForce === true });
+        // Принудительный режим и ручной выбор передаются при каждом запуске, а не
+        // запоминаются на стороне Rust: оба органа управления рядом, и человек вправе
+        // поменять решение между попытками. Пустое имя = подбирать самому; тогда Rust
+        // получает `strategy: null` и ведёт себя как раньше.
+        await invoke('soundcloud_bypass_start', {
+          force: $settings.soundcloudBypassForce === true,
+          strategy: soundCloudManualStrategy || null
+        });
         soundCloudReportOpen = true;
       }
       await refreshSoundCloudBypassStatus();
@@ -276,6 +323,44 @@
     return { destroy: () => node.remove() };
   }
 
+  function prefersReducedMotion() {
+    return typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }
+
+  /**
+   * Появление окна поддержки. Переходов у него не было вовсе: слой с `blur(14px)` возникал
+   * сразу готовым, то есть всё окно уходило в расфокус за один кадр - и кадр этот самый
+   * дорогой, композитору надо собрать размытие целого экрана разом. Отсюда и рывок на
+   * открытии, и ощущение, что окно не открылось, а подменило собой экран.
+   *
+   * Размытие отдаётся в CSS через `--backdrop-blur` - тем же приёмом, что `--pop-blur` у меню
+   * плейлистов. Значение передаётся целиком: пока перехода нет, переменной не существует и
+   * правило сводится к постоянному значению из таблицы стилей.
+   */
+  function supportBackdrop(_node: HTMLElement, params: { duration?: number } = {}) {
+    const duration = prefersReducedMotion() ? 0 : params.duration ?? 200;
+    return {
+      duration,
+      easing: cubicOut,
+      css: (t: number) =>
+        `opacity: ${t}; --backdrop-blur: blur(${(t * 14).toFixed(2)}px) saturate(${(100 - t * 10).toFixed(1)}%);`
+    };
+  }
+
+  /**
+   * Само окно поднимается и подрастает - без отскока и без сдвига вбок: оно стоит по центру
+   * экрана, и любое боковое движение здесь читается как промах, а не как появление.
+   */
+  function supportPop(_node: HTMLElement, params: { duration?: number } = {}) {
+    const duration = prefersReducedMotion() ? 0 : params.duration ?? 240;
+    return {
+      duration,
+      easing: cubicOut,
+      css: (t: number, u: number) =>
+        `opacity: ${t}; transform: translate3d(0, ${(u * 14).toFixed(2)}px, 0) scale(${(0.965 + 0.035 * t).toFixed(4)});`
+    };
+  }
+
   async function setSupportOpen(next: boolean) {
     supportOpen = next;
     await tick();
@@ -417,6 +502,9 @@
     refreshOutputs();
     void refreshCacheStats();
     void refreshSoundCloudBypassStatus();
+    // Список стратегий тянется один раз на открытие вкладки: каталог обновляется в фоне
+    // раз в шесть часов, опрашивать его вместе со статусом незачем.
+    void loadSoundCloudStrategies();
     // Опрос состояния идёт только при включённом разделе: выключенный обход ничего не
     // меняет в файле статуса, и читать его дважды в секунду незачем.
     const bypassStatusTimer = setInterval(() => {
@@ -1196,20 +1284,22 @@
               <div class="setting-hint">
                 Упрощает тяжёлые эффекты, отключает предпрослушивание карточек и снижает
                 нагрузку на видеокарту. Внешний вид останется знакомым, а прокрутка и текст
-                песен будут работать плавнее на старых компьютерах.
-                {#if $automaticPerformanceMode}
-                  На этом компьютере режим включён автоматически.
+                песен будут работать плавнее на старых компьютерах. Размытие панелей при этом
+                заменяется плотной заливкой.
+                {#if $automaticPerformanceMode && $settings.perfMode !== true}
+                  Этот компьютер слабее обычного - режим может помочь, но включать его
+                  необязательно.
                 {/if}
               </div>
             </div>
+            <!-- Тумблер больше не блокируется: раньше он стоял `disabled`, когда эвристика
+                 считала компьютер слабым, и облегчённый режим было нечем выключить. -->
             <button
               aria-label="Режим производительности"
               role="switch"
-              aria-checked={$settings.perfMode || $automaticPerformanceMode}
+              aria-checked={$settings.perfMode === true}
               class="switch"
-              disabled={$automaticPerformanceMode}
-              title={$automaticPerformanceMode ? 'Включено автоматически для слабого компьютера' : 'Переключить режим производительности'}
-              on:click={() => $settings.perfMode = !$settings.perfMode}
+              on:click={() => $settings.perfMode = !($settings.perfMode === true)}
             >
               <span class="switch-knob"></span>
             </button>
@@ -1520,6 +1610,9 @@
                     {#if soundCloudBypassStatus.mode === 'force' && ['running', 'watching'].includes(soundCloudBypassStatus.state)}
                       <div class="sc-bypass-strategy">Подбор был принудительным: SoundCloud открывался и без обхода, поэтому выбрана самая быстрая из проверенных стратегий, а не единственная работающая.</div>
                     {/if}
+                    {#if soundCloudBypassStatus.mode === 'manual' && ['elevating', 'running', 'watching'].includes(soundCloudBypassStatus.state)}
+                      <div class="sc-bypass-strategy">Стратегия выбрана вручную, перебора не было. Если SoundCloud всё равно не открывается, вернитесь к пункту «Подобрать автоматически».</div>
+                    {/if}
                     {#if soundCloudBypassStatus.diagnosisMessage}
                       <div class="sc-bypass-diagnosis" data-kind={soundCloudBypassStatus.diagnosisState}>
                         <strong>Проверка трека</strong>
@@ -1539,7 +1632,7 @@
                   {/if}
 
                   {#if soundCloudBypassStatus.catalogCount > 0}
-                    <div class="setting-hint">Набор Flowseal: {soundCloudBypassStatus.catalogCount} стратегий, обновлён {new Date(soundCloudBypassStatus.catalogUpdatedAt * 1000).toLocaleString('ru-RU')}.</div>
+                    <div class="setting-hint">Готовые наборы стратегий: {soundCloudBypassStatus.catalogCount} шт., обновлены {new Date(soundCloudBypassStatus.catalogUpdatedAt * 1000).toLocaleString('ru-RU')}.</div>
                   {/if}
                   {#if soundCloudConnection}
                     <div class="sc-bypass-test" data-tone={soundCloudConnection.reachable ? 'success' : 'error'} role="status">
@@ -1554,6 +1647,34 @@
                   {/if}
 
                   <div class="sc-bypass-options">
+                    <!-- Ручной выбор стоит первым: он отменяет перебор целиком, и остальные
+                         два переключателя при выбранной стратегии уже ни на что не влияют. -->
+                    <div class="sc-bypass-option is-stacked">
+                      <div>
+                        <div class="setting-title !text-xs !mb-0.5">Какую стратегию включать</div>
+                        <div class="setting-hint !text-[11px] !mt-0 text-neutral-400">
+                          {#if soundCloudStrategiesLoading}
+                            Загружаю список...
+                          {:else if soundCloudStrategies.length === 0}
+                            Список пока пуст. Он заполнится после первой загрузки наборов стратегий.
+                          {:else if soundCloudManualStrategy}
+                            Приложение включит только эту стратегию и не будет перебирать остальные. Если SoundCloud с ней не заработает, вернитесь к пункту «Подобрать автоматически».
+                          {:else}
+                            Приложение само переберёт стратегии и оставит ту, с которой SoundCloud заработает. Выберите конкретную, если уже знаете, какая подходит.
+                          {/if}
+                        </div>
+                      </div>
+                      <SelectMenu
+                        ariaLabel="Какую стратегию включать"
+                        options={soundCloudStrategyItems}
+                        value={soundCloudManualStrategy}
+                        disabled={soundCloudStrategiesLoading || soundCloudBypassActive}
+                        onChange={(next) => soundCloudManualStrategy = String(next)}
+                      />
+                    </div>
+                    {#if soundCloudManualDescription}
+                      <div class="setting-hint !text-[11px] !mt-0 text-neutral-400">Что это: {soundCloudManualDescription}.</div>
+                    {/if}
                     <div class="sc-bypass-option">
                       <div>
                         <div class="setting-title !text-xs !mb-0.5">Подбирать, даже если SoundCloud открывается</div>
@@ -1567,6 +1688,7 @@
                         aria-label="Подбирать, даже если SoundCloud открывается"
                         aria-checked={$settings.soundcloudBypassForce === true}
                         class="switch"
+                        disabled={!!soundCloudManualStrategy}
                         on:click={() => $settings.soundcloudBypassForce = !($settings.soundcloudBypassForce === true)}
                       >
                         <span class="switch-knob"></span>
@@ -1592,7 +1714,7 @@
                     </div>
                   </div>
 
-                  <div class="setting-hint">Новые стратегии Flowseal загружаются каждые 6 часов. Перехват ограничен IP SoundCloud; если другой Zapret тоже обрабатывает эти адреса, результат зависит от совместной работы фильтров.</div>
+                  <div class="setting-hint">Наборы стратегий Flowseal и Bol-van загружаются каждые 6 часов. Перехват ограничен IP SoundCloud; если другой Zapret тоже обрабатывает эти адреса, результат зависит от совместной работы фильтров.</div>
                 {/if}
               </div>
               <div class="flex shrink-0 flex-col items-end gap-2">
@@ -1624,8 +1746,10 @@
                     on:click={toggleSoundCloudBypass}
                   >
                     {soundCloudBypassStatus.state === 'testing' ? 'Отменить подбор'
+                      : soundCloudBypassStatus.state === 'elevating' ? 'Отменить запуск'
                       : soundCloudBypassStatus.state === 'stopping' ? 'Останавливаю...'
                       : ['running', 'watching', 'waiting'].includes(soundCloudBypassStatus.state) ? 'Выключить'
+                      : soundCloudManualStrategy ? 'Включить выбранную'
                       : $settings.soundcloudBypassForce === true ? 'Перебрать все стратегии' : 'Подобрать и включить'}
                   </button>
                 {/if}
@@ -2854,12 +2978,14 @@
   <div
     class="support-dialog-backdrop"
     use:portalToBody
+    transition:supportBackdrop
     role="presentation"
     on:pointerdown|self={() => setSupportOpen(false)}
   >
     <div
       class="support-dialog"
       bind:this={supportDialog}
+      transition:supportPop
       role="dialog"
       tabindex="-1"
       aria-modal="true"
@@ -2907,7 +3033,7 @@
           class="support-method"
           on:click={() => chooseSupport(YOOMONEY_WALLET_URL)}
         >
-          <span class="support-method-icon is-wallet" aria-hidden="true">
+          <span class="support-method-icon" aria-hidden="true">
             <WalletCards size={21} />
           </span>
           <span class="support-method-copy">
