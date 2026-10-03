@@ -1,7 +1,7 @@
 # LomifyNEXT project map
 
-Last verified: 2026-09-30  
-Repository version at verification: 9.5.0
+Last verified: 2026-10-03  
+Repository version at verification: 9.5.1
 
 This file is the navigation index for the repository. Read it before broad exploration.
 It explains where a change normally belongs; source code is still the final authority.
@@ -46,7 +46,7 @@ Svelte routes/components
 | Task | First files to inspect |
 | --- | --- |
 | App startup, global theme, window-level effects | `src/routes/+layout.svelte`, `src/app.css` |
-| Windows taskbar, shortcut and executable icons | `src-tauri/icons/taskbar.png`, `src-tauri/icons/icon.ico`, `src-tauri/tauri.conf.json`, `src-tauri/src/lib.rs`, `src-tauri/src/app/tray.rs` |
+| Windows taskbar, shortcut and executable icons | `src-tauri/src/lib.rs` (`apply_windows_window_icons`), `src-tauri/icons/tray.png`, `src-tauri/icons/icon.ico`, `src-tauri/tauri.conf.json`, `src-tauri/src/app/tray.rs` |
 | Page/view navigation and home layout | `src/routes/+page.svelte`, `src/lib/stores.ts` |
 | Player controls, listening time or queue behavior | `src/lib/components/Player.svelte`, `src/lib/stores.ts`, `src/lib/wave.ts`, `src-tauri/src/audio/commands.rs` |
 | Native playback, seeking, volume, crossfade | `src-tauri/src/audio/commands.rs`, `src-tauri/src/audio/engine.rs`, `src-tauri/src/audio/state.rs` |
@@ -87,6 +87,7 @@ Svelte routes/components
 | `src-tauri/capabilities/` | Tauri permission/capability declarations. |
 | `src-tauri/installer/` | Windows NSIS installer assets: forked `installer.nsi` template, `header.bmp`, `sidebar.bmp`, `license.rtf`. Referenced from `bundle.windows.nsis` in `src-tauri/tauri.conf.json`. |
 | `scripts/` | Repository helper scripts run by hand, not by the app. |
+| `.gitattributes` | Pins `*.ps1` to LF. `core.autocrlf` is on in this repository, so without the rule git would hand out the SoundCloud bypass script with CRLF on one clone and LF on another. Its SHA-256 is compiled into the binary, so that would make the hash differ between clones. Every `.ps1` here is already LF with BOM, so the rule only fixes the current state in place. |
 | `utils/` | Rust helper crates referenced from `src-tauri/Cargo.toml`. |
 | `static/` | Files copied into the frontend build as static assets. |
 | `permissions/` | Additional permission definitions kept at repository root. |
@@ -238,11 +239,23 @@ order; do not scan the whole frontend before them:
 
 ### Native modules
 
-Windows icons: `src-tauri/icons/taskbar.png` is the existing transparent artwork used
-by the main window and tray. Bundle PNGs (32, 64, 128, 256) and `icon.ico` use the same
-artwork so executable/shortcut icons match the running window. Keep ICO layers 16,
-24, 32, 48, 64 and 128 as 32-bit BMP DIB with alpha/AND mask; 256 is PNG. This preserves
-the NSIS icon format correction from 9.4.92. macOS and mobile artwork are separate.
+Windows icons: `src-tauri/icons/taskbar.png` is the full-size transparent artwork and the
+source the other sizes are generated from. `src-tauri/icons/tray.png` is its 32 px
+derivative used for the tray and the Tauri window icon; the original 1536x1536 file expanded
+to nine megabytes of pixels on every start and lost definition when scaled to tray size.
+Bundle PNGs (32, 64, 128, 256) and `icon.ico` use the same artwork so executable/shortcut
+icons match the running window. Keep ICO layers 16, 24, 32, 48, 64 and 128 as 32-bit BMP DIB
+with alpha/AND mask; 256 is PNG. This preserves the NSIS icon format correction from 9.4.92.
+macOS and mobile artwork are separate.
+
+`apply_windows_window_icons` in `src-tauri/src/lib.rs` sends `WM_SETICON` for both
+`ICON_SMALL` and `ICON_BIG`. Tauri's own `set_icon` fills only the small slot (the title bar),
+so the taskbar button, which Windows draws from the big slot, had nothing to read and fell
+back to the shell icon cache - where the pre-9.5 artwork with a dark plate was still stored.
+That is why a background kept showing on the taskbar after the artwork had already become
+transparent everywhere else. The function unpacks the embedded `icon.ico` into
+`window-icon.ico` in the app data directory because `LoadImageW` reads `.ico` only from disk;
+in exchange it picks the right frame from the set and scales it correctly.
 
 | Module | Responsibility |
 | --- | --- |
@@ -272,7 +285,7 @@ the NSIS icon format correction from 9.4.92. macOS and mobile artwork are separa
 | `network/proxy_server.rs` | Local proxy server. |
 | `network/static_server.rs` | Local static/wallpaper serving. |
 | `network/server.rs` | Starts native servers and exposes their ports. |
-| `network/soundcloud_bypass.rs` | Windows-only launcher/status commands for bundled Zapret strategy checks, plus diagnosis of failed SoundCloud track streams. `soundcloud_bypass_start` takes an optional `force` flag (sweep every strategy and keep the fastest even when direct access already works) and an optional `strategy` name (run only that one); `soundcloud_bypass_strategy_options` lists the catalog for the manual picker. It returns immediately, waiting for elevation on a background task so cancellation stays available; the `elevating` state is worded so it does not promise a UAC window, which custom Windows builds may auto-approve without showing anything. Status carries `mode` (`auto`/`force`/`manual`) and a step-by-step `report`. The helper can run beside another winws using a SoundCloud IP-scoped WinDivert filter and never controls other processes. |
+| `network/soundcloud_bypass.rs` | Windows-only launcher/status commands for bundled Zapret strategy checks, plus diagnosis of failed SoundCloud track streams. `soundcloud_bypass_start` takes an optional `force` flag (sweep every strategy and keep the fastest even when direct access already works) and an optional `strategy` name (run only that one); `soundcloud_bypass_strategy_options` lists the catalog for the manual picker. It returns immediately, waiting for elevation on a background task so cancellation stays available; the `elevating` state is worded so it does not promise a UAC window, which custom Windows builds may auto-approve without showing anything. Status carries `mode` (`auto`/`force`/`manual`) and a step-by-step `report`. The helper can run beside another winws using a SoundCloud IP-scoped WinDivert filter and never controls other processes. See "SoundCloud bypass launch chain" in section 10 for why the launch is shaped the way it is. |
 | `network/zapret_catalog.rs` | Background import of validated HTTPS strategy parameters from the Flowseal and Bol-van GitHub repositories; saves an app-data catalog for the elevated SoundCloud helper, keeping each entry's origin so the UI can show where a strategy came from. |
 | `network/wallpapers.rs` | Wallpaper search sources. |
 | `shared/hls.rs` | HLS parsing/download helpers shared by playback/cache code. |
@@ -393,7 +406,10 @@ parameters refreshed in the background every six hours). SoundCloud bypass also 
 `soundcloud-bypass-enabled` for the user's automatic retry preference; disabling the bypass
 removes the latter marker. `soundcloud-bypass-status.json` holds the state the settings UI
 polls (state, strategy, `mode`, `report`), and `soundcloud-bypass-stop` is the cancel marker
-the elevated script checks every 200 ms. The three settings keys that gate all of this live
+the elevated script checks every 200 ms. `soundcloud-bypass-input.json` carries the built-in
+strategy list to the elevated script, and `soundcloud-bypass-launch.log` holds the one line a
+failed launch leaves behind. `window-icon.ico` is the unpacked copy of the embedded icon used
+for the taskbar button. The three settings keys that gate all of this live
 in `src/lib/stores.ts`: `soundcloudBypassEnabled` (whole section, read as `!== false`),
 `soundcloudBypassAutoStart` (launch the bypass at app start, wired in
 `src/routes/+layout.svelte`), and `soundcloudBypassForce` (sweep every strategy).
@@ -514,12 +530,43 @@ The desktop application tracks `src-tauri/Cargo.lock`. Tauri and its plugins are
 `src-tauri/Cargo.toml` and `package.json` to the matching versions verified for the release.
 Keep both lockfiles when building installers; update the native and JavaScript packages together.
 
-Desktop 9.5.0 is still in preparation. `docs/releases/v9.5.0.md` contains pending notes.
-The Windows installer itself now builds and has been verified visually: `npm run tauri build`
-produces `src-tauri/target/release/bundle/nsis/LomifyNEXT_<version>_x64-setup.exe` from the
-forked template in `src-tauri/installer/`. Publication still waits on the remaining desktop work.
-The prematurely published desktop 9.5.1 release and tag
-were withdrawn; the Android 1.0.14 release remains published in the mobile repository.
+Desktop 9.5.0 was published on 2026-10-02 as GitHub release `v9.5.0` with the NSIS installer
+attached; `npm run tauri build` produces
+`src-tauri/target/release/bundle/nsis/LomifyNEXT_<version>_x64-setup.exe` from the forked
+template in `src-tauri/installer/`. The earlier, prematurely published desktop 9.5.1 release
+and tag were withdrawn before that, and the number was reused for the current version. The
+Android 1.0.14 release remains published in the mobile repository.
+
+### SoundCloud bypass launch chain
+
+The bypass needs administrator rights, so `soundcloud_bypass_start` runs an unelevated
+`powershell.exe` whose only job is `Start-Process -Verb RunAs` for a second `powershell.exe`
+that runs `resources/zapret/soundcloud-bypass.ps1`. Facts this shape depends on, all found
+the hard way while fixing a launch that silently did nothing in 9.5.0:
+
+- Both shells need `-ExecutionPolicy Bypass`. `-EncodedCommand` itself is not subject to
+  execution policy, but `& script.ps1` inside it is, and the Windows default for the machine
+  scope is `Restricted`. Without the switch the bypass never ran at all on a machine where
+  nobody had relaxed that policy.
+- Nothing in the elevated process reports to the user by itself. Anything that fails before
+  the script's own `try` - execution policy, a hash mismatch, an unbound parameter - dies in a
+  hidden window. `CHILD_TEMPLATE` therefore wraps the whole call in `try`/`catch` and writes
+  both the status file and `soundcloud-bypass-launch.log`.
+- `Start-Process -Verb RunAs` writes a non-terminating error when elevation is refused, and
+  the host `powershell.exe` still exits 0. A zero exit code is not evidence that anything
+  started, so the spawned task polls the status file for 25 s and only treats the launch as
+  successful once the script has replaced `elevating` with its own state.
+- The strategy list goes through `soundcloud-bypass-input.json`, not the command line. As an
+  argument it pushed the final command line past 21 000 characters through two base64 layers
+  and two nested shells; by file it is about 15 000. Passing it by file is no weaker: every
+  strategy argument is checked against the `Test-CatalogArg` allow-list inside the script, and
+  the strategy catalog already arrives as a file in the same directory.
+- The script writes its first status line before the component hash checks. Those checks read
+  a three-megabyte library, and until they finished there was no way to tell a working launch
+  from a dead one.
+- `read_status` ages `elevating` out after 240 s, but `soundcloud_bypass_start` treats it as
+  in-progress for only 30 s. Otherwise a failed first attempt made the button do nothing at all
+  for four minutes.
 
 ### Windows installer theming
 

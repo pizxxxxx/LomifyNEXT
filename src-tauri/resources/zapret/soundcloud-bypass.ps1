@@ -4,11 +4,13 @@
   [Parameter(Mandatory = $true)][string]$StopPath,
   [Parameter(Mandatory = $true)][int]$AppPid,
   [string]$Mode = 'auto',
-  # Список встроенных стратегий приходит от приложения одним аргументом в base64. Раньше тот
-  # же список был записан и здесь вторым экземпляром: любое расхождение между ними означало бы,
-  # что человек выбирает в настройках одно, а запускается другое. Отдельного файла на диске
-  # намеренно нет - подменять нечего.
-  [string]$Strategies = '',
+  # Список встроенных стратегий приходит от приложения отдельным файлом. Раньше тот же список
+  # был записан и здесь вторым экземпляром: любое расхождение между ними означало бы, что
+  # человек выбирает в настройках одно, а запускается другое. Передавался он аргументом в
+  # base64, и это раздувало команду запуска до двадцати тысяч символов на два вложенных
+  # powershell - самое хрупкое место всей цепочки. Подмены файла бояться нечего: каждый
+  # параметр всё равно проходит проверку по белому списку ниже.
+  [string]$StrategiesPath = '',
   # Название стратегии, выбранной человеком вручную. Пустая строка - обычный подбор.
   [string]$Pick = ''
 )
@@ -260,13 +262,12 @@ function Get-BuiltinStrategies {
     @{ name = 'fake'; scope = 'host'; desc = 'подставляю обманный первый пакет рукопожатия'; args = @('--dpi-desync=fake', '--dpi-desync-fooling=badseq', '--dpi-desync-repeats=6') },
     @{ name = 'multisplit'; scope = 'host'; desc = 'разрезаю рукопожатие на несколько частей'; args = @('--dpi-desync=multisplit', '--dpi-desync-split-pos=1,midsld') }
   )
-  if ($Strategies -eq '') { return $fallback }
+  if ($StrategiesPath -eq '' -or -not (Test-Path -LiteralPath $StrategiesPath)) { return $fallback }
   try {
-    $decoded = @([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Strategies)) | ConvertFrom-Json)
+    $decoded = @(Get-Content -LiteralPath $StrategiesPath -Raw -Encoding UTF8 | ConvertFrom-Json)
   } catch {
     return $fallback
-  }
-  $result = @()
+  }  $result = @()
   foreach ($entry in $decoded) {
     if ($entry.name -notmatch '^[A-Za-z0-9 ()_.+\-]{1,80}$') { continue }
     $safeArgs = @($entry.args)
@@ -324,6 +325,13 @@ function Get-RemoteStrategies {
 }
 
 try {
+  # Первое, что делает сценарий, - отмечается в файле состояния. До этой строки проверялись
+  # хеши четырёх файлов (среди них библиотека на три мегабайта) и существование процесса
+  # приложения, и всё это время интерфейс показывал «готовлю запуск». Отличить «сценарий
+  # работает» от «сценарий вообще не запустился» в тот момент было невозможно - именно из-за
+  # этого отказ выглядел как зависание.
+  Add-Report 'Запуск с правами администратора получен, проверяю компоненты обхода.'
+  Write-Status 'testing' 'Проверяю компоненты обхода' '' 0 0
   $expected = @{
     'winws.exe' = 'AFFB4F69D2EA302A7ABCCD5325D81826E140DDAE014F1E070BC4A6C0DD555188'
     'WinDivert.dll' = 'C1E060EE19444A259B2162F8AF0F3FE8C4428A1C6F694DCE20DE194AC8D7D9A2'

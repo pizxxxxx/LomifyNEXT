@@ -55,6 +55,79 @@ fn request_low_webview_memory(app: &tauri::App) {
 #[cfg(not(windows))]
 fn request_low_webview_memory(_app: &tauri::App) {}
 
+/// Иконка кнопки приложения на панели задач Windows.
+///
+/// Tauri выставляет окну только «малую» иконку - ту, что видно в заголовке. Кнопку на панели
+/// задач Windows берёт из «большой», а её никто не задавал: окно отвечало на запрос пустотой,
+/// и оболочка подставляла картинку из своего кэша иконок. Кэш же хранил прежнее оформление с
+/// тёмной подложкой - из-за этого на панели держался квадрат с фоном, хотя в приложении и в
+/// самом файле программы иконка давно прозрачная. Здесь оба слота задаются явно, поэтому
+/// панель задач показывает текущую иконку и в кэш больше не заглядывает.
+///
+/// Файл иконки вшит в приложение и один раз распаковывается в папку данных: `LoadImageW` умеет
+/// читать `.ico` только с диска, зато сама выбирает подходящий по размеру кадр из набора и
+/// масштабирует его правильно.
+#[cfg(windows)]
+fn apply_windows_window_icons(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetSystemMetrics, LoadImageW, SendMessageW, IMAGE_ICON, LR_LOADFROMFILE, SM_CXICON,
+        SM_CXSMICON, SM_CYICON, SM_CYSMICON,
+    };
+
+    const ICON_BYTES: &[u8] = include_bytes!("../icons/icon.ico");
+    const WM_SETICON: u32 = 0x0080;
+    const ICON_SMALL: usize = 0;
+    const ICON_BIG: usize = 1;
+
+    let Ok(data_dir) = app.path().app_data_dir() else {
+        return;
+    };
+    let icon_path = data_dir.join("window-icon.ico");
+    let needs_write = std::fs::metadata(&icon_path)
+        .map(|metadata| metadata.len() != ICON_BYTES.len() as u64)
+        .unwrap_or(true);
+    if needs_write {
+        let _ = std::fs::create_dir_all(&data_dir);
+        if std::fs::write(&icon_path, ICON_BYTES).is_err() {
+            return;
+        }
+    }
+    let Ok(raw_handle) = window.hwnd() else {
+        return;
+    };
+    let hwnd = HWND(raw_handle.0 as isize);
+    let wide: Vec<u16> = icon_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    unsafe {
+        for (slot, cx, cy) in [
+            (ICON_BIG, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON)),
+            (
+                ICON_SMALL,
+                GetSystemMetrics(SM_CXSMICON),
+                GetSystemMetrics(SM_CYSMICON),
+            ),
+        ] {
+            if let Ok(handle) = LoadImageW(
+                HINSTANCE::default(),
+                PCWSTR(wide.as_ptr()),
+                IMAGE_ICON,
+                cx,
+                cy,
+                LR_LOADFROMFILE,
+            ) {
+                SendMessageW(hwnd, WM_SETICON, WPARAM(slot), LPARAM(handle.0));
+            }
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();
@@ -203,9 +276,11 @@ pub fn run() {
             network::call::maybe_autostart(app.handle(), call_state);
 
             if let Some(main_win) = app.get_webview_window("main") {
-                if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../icons/taskbar.png")) {
+                if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png")) {
                     let _ = main_win.set_icon(icon);
                 }
+                #[cfg(windows)]
+                apply_windows_window_icons(app.handle(), &main_win);
             }
 
             Ok(())

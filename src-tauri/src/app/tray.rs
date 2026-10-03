@@ -15,7 +15,11 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .items(&[&show, &play_pause, &prev, &next, &quit])
         .build()?;
 
-    let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../../icons/taskbar.png"))
+    // Трею нужна иконка размером с полтора сантиметра экрана, а не исходник 1536x1536:
+    // та картинка разворачивалась в девять мегабайт пикселей на каждый запуск, и её
+    // уменьшение до шестнадцати точек съедало резкость. `tray.png` - тот же рисунок,
+    // подготовленный под маленький размер, с убранной почти невидимой тёмной дымкой по краям.
+    let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../../icons/tray.png"))
         .unwrap_or_else(|_| app.default_window_icon().cloned().expect("no app icon"));
 
     TrayIconBuilder::new()

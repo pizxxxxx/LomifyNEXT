@@ -407,6 +407,57 @@ fn bundled_script_hash() -> String {
     hex::encode(sha2::Sha256::digest(bytes)).to_uppercase()
 }
 
+/// Команда, которая выполняется уже с правами администратора.
+///
+/// Раньше здесь была одна строка без обработки ошибок, и это оказалось главной причиной
+/// жалобы «нажимаю - и ничего». Всё, что ломалось до `try` внутри самого сценария
+/// (запрет на выполнение сценариев в политике Windows, несошедшийся хеш, непринятый
+/// параметр), падало в скрытом окне и не оставляло следа: файл состояния так и оставался
+/// в «готовлю запуск», пока его через четыре минуты не признавали просроченным. Теперь
+/// любой такой отказ сам пишет состояние и строку в журнал запуска, поэтому вместо тишины
+/// человек видит причину.
+#[cfg(windows)]
+const CHILD_TEMPLATE: &str = r#"$ErrorActionPreference = 'Stop'
+$statusPath = @STATUS@
+$logPath = @LOG@
+function Write-Fail([string]$text) {
+  try { [IO.File]::WriteAllText($logPath, ((Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + '  ' + $text), [Text.Encoding]::UTF8) } catch { }
+  try {
+    $payload = @{ state = 'failed'; message = $text; strategy = ''; index = 0; total = 0; ownerPid = @PID@; mode = @MODE@; report = $text } | ConvertTo-Json -Compress
+    [IO.File]::WriteAllText($statusPath, $payload, [Text.Encoding]::UTF8)
+  } catch { }
+  exit 1
+}
+try {
+  if (-not (Test-Path -LiteralPath @SCRIPT@)) { Write-Fail 'Файл сценария обхода не найден. Переустановите Lomify.' }
+  if ((Get-FileHash -LiteralPath @SCRIPT@ -Algorithm SHA256).Hash -ne @HASH@) { Write-Fail 'Файл сценария обхода отличается от встроенного в приложение. Переустановите Lomify.' }
+  & @SCRIPT@ -Root @ROOT@ -StatusPath $statusPath -StopPath @STOP@ -AppPid @PID@ -Mode @MODE@ -StrategiesPath @INPUT@ -Pick @PICK@
+} catch {
+  Write-Fail ('Сценарий обхода не запустился: ' + $_.Exception.Message)
+}
+"#;
+
+/// Запрос прав администратора. Выполняется от обычного пользователя, поэтому единственное,
+/// что здесь может случиться, - отказ в повышении прав. Он тоже обязан оставить сообщение:
+/// `Start-Process -Verb RunAs` при отказе пишет обычную ошибку, а сам powershell.exe при
+/// этом возвращает ноль, и приложение считало такой запуск удавшимся.
+#[cfg(windows)]
+const LAUNCHER_TEMPLATE: &str = r#"$ErrorActionPreference = 'Stop'
+try {
+  Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', @ENC@) | Out-Null
+} catch {
+  $inAdmins = $false
+  try { $inAdmins = @([Security.Principal.WindowsIdentity]::GetCurrent().Groups | Where-Object { $_.Value -eq 'S-1-5-32-544' }).Count -gt 0 } catch { }
+  $text = if ($inAdmins) { 'Windows не выдала права администратора: ' + $_.Exception.Message } else { 'Для обхода нужны права администратора, а эта учётная запись не входит в администраторов компьютера. Войдите под учётной записью администратора или попросите владельца компьютера выдать права.' }
+  try { [IO.File]::WriteAllText(@LOG@, ((Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + '  ' + $text), [Text.Encoding]::UTF8) } catch { }
+  try {
+    $payload = @{ state = 'failed'; message = $text; strategy = ''; index = 0; total = 0; ownerPid = @PID@; mode = @MODE@; report = $text } | ConvertTo-Json -Compress
+    [IO.File]::WriteAllText(@STATUS@, $payload, [Text.Encoding]::UTF8)
+  } catch { }
+  exit 1
+}
+"#;
+
 #[tauri::command]
 pub fn soundcloud_bypass_status(app: AppHandle) -> Result<BypassStatus, String> {
     let (_, status_path, _) = paths(&app)?;
@@ -494,12 +545,21 @@ pub async fn soundcloud_bypass_start(
     };
     let (root, status_path, stop_path) = paths(&app)?;
     let previous = read_status(&status_path);
-    if previous.owner_pid == std::process::id()
-        && matches!(
-            previous.state.as_str(),
-            "elevating" | "testing" | "running" | "watching" | "waiting"
-        )
-    {
+    // Повторное нажатие не должно проваливаться в пустоту. Раньше любое «готовлю запуск»
+    // считалось выполняющимся запуском, а просроченным оно признавалось только через четыре
+    // минуты: если первая попытка умирала молча, следующие четыре минуты кнопка просто ничего
+    // не делала. Запрос прав столько не живёт - тридцати секунд на него достаточно.
+    let elevating_age = std::fs::metadata(&status_path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .unwrap_or_default();
+    let busy = match previous.state.as_str() {
+        "elevating" => elevating_age < Duration::from_secs(30),
+        "testing" | "running" | "watching" | "waiting" => true,
+        _ => false,
+    };
+    if previous.owner_pid == std::process::id() && busy {
         return Ok(());
     }
     for name in [
@@ -514,6 +574,16 @@ pub async fn soundcloud_bypass_start(
         }
     }
     let _ = std::fs::remove_file(&stop_path);
+    let log_path = status_path.with_file_name("soundcloud-bypass-launch.log");
+    let input_path = status_path.with_file_name("soundcloud-bypass-input.json");
+    let _ = std::fs::remove_file(&log_path);
+    // Список стратегий уходит отдельным файлом, а не аргументом командной строки. Аргументом
+    // он раздувал команду запуска до двадцати с лишним тысяч символов: строка проходила через
+    // два слоя base64 и два вложенных powershell, и этот путь оказался самым хрупким звеном.
+    // На безопасность это не влияет: каждый параметр стратегии всё равно проверяется в скрипте
+    // по белому списку, и каталог стратегий уже лежит файлом в той же папке.
+    std::fs::write(&input_path, BUILTIN_STRATEGIES_JSON.as_bytes())
+        .map_err(|error| format!("Не удалось подготовить список стратегий: {error}"))?;
     // Отдельное состояние, а не «подбираю стратегию»: пока идёт запрос прав, ничего не
     // подбирается, и подписью про подбор это ожидание выглядело как зависшая проверка.
     // Формулировка условная: на части систем Windows выдаёт права молча, без всякого окна,
@@ -533,29 +603,23 @@ pub async fn soundcloud_bypass_start(
     )?;
 
     let script = root.join("soundcloud-bypass.ps1");
-    let strategies_payload = {
-        use base64::Engine;
-        base64::engine::general_purpose::STANDARD.encode(BUILTIN_STRATEGIES_JSON.as_bytes())
-    };
-    let child_command = format!(
-        "if ((Get-FileHash -LiteralPath {} -Algorithm SHA256).Hash -ne '{}') {{ [IO.File]::WriteAllText({}, '{{\"state\":\"failed\",\"message\":\"Не прошла проверка скрипта обхода\",\"strategy\":\"\",\"index\":0,\"total\":0}}'); exit 1 }}; & {} -Root {} -StatusPath {} -StopPath {} -AppPid {} -Mode {} -Strategies {} -Pick {}",
-        ps_literal(&script.to_string_lossy()),
-        bundled_script_hash(),
-        ps_literal(&status_path.to_string_lossy()),
-        ps_literal(&script.to_string_lossy()),
-        ps_literal(&root.to_string_lossy()),
-        ps_literal(&status_path.to_string_lossy()),
-        ps_literal(&stop_path.to_string_lossy()),
-        std::process::id(),
-        ps_literal(mode),
-        ps_literal(&strategies_payload),
-        ps_literal(pick.as_deref().unwrap_or("")),
-    );
-    let encoded_child = encode_powershell(&child_command);
-    let launcher_command = format!(
-        "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -ArgumentList '-NoProfile -EncodedCommand {}'",
-        encoded_child
-    );
+    let child_command = CHILD_TEMPLATE
+        .replace("@SCRIPT@", &ps_literal(&script.to_string_lossy()))
+        .replace("@HASH@", &ps_literal(&bundled_script_hash()))
+        .replace("@STATUS@", &ps_literal(&status_path.to_string_lossy()))
+        .replace("@LOG@", &ps_literal(&log_path.to_string_lossy()))
+        .replace("@ROOT@", &ps_literal(&root.to_string_lossy()))
+        .replace("@STOP@", &ps_literal(&stop_path.to_string_lossy()))
+        .replace("@INPUT@", &ps_literal(&input_path.to_string_lossy()))
+        .replace("@MODE@", &ps_literal(mode))
+        .replace("@PICK@", &ps_literal(pick.as_deref().unwrap_or("")))
+        .replace("@PID@", &std::process::id().to_string());
+    let launcher_command = LAUNCHER_TEMPLATE
+        .replace("@ENC@", &ps_literal(&encode_powershell(&child_command)))
+        .replace("@STATUS@", &ps_literal(&status_path.to_string_lossy()))
+        .replace("@LOG@", &ps_literal(&log_path.to_string_lossy()))
+        .replace("@MODE@", &ps_literal(mode))
+        .replace("@PID@", &std::process::id().to_string());
     let encoded_launcher = encode_powershell(&launcher_command);
 
     // Запрос прав администратора показывает системное окно и держит вызов до тех пор, пока
@@ -567,7 +631,13 @@ pub async fn soundcloud_bypass_start(
         let launched = tokio::task::spawn_blocking(move || {
             use std::os::windows::process::CommandExt;
             std::process::Command::new("powershell.exe")
-                .args(["-NoProfile", "-EncodedCommand", &encoded_launcher])
+                .args([
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-EncodedCommand",
+                    &encoded_launcher,
+                ])
                 .creation_flags(0x0800_0000)
                 .output()
         })
@@ -578,24 +648,48 @@ pub async fn soundcloud_bypass_start(
                 status_path.with_file_name("soundcloud-bypass-enabled"),
                 b"enabled",
             );
+        }
+        // Запуск удался только тогда, когда сценарий действительно взял работу на себя и
+        // переписал состояние своим. Раньше приложение верило нулевому коду возврата
+        // powershell.exe и на этом успокаивалось: отказ в правах и упавший сценарий
+        // выглядели как успешный старт, а «готовлю запуск» висело минутами без объяснений.
+        let deadline = std::time::Instant::now() + Duration::from_secs(25);
+        loop {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            let current = read_status(&status_path);
+            if current.owner_pid != std::process::id() || current.state != "elevating" {
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+        }
+        let current = read_status(&status_path);
+        if current.owner_pid != std::process::id() || current.state != "elevating" {
             return;
         }
-        // Отказ в правах администратора виден только здесь. Перезаписываем состояние лишь
-        // тогда, когда его никто не менял с момента запроса: если скрипт всё же успел
-        // подняться и написать своё, его отчёт важнее нашего вывода.
-        let current = read_status(&status_path);
-        if current.owner_pid == std::process::id() && current.message == WAITING_FOR_UAC {
-            let _ = write_status(
-                &status_path,
-                &BypassStatus {
-                    state: "failed".into(),
-                    message: "Windows не дала прав администратора, без них обход не запустить. Нажмите «Подобрать и включить» ещё раз, а если появится окно Windows с вопросом - выберите «Да»."
-                        .into(),
-                    owner_pid: std::process::id(),
-                    ..BypassStatus::idle()
-                },
-            );
-        }
+        let log = std::fs::read_to_string(&log_path).unwrap_or_default();
+        let log = log.trim();
+        let message = if !started {
+            "Windows не дала прав администратора, без них обход не запустить. Нажмите «Подобрать и включить» ещё раз, а если появится окно Windows с вопросом - выберите «Да»."
+                .to_string()
+        } else if log.is_empty() {
+            "Обход не запустился: окно с правами администратора не ответило. Проверьте, что ваша учётная запись входит в администраторов компьютера, и что обход не блокирует антивирус. Потом нажмите «Подобрать и включить» ещё раз."
+                .to_string()
+        } else {
+            format!("Обход не запустился. {log}")
+        };
+        let _ = write_status(
+            &status_path,
+            &BypassStatus {
+                state: "failed".into(),
+                message,
+                owner_pid: std::process::id(),
+                mode: current.mode,
+                report: if log.is_empty() { String::new() } else { log.to_string() },
+                ..BypassStatus::idle()
+            },
+        );
     });
     Ok(())
 }
