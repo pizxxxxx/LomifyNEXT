@@ -101,8 +101,8 @@
       <button
         type="button"
         class="nav-item"
-        class:is-active={$currentView === item.view}
-        aria-current={$currentView === item.view ? 'page' : undefined}
+        class:is-active={($currentView === item.view || ($currentView === 'daily-mix' && item.view === 'home'))}
+        aria-current={($currentView === item.view || ($currentView === 'daily-mix' && item.view === 'home')) ? 'page' : undefined}
         on:mousedown|preventDefault
         on:click={() => currentView.set(item.view)}
       >

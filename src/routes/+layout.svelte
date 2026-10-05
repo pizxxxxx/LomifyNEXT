@@ -23,6 +23,10 @@
   import { lockDevTools } from '$lib/utils/devLock';
   import { trackSheen } from '$lib/utils/sheen';
   import { trackTilt } from '$lib/utils/tilt';
+  import { trackPointerActions } from '$lib/utils/hitGuard';
+  onMount(trackPointerActions);
+  import { startMusicLinks } from '$lib/shareLinks';
+  onMount(startMusicLinks);
   import { trackPress } from '$lib/utils/press';
   import {
     coverUrlForTrack,
@@ -194,7 +198,8 @@
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName?.toLowerCase();
       const isEditable = tag === 'input' || tag === 'textarea' || tag === 'select' || target?.isContentEditable;
-      if (isEditable) return;
+      const isInteractive = target?.closest('button, a[href], summary, [role="button"], [role="switch"], dialog[open]');
+      if (isEditable || isInteractive) return;
 
       e.preventDefault();
       if ($currentTrack) {

@@ -736,20 +736,22 @@
             >
               <!-- `spec-art` — глянцевая поверхность: по ней ходит отражение света, положение
                    которого считается из наклона (`$lib/utils/tilt`). Бегущей полосы здесь нет
-                   намеренно — один блик на поверхность. Свой `-translate-y-1` снят: карточка
-                   уже поднимается целиком через `interactive-item`. -->
-              <div class="w-full aspect-square min-w-[3rem] min-h-[3rem] rounded-xl overflow-hidden shadow-lg relative bg-neutral-800 mb-3 border border-white/5 transition-colors duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] spec-art art-glow">
-                <!-- Обложка берётся с самого релиза. Раньше её искали в `tracks[0]`, но у
-                     яндексовых релизов до раскрытия треков нет вовсе — и все карточки стояли
-                     пустыми квадратами с иконкой. -->
-                {#if album.coverUrl || album.tracks?.[0]?.coverUrl}
-                  <img src={album.coverUrl || album.tracks[0].coverUrl} alt="Cover" loading="lazy" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
-                {:else}
-                  <div class="w-full h-full flex items-center justify-center text-neutral-500">
-                    <ListMusic size={32} />
-                  </div>
-                {/if}
-                <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                   намеренно - один блик на поверхность. Подъем и наклон применяются
+                   к декоративной поверхности, кнопки остаются в неподвижной рамке. -->
+              <div class="cover-tilt-frame w-full aspect-square min-w-[3rem] min-h-[3rem] rounded-xl relative mb-3">
+                <div class="cover-tilt-surface spec-art art-glow shadow-lg bg-neutral-800 border border-white/5">
+                  <!-- Обложка берётся с самого релиза. Раньше её искали в `tracks[0]`, но у
+                       яндексовых релизов до раскрытия треков нет вовсе — и все карточки стояли
+                       пустыми квадратами с иконкой. -->
+                  {#if album.coverUrl || album.tracks?.[0]?.coverUrl}
+                    <img src={album.coverUrl || album.tracks[0].coverUrl} alt="Cover" loading="lazy" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
+                  {:else}
+                    <div class="w-full h-full flex items-center justify-center text-neutral-500">
+                      <ListMusic size={32} />
+                    </div>
+                  {/if}
+                </div>
+                <div class="absolute inset-0 rounded-xl bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                   <button
                     class="bg-primary hover:bg-primary/80 text-black rounded-full p-3 shadow-xl transform translate-y-4 group-hover:translate-y-0 transition-all duration-300"
                     class:is-playing={isPlayingThisAlbum}

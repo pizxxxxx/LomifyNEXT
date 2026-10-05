@@ -1,6 +1,6 @@
 {
   "name": "lomifynext-tauri",
-  "version": "9.5.1",
+  "version": "9.5.2",
   "description": "",
   "type": "module",
   "scripts": {
@@ -11,6 +11,7 @@
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "tauri": "tauri",
     "build:exe": "tauri build",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
     "clean": "cargo clean --manifest-path src-tauri/Cargo.toml",
     "push": "git add . && git commit -m \"Auto update\" && git push"
   },
@@ -31,6 +32,7 @@
     "@lucide/svelte": "^1.18.0",
     "@tauri-apps/api": "2.11.0",
     "@tauri-apps/plugin-autostart": "2.5.1",
+    "@tauri-apps/plugin-deep-link": "2.4.10",
     "@tauri-apps/plugin-dialog": "2.7.1",
     "@tauri-apps/plugin-fs": "2.5.1",
     "@tauri-apps/plugin-http": "2.5.9",

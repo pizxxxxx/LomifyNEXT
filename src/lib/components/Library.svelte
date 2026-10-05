@@ -10,6 +10,7 @@
   import ArtistTag from './ArtistTag.svelte';
   import PlaylistMenu from './PlaylistMenu.svelte';
   import TrackStatus from './TrackStatus.svelte';
+  import TrackWaveButton from './TrackWaveButton.svelte';
   import PlaylistTrailer from './PlaylistTrailer.svelte';
   import PlaylistOrderControls from './PlaylistOrderControls.svelte';
   import PlaylistCoverEditor from './PlaylistCoverEditor.svelte';
@@ -109,6 +110,7 @@
   let likedView: LikedView = 'list';
 
   function toggleLikedView() {
+    rowBudget = ROWS_FIRST_PAINT;
     likedView = likedView === 'list' ? 'grid' : 'list';
     activeTrackMenu = null;
     try {
@@ -124,7 +126,7 @@
    * появляется только при приближении к низу уже отрисованной части.
    */
   const ROWS_FIRST_PAINT = 36;
-  const ROWS_STEP = 72;
+  const ROWS_STEP = 24;
   let rowBudget = ROWS_FIRST_PAINT;
 
   /** Оба всплывающих слоя строки принадлежат одному состоянию: это не даёт информации и
@@ -223,18 +225,22 @@
       return {};
     }
 
+    let frame = 0;
     const observer = new IntersectionObserver((entries) => {
       const match = entries.find((entry) => entry.isIntersecting);
       if (!match) return;
       // Если человек листает быстро и уже приблизился к нижней границе,
       // берем увеличенную порцию, чтобы снизу не мелькала пустота.
       const isUrgent = match.boundingClientRect.top < (typeof window !== 'undefined' ? window.innerHeight * 1.3 : 1200);
-      const step = isUrgent ? ROWS_STEP * 2 : ROWS_STEP;
-      rowBudget = Math.min(rowsNeeded, rowBudget + step);
-    }, { rootMargin: '1800px 0px' });
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        rowBudget = Math.min(rowsNeeded, rowBudget + (isUrgent ? ROWS_STEP * 2 : ROWS_STEP));
+      });
+    }, { rootMargin: '500px 0px' });
 
     observer.observe(node);
-    return { destroy: () => observer.disconnect() };
+    return { destroy: () => { observer.disconnect(); if (frame) cancelAnimationFrame(frame); } };
   }
 
   function startPlaylistPreview(e: Event, pl: any) {
@@ -971,7 +977,7 @@
           class="track-row-list"
           class:has-open-track-menu={activeTrackMenu !== null}
         >
-          {#each visibleLiked as track, i}
+          {#each visibleLiked as track, i (`${track.source}:${track.id ?? `${track.title}\u0000${track.artist}`}`)}
             {@const isActive = $currentTrack?.title === track.title && $currentTrack?.artist === track.artist}
             {@const cached = isTrackCached(track, cachedUrns)}
             <!-- svelte-ignore a11y-click-events-have-key-events -->
@@ -1050,6 +1056,8 @@
                   </button>
                 {/if}
 
+                <TrackWaveButton {track} buttonClass="track-row-action" />
+
                 <!-- Информация и плейлисты управляются одним состоянием. Поэтому открытие
                      одного меню всегда закрывает соседнее и меню другой строки. -->
                 <div class="track-row-menu-slot" data-track-menu-owner={i}>
@@ -1120,7 +1128,7 @@
             class="library-track-grid"
             class:has-open-track-menu={activeTrackMenu !== null}
           >
-            {#each visibleLiked as track, i}
+            {#each visibleLiked as track, i (`${track.source}:${track.id ?? `${track.title}\u0000${track.artist}`}`)}
               {@const isActive = $currentTrack?.title === track.title && $currentTrack?.artist === track.artist}
               {@const cached = isTrackCached(track, cachedUrns)}
               <!-- svelte-ignore a11y-click-events-have-key-events -->
@@ -1131,32 +1139,33 @@
                 class:has-open-menu={activeTrackMenu?.row === i}
                 on:click={(e) => toggleTrackPlayback(e, track, $likedTracks)}
               >
-                <div class="tile-art spec-art" class:is-active={isActive}>
-                  <div class="library-tile-art-clip">
+                <div class="tile-card-surface" aria-hidden="true"></div>
+                <div class="tile-art" class:is-active={isActive}>
+                  <div class="cover-tilt-surface spec-art art-glow">
                     {#if track.coverUrl}
                       <img src={coverUrlForTrack(track, $downloadedCoverCache)} alt="" class="tile-cover-image" loading="lazy" decoding="async" />
                     {:else}
                       <div class="library-tile-art-empty"><Music size={34} /></div>
                     {/if}
-
-                    <div class="tile-cover-overlay">
-                      <button
-                        type="button"
-                        class="tile-play-button {track.isBanned ? 'is-muted' : ''}"
-                        aria-label={isActive && $isPlaying ? `Поставить «${track.title}» на паузу` : `Воспроизвести «${track.title}»`}
-                        on:click={(e) => toggleTrackPlayback(e, track, $likedTracks)}
-                      >
-                        <MorphIcon
-                          icon={isActive && $isPlaying ? PauseIcon : PlayIcon}
-                          size={20}
-                          strokeWidth={2.35}
-                          fill="currentColor"
-                          class="play-pause-morph"
-                          spring="snappy"
-                          reducedMotion="user"
-                        />
-                      </button>
-                    </div>
+                    <div class="tile-cover-shade"></div>
+                  </div>
+                  <div class="tile-cover-overlay">
+                    <button
+                      type="button"
+                      class="tile-play-button {track.isBanned ? 'is-muted' : ''}"
+                      aria-label={isActive && $isPlaying ? `Поставить «${track.title}» на паузу` : `Воспроизвести «${track.title}»`}
+                      on:click={(e) => toggleTrackPlayback(e, track, $likedTracks)}
+                    >
+                      <MorphIcon
+                        icon={isActive && $isPlaying ? PauseIcon : PlayIcon}
+                        size={20}
+                        strokeWidth={2.35}
+                        fill="currentColor"
+                        class="play-pause-morph"
+                        spring="snappy"
+                        reducedMotion="user"
+                      />
+                    </button>
                   </div>
 
                   {#if cached}
@@ -1227,6 +1236,8 @@
                       </button>
                     {/if}
 
+                    <TrackWaveButton {track} buttonClass="library-tile-action" iconSize={tileActionIconSize} />
+
                     <button
                       type="button"
                       class="library-tile-action ui-tip"
@@ -1264,12 +1275,16 @@
                 </div>
 
                 <div class="tile-meta library-tile-meta">
-                  <h3 class="tile-title" class:is-active={isActive} title={track.title}>{track.title}</h3>
-                  <div class="library-tile-caption">
-                    <span class="tile-sub"><ArtistTag artist={track.artist} artists={track.artists} /></span>
-                    <span class="library-tile-source" class:is-yandex={track.source === 'yandex'}>
-                      {track.source === 'yandex' ? 'Я.Музыка' : 'SoundCloud'}
-                    </span>
+                  <div class="tile-label-frame">
+                    <div class="tile-label-surface">
+                      <h3 class="tile-title" class:is-active={isActive} title={track.title}>{track.title}</h3>
+                      <div class="library-tile-caption">
+                        <span class="tile-sub"><ArtistTag artist={track.artist} artists={track.artists} /></span>
+                        <span class="library-tile-source" class:is-yandex={track.source === 'yandex'}>
+                          {track.source === 'yandex' ? 'Я.Музыка' : 'SoundCloud'}
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -1491,6 +1506,7 @@
                     <span><ArtistTag artist={track.artist} artists={track.artists} /></span>
                   </div>
                   <div class="library-playlist-track-actions">
+                    <TrackWaveButton {track} iconSize={16} />
                     {#if isTrackCached(track, cachedUrns)}
                       <button
                         type="button"

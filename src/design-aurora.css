@@ -890,6 +890,9 @@ body[data-design="aurora"] .sidebar-profile:hover .sidebar-avatar {
    глубже, чем в классике, потому что плитка контрастнее фона. Линии нет ни одной. */
 body[data-design="aurora"] .tile-art {
   border-radius: var(--aurora-r-tile);
+}
+
+body[data-design="aurora"] .tile-art > .cover-tilt-surface {
   border-color: rgba(255, 255, 255, 0.07);
   box-shadow: 0 14px 30px -18px rgba(0, 0, 0, 0.95);
   /* Обложка полностью закрыта непрозрачным изображением, поэтому размытие материала под
@@ -899,7 +902,7 @@ body[data-design="aurora"] .tile-art {
   -webkit-backdrop-filter: none;
 }
 
-body[data-design="aurora"] .tile-art::before {
+body[data-design="aurora"] .tile-art > .cover-tilt-surface::before {
   box-shadow: inset 0 10px 22px -12px rgba(255, 255, 255, 0.22),
               inset 0 0 30px -6px color-mix(in srgb, var(--color-primary) 42%, transparent);
 }
@@ -957,13 +960,13 @@ body[data-design="aurora"] .tile-title {
   color: rgba(255, 255, 255, 0.95);
 }
 
-body[data-design="aurora"] .library-track-tile {
+body[data-design="aurora"] .library-track-tile > .tile-card-surface {
   border-color: rgba(255, 255, 255, 0.055);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(7, 7, 11, 0.28));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045), 0 18px 36px -28px rgba(0, 0, 0, 0.98);
 }
 
-body[data-design="aurora"] .library-track-tile.is-active {
+body[data-design="aurora"] .library-track-tile.is-active > .tile-card-surface {
   border-color: color-mix(in srgb, var(--color-primary) 42%, rgba(255, 255, 255, 0.06));
   background: linear-gradient(180deg, color-mix(in srgb, var(--color-primary) 10%, rgba(255, 255, 255, 0.025)), rgba(7, 7, 11, 0.3));
 }

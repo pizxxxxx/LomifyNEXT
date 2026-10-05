@@ -41,12 +41,13 @@ export interface DailyMixSnapshot {
   day: string;
   updatedAt: number;
   mixes: DailyMix[];
+  variation?: number;
 }
 
 export const DAILY_MIX_SIZE = 30;
 const DAY_MS = 86_400_000;
 const definitions: Array<Pick<DailyMix, 'kind' | 'title' | 'description'>> = [
-  { kind: 'favorites', title: 'Любимое', description: 'Твои лайки в новом порядке. Недавние любимые песни ближе к началу.' },
+  { kind: 'favorites', title: 'Для тебя', description: 'Новые песни по твоему вкусу. Лайки помогают выбрать музыку, но сами сюда не попадают.' },
   { kind: 'repeat', title: 'На повторе', description: 'Треки, к которым ты возвращаешься за последний месяц. Свежие прослушивания важнее старых.' },
   { kind: 'discover', title: 'Открытия', description: 'Похожие на твой вкус песни, которых ещё нет в твоей медиатеке и истории.' },
   { kind: 'releases', title: 'Новые релизы', description: 'Свежая музыка знакомых исполнителей за последние два месяца.' }
@@ -151,14 +152,13 @@ export function dailyReleaseArtists(likes: any[], history: Record<string, any>, 
 export function buildDailyMixes(input: DailyMixInput, cached?: DailyMixSnapshot | null, force = false): DailyMixSnapshot {
   const context = dailyMixContext(input);
   const sameContext = cached?.version === 1 && cached.context === context;
-  const blocked = new Set(input.disliked.flatMap((track) => [mixTrackIdentity(track), songKey(track)]));
+  const previousVariation = sameContext && Number.isSafeInteger(cached.variation) ? cached.variation! : 0;
+  const variation = force ? previousVariation + 1 : previousVariation;
+  const blocked = new Set([...input.disliked, ...input.likes].flatMap((track) => [mixTrackIdentity(track), songKey(track)]));
   const catalog = unique([...input.likes, ...input.recommendations, ...input.releases], input.source, blocked);
   const bySong = new Map(catalog.map((track) => [songKey(track), track]));
   const history = Object.values(input.history || {});
   const byHistory = new Map(history.map((entry) => [songKey(entry), entry]));
-  const liked = unique(input.likes, input.source, blocked);
-  const likeOrder = new Map(input.likes.map((track, index) => [songKey(track), index]));
-  const likeInfo = new Map(input.likes.map((track) => [songKey(track), track]));
   const known = [...input.likes, ...history, ...input.playlists.flatMap((playlist) => playlist.tracks || [])];
   const knownSongs = new Set(known.map(songKey));
   const knownIds = new Set(known.filter((track) => track?.source === input.source && track?.id != null).map(mixTrackIdentity));
@@ -169,28 +169,41 @@ export function buildDailyMixes(input: DailyMixInput, cached?: DailyMixSnapshot 
     const releasedAt = Date.parse(track.releaseDate || '');
     return Number.isFinite(releasedAt) && releasedAt <= input.now + 7 * DAY_MS && input.now - releasedAt <= 60 * DAY_MS;
   });
-  const pools = { favorites: liked, repeat, discover: discoveries, releases };
+  const pools = { favorites: discoveries, repeat, discover: discoveries, releases };
   const scores = {
-    favorites: (track: DailyTrack) => {
-      const key = songKey(track), like = likeInfo.get(key), played = byHistory.get(key);
-      const legacy = 0.5 + 0.5 * (1 - (likeOrder.get(key) || 0) / Math.max(1, input.likes.length));
-      return 1 + 5 * decay(like?.likedAt, input.now, 45, legacy) + 2 * Math.log1p(played?.count || 0) * decay(played?.lastPlayedAt, input.now, 14);
-    },
+    favorites: () => 1,
     repeat: (track: DailyTrack) => { const played = byHistory.get(songKey(track)); return (1 + Math.log1p(played?.count || 0)) * decay(played?.lastPlayedAt, input.now, 14); },
     discover: () => 1,
     releases: (track: DailyTrack) => 1 + 4 * decay(Date.parse(track.releaseDate || ''), input.now, 30)
   };
   const mixes = definitions.map((definition): DailyMix => {
-    const old = sameContext && Array.isArray(cached?.mixes) ? cached.mixes.find((mix) => mix?.kind === definition.kind && /^\d{4}-\d{2}-\d{2}$/.test(mix.day)) : undefined;
-    const fresh = definition.kind === 'discover' ? input.recommendationsDay === input.day
+    const old = sameContext && Array.isArray(cached?.mixes) ? cached.mixes.find((mix) => mix?.kind === definition.kind && (definition.kind !== 'favorites' || mix.title === definition.title) && /^\d{4}-\d{2}-\d{2}$/.test(mix.day)) : undefined;
+    const fresh = definition.kind === 'discover' || definition.kind === 'favorites' ? input.recommendationsDay === input.day
       : definition.kind === 'releases' ? input.releasesDay === input.day : true;
     const previous = old ? unique(Array.isArray(old.tracks) ? old.tracks : [], input.source, blocked)
-      .filter((track) => definition.kind !== 'discover' || old.day === input.day || (!knownSongs.has(songKey(track)) && !knownIds.has(mixTrackIdentity(track)))) : [];
+      .filter((track) => (definition.kind !== 'discover' && definition.kind !== 'favorites') || old.day === input.day || (!knownSongs.has(songKey(track)) && !knownIds.has(mixTrackIdentity(track)))) : [];
     if ((!fresh || (!force && old?.day === input.day && previous.length > 0)) && previous.length > 0) {
       return { ...definition, day: old!.day, tracks: previous.slice(0, DAILY_MIX_SIZE) };
     }
-    const tracks = fresh ? select(pools[definition.kind], `${context}:${input.day}:${definition.kind}`, scores[definition.kind]) : [];
+    const seed = `${context}:${input.day}:${definition.kind}:${variation}`;
+    const pool = pools[definition.kind];
+    const previousIds = new Set(previous.map(mixTrackIdentity));
+    // Manual refresh first fills from songs outside the previous composition.
+    // A small repeat/release pool may have no alternatives; retain honest metadata.
+    const alternatives = force ? pool.filter(track => !previousIds.has(mixTrackIdentity(track))) : pool;
+    if (force && fresh && previous.length && !alternatives.length && old?.day === input.day) {
+      return { ...definition, day: input.day, tracks: (pool.length ? previous.filter(track => pool.some(candidate => mixTrackIdentity(candidate) === mixTrackIdentity(track))) : previous).slice(0, DAILY_MIX_SIZE) };
+    }
+    const newTracks = fresh ? select(alternatives, seed, scores[definition.kind]) : [];
+    const chosen = new Set(newTracks.map(mixTrackIdentity));
+    const tracks = [...newTracks, ...(fresh ? select(pool.filter(track => !chosen.has(mixTrackIdentity(track))), seed, scores[definition.kind]) : [])].slice(0, DAILY_MIX_SIZE);
     return { ...definition, day: input.day, tracks };
   });
-  return { version: 1, context, day: input.day, updatedAt: input.now, mixes };
+  return { version: 1, context, day: input.day, updatedAt: input.now, mixes, variation };
+}
+
+/** Remove likes by service identity and by song, including alternate editions. */
+export function withoutLikedDailyTracks(tracks: DailyTrack[], likes: any[]): DailyTrack[] {
+  const blocked = new Set(likes.flatMap(track => [mixTrackIdentity(track), songKey(track)]));
+  return tracks.filter(track => !blocked.has(mixTrackIdentity(track)) && !blocked.has(songKey(track)));
 }

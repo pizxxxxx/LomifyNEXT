@@ -9,13 +9,42 @@ const input = (overrides = {}) => ({ day, now, source: 'soundcloud', account: 'l
 const mix = (snapshot, kind) => snapshot.mixes.find(item => item.kind === kind);
 const ids = (snapshot, kind) => mix(snapshot, kind).tracks.map(mixTrackIdentity);
 
+test('manual refresh prioritizes songs absent from the previous composition and persists its variation', () => {
+  const request = input({ recommendations: Array.from({ length: 90 }, (_, id) => track(id + 1)) });
+  const first = buildDailyMixes(request);
+  const second = buildDailyMixes(request, first, true);
+  assert.equal(second.variation, 1);
+  const before = new Set(ids(first, 'favorites'));
+  assert.equal(ids(second, 'favorites').filter(id => before.has(id)).length, 0);
+  const restarted = buildDailyMixes(request, JSON.parse(JSON.stringify(second)));
+  assert.deepEqual(ids(restarted, 'favorites'), ids(second, 'favorites'));
+  const third = buildDailyMixes(request, restarted, true);
+  assert.equal(third.variation, 2);
+  assert.notDeepEqual(ids(third, 'favorites'), ids(second, 'favorites'));
+});
+
+test('refresh without alternatives keeps the composition, including old caches without variation', () => {
+  const request = input({ recommendations: [track(1), track(2), track(3)] });
+  const first = buildDailyMixes(request);
+  delete first.variation;
+  const second = buildDailyMixes(request, first, true);
+  assert.equal(second.variation, 1);
+  assert.deepEqual(ids(second, 'favorites'), ids(first, 'favorites'));
+});
+
+test('an empty network refresh cannot erase an eligible same-day mix', () => {
+  const request = input({ recommendations: [track(1), track(2)] });
+  const first = buildDailyMixes(request);
+  assert.deepEqual(ids(buildDailyMixes({ ...request, recommendations: [] }, first, true), 'favorites'), ids(first, 'favorites'));
+});
+
 test('daily selection stays stable after restart and changes on the next local day', () => {
-  const request = input({ likes: Array.from({ length: 120 }, (_, id) => track(id)) });
+  const request = input({ recommendations: Array.from({ length: 120 }, (_, id) => track(id)) });
   const first = buildDailyMixes(request);
   assert.equal(mix(first, 'favorites').tracks.length, 30);
-  const restarted = buildDailyMixes({ ...request, likes: [...request.likes].reverse(), now: now + 60_000 }, JSON.parse(JSON.stringify(first)));
+  const restarted = buildDailyMixes({ ...request, recommendations: [...request.recommendations].reverse(), now: now + 60_000 }, JSON.parse(JSON.stringify(first)));
   assert.deepEqual(ids(restarted, 'favorites'), ids(first, 'favorites'));
-  const next = buildDailyMixes({ ...request, day: localMixDay(now + 86_400_000), now: now + 86_400_000 }, first);
+  const next = buildDailyMixes({ ...request, day: localMixDay(now + 86_400_000), recommendationsDay: localMixDay(now + 86_400_000), now: now + 86_400_000 }, first);
   assert.notDeepEqual(ids(next, 'favorites'), ids(first, 'favorites'));
 });
 
@@ -39,7 +68,7 @@ test('playing and saving today\'s discovery does not reshuffle or empty its card
 });
 
 test('dislikes immediately remove tracks even from a frozen same-day selection', () => {
-  const request = input({ likes: [track(1), track(2)] });
+  const request = input({ recommendations: [track(1), track(2)] });
   const first = buildDailyMixes(request);
   assert.deepEqual(ids(buildDailyMixes({ ...request, disliked: [track(1)] }, first), 'favorites'), ['soundcloud:2']);
 });
@@ -57,7 +86,7 @@ test('offline refresh preserves older network mixes and their actual date', () =
 });
 
 test('a new account or provider cannot reuse another account\'s cached tracks', () => {
-  const first = buildDailyMixes(input({ likes: [track(1)] }));
+  const first = buildDailyMixes(input({ recommendations: [track(1)] }));
   const switched = buildDailyMixes(input({ account: 'someone-else' }), first);
   assert.equal(mix(switched, 'favorites').tracks.length, 0);
   assert.notEqual(switched.context, first.context);
@@ -70,7 +99,7 @@ test('repeat uses recent history, hydrates old metadata and ignores ancient play
     recent: { title: recent.title, artist: recent.artist, count: 3, lastPlayedAt: now },
     ancient: { ...ancient, count: 10000, lastPlayedAt: now - 180 * 86_400_000 }
   };
-  const snapshot = buildDailyMixes(input({ likes: [recent, ancient], history }));
+  const snapshot = buildDailyMixes(input({ recommendations: [recent, ancient], history }));
   assert.deepEqual(ids(snapshot, 'repeat'), ['soundcloud:1']);
 });
 
@@ -80,7 +109,7 @@ test('release selection rejects missing, ancient and distant future dates', () =
 });
 
 test('mix snapshots whitelist metadata and never persist signed playback URLs', () => {
-  const snapshot = buildDailyMixes(input({ likes: [track(1, { audioUrl: 'https://example.test/audio?token=fake', transcodings: ['private-stream'], accessToken: 'fake-secret', cookie: 'fake-cookie', coverUrl: 'https://example.test/cover?token=fake&client_id=public' })] }));
+  const snapshot = buildDailyMixes(input({ recommendations: [track(1, { audioUrl: 'https://example.test/audio?token=fake', transcodings: ['private-stream'], accessToken: 'fake-secret', cookie: 'fake-cookie', coverUrl: 'https://example.test/cover?token=fake&client_id=public' })] }));
   const result = mix(snapshot, 'favorites').tracks[0];
   assert.equal(result.audioUrl, '');
   assert.equal(new URL(result.coverUrl).searchParams.get('client_id'), 'public');
@@ -90,7 +119,7 @@ test('mix snapshots whitelist metadata and never persist signed playback URLs', 
 });
 
 test('corrupt cached track arrays are rebuilt rather than crashing the home page', () => {
-  const request = input({ likes: [track(1)] });
+  const request = input({ recommendations: [track(1)] });
   const first = buildDailyMixes(request);
   first.mixes[0].tracks = { broken: true };
   first.mixes.push(null);
@@ -105,4 +134,15 @@ test('new-release artists follow recent listening instead of a large ancient pla
   }, 'soundcloud', now);
   assert.equal(names[0], 'Recent artist');
   assert.ok(!names.includes('Wrong provider'));
+});
+
+test('likes disappear from every cached and newly built mix by ID and normalized song', () => {
+  const one = track(1, { releaseDate: '2026-10-01' }), two = track(2, { releaseDate: '2026-10-01' });
+  const request = input({ recommendations: [one, two], releases: [one, two], history: { one: { ...one, lastPlayedAt: now, count: 3 }, two: { ...two, lastPlayedAt: now, count: 2 } } });
+  const before = buildDailyMixes(request);
+  const liked = [{ ...one, title: 'Renamed by provider' }, { ...two, id: 'different-edition', artist: two.artist.toUpperCase() }];
+  for (const cached of [undefined, before]) {
+    const after = buildDailyMixes({ ...request, likes: liked }, cached);
+    assert.ok(after.mixes.every(mix => mix.tracks.length === 0));
+  }
 });

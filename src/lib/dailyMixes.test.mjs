@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import * as core from './dailyMixesCore.ts';
 
-const request = { day: '2026-10-05', now: new Date(2026, 9, 5, 12).getTime(), source: 'soundcloud', account: 'listener', likes: [{ id: '1', source: 'soundcloud', title: 'Song', artist: 'Artist' }], history: {}, playlists: [], disliked: [], recommendations: [], recommendationsDay: '', releases: [], releasesDay: '' };
+const request = { day: '2026-10-05', now: new Date(2026, 9, 5, 12).getTime(), source: 'soundcloud', account: 'listener', likes: [], history: {}, playlists: [], disliked: [], recommendations: [{ id: '1', source: 'soundcloud', title: 'Song', artist: 'Artist' }], recommendationsDay: '2026-10-05', releases: [], releasesDay: '' };
 function adapter(storage, failWrite = false) {
   const exports = {};
   const context = vm.createContext({ exports, require: (name) => { assert.equal(name, './dailyMixesCore'); return core; }, localStorage: {

@@ -152,6 +152,7 @@ pub fn run() {
                 let _ = w.set_focus();
             }
         }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_keyring_store::init())
         .plugin(tauri_plugin_liquid_glass::init())
@@ -176,6 +177,16 @@ pub fn run() {
         })
         .setup(move |app| {
             request_low_webview_memory(app);
+
+            #[cfg(any(windows, all(not(debug_assertions), target_os = "linux")))]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                // Portable/dev Windows runs have no installer to register the URI.
+                // The version the listener starts owns its public Lomify links.
+                if let Err(error) = app.deep_link().register_all() {
+                    eprintln!("[music-links] registration failed: {}", shared::log_redaction::redact_text(&error.to_string()));
+                }
+            }
 
             let cache_dir = app
                 .path()

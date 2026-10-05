@@ -211,34 +211,35 @@
 
                `interactive-item` есть только у сложенной плитки, и это ровно то, о чём
                просили: класс — корень 3D-наклона (`CARD_ROOT` в `$lib/utils/tilt`), скрипт
-               вешает на него `data-tilt`, а правило `[data-tilt] .art-glow` наклоняет
+               вешает на него `data-tilt`, а правило `[data-tilt] .cover-tilt-surface` наклоняет
                обложку. На раскрытой панели наклон и подъём не нужны: панель во всю ширину,
                с матовым стеклом, и любое её движение под курсором — это перерисовка
                `backdrop-filter` вместе со всем, что под ним. -->
           <div class="pl-tile {isOpen ? 'is-open' : 'track-tile interactive-item rounded-[1.25rem]'} group"
                on:click={() => { expandedPlaylistId = isOpen ? null : track.id; }}>
-
-            <div class="{isOpen ? 'pl-tile-art-open' : 'w-full aspect-[2/1] mb-3 spec-art art-glow'} rounded-xl overflow-hidden shadow-lg relative bg-neutral-800 border border-white/5">
-              {#if track.tracks && track.tracks.length > 0 && track.tracks[0].coverUrl}
-                <img
-                  src={track.tracks[0].coverUrl}
-                  srcset={coverSrcSet(track.tracks[0].coverUrl)}
-                  sizes="(min-width: 1280px) 220px, (min-width: 768px) 25vw, 50vw"
-                  alt="Cover"
-                  loading="lazy"
-                  decoding="async"
-                  width="500"
-                  height="500"
-                  class="w-full h-full object-cover {isOpen ? '' : 'transition-transform duration-500 group-hover:scale-105'}"
-                />
-              {:else}
-                <div class="w-full h-full flex items-center justify-center text-neutral-500">
-                  <ListMusic size={32} />
-                </div>
-              {/if}
-
+            {#if !isOpen}<div class="tile-card-surface" aria-hidden="true"></div>{/if}
+            <div class="{isOpen ? 'pl-tile-art-open' : 'w-full aspect-[2/1] mb-3'} cover-tilt-frame rounded-xl relative">
+              <div class="cover-tilt-surface {isOpen ? '' : 'spec-art art-glow'} shadow-lg bg-neutral-800 border border-white/5">
+                {#if track.tracks && track.tracks.length > 0 && track.tracks[0].coverUrl}
+                  <img
+                    src={track.tracks[0].coverUrl}
+                    srcset={coverSrcSet(track.tracks[0].coverUrl)}
+                    sizes="(min-width: 1280px) 220px, (min-width: 768px) 25vw, 50vw"
+                    alt="Cover"
+                    loading="lazy"
+                    decoding="async"
+                    width="500"
+                    height="500"
+                    class="w-full h-full object-cover {isOpen ? '' : 'transition-transform duration-500 group-hover:scale-105'}"
+                  />
+                {:else}
+                  <div class="w-full h-full flex items-center justify-center text-neutral-500">
+                    <ListMusic size={32} />
+                  </div>
+                {/if}
+              </div>
               <!-- Hover Overlay with Wave Preview Button -->
-              <div class="{isOpen ? 'hidden' : 'absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-4'}">
+              <div class="{isOpen ? 'hidden' : 'absolute inset-0 rounded-xl bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-4'}">
                 <button
                   class="bg-white/20 hover:bg-white/40 backdrop-blur-md text-white rounded-full p-3 shadow-xl transform translate-y-4 group-hover:translate-y-0 transition-all duration-300"
                   on:click|stopPropagation={(e) => startPlaylistPreview(e, track)}
@@ -411,26 +412,28 @@
                class="track-tile w-full group interactive-item cursor-pointer rounded-[1.25rem] {track.isBanned ? 'opacity-60' : ''}"
                class:is-active={$currentTrack?.title === track.title}
                on:click={() => playTrack(track, index)}>
-            
+            <div class="tile-card-surface" aria-hidden="true"></div>
             <!-- Cover. `spec-art` — глянцевая поверхность: по ней ходит отражение света,
                  положение которого считается из наклона обложки (`$lib/utils/tilt`).
                  Бегущей полосы здесь нет намеренно — один блик на поверхность. -->
             <!-- svelte-ignore a11y-no-static-element-interactions -->
-            <div class="tile-art spec-art" class:is-active={$currentTrack?.title === track.title}
+            <div class="tile-art" class:is-active={$currentTrack?.title === track.title}
                  on:mouseenter={() => handleMouseEnter(track)}
                  on:mouseleave={handleMouseLeave}>
-              <img
-                src={track.coverUrl || 'lomimi.png'}
-                srcset={coverSrcSet(track.coverUrl)}
-                sizes="(min-width: 1280px) 220px, (min-width: 768px) 25vw, 50vw"
-                alt={track.title}
-                loading="lazy"
-                decoding="async"
-                width="500"
-                height="500"
-                class="tile-cover-image"
-              />
-              
+              <div class="cover-tilt-surface spec-art art-glow">
+                <img
+                  src={track.coverUrl || 'lomimi.png'}
+                  srcset={coverSrcSet(track.coverUrl)}
+                  sizes="(min-width: 1280px) 220px, (min-width: 768px) 25vw, 50vw"
+                  alt={track.title}
+                  loading="lazy"
+                  decoding="async"
+                  width="500"
+                  height="500"
+                  class="tile-cover-image"
+                />
+                <div class="tile-cover-shade"></div>
+              </div>
               <!-- Hover Play Overlay -->
               <div class="tile-cover-overlay">
                 <button
@@ -477,10 +480,12 @@
             <!-- Metadata -->
             <div class="tile-meta group/info">
               <div class="flex justify-between items-start gap-1">
-                <div class="min-w-0 flex-1">
-                  <h3 class="tile-title" class:is-active={$currentTrack?.title === track.title} title={track.title}>{track.title}</h3>
-                  <div class="tile-sub">
-                    <ArtistTag artist={track.artist} artists={track.artists} linkable={artistLinks} />
+                <div class="tile-label-frame min-w-0 flex-1">
+                  <div class="tile-label-surface">
+                    <h3 class="tile-title" class:is-active={$currentTrack?.title === track.title} title={track.title}>{track.title}</h3>
+                    <div class="tile-sub">
+                      <ArtistTag artist={track.artist} artists={track.artists} linkable={artistLinks} />
+                    </div>
                   </div>
                 </div>
                 <!-- Info Button -->

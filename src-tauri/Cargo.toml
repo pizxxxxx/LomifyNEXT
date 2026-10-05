@@ -1,6 +1,6 @@
 [package]
 name = "lomifynext-tauri"
-version = "9.5.1"
+version = "9.5.2"
 description = "LomifyNEXT"
 authors = ["dopaminegdev"]
 license = "GPL-3.0-or-later"
@@ -44,7 +44,8 @@ reqwest = { version = "0.12", features = ["rustls-tls", "stream", "json", "socks
 futures-util = "0.3"
 http = "1"
 urlencoding = "2"
-tauri-plugin-single-instance = "=2.4.2"
+tauri-plugin-single-instance = { version = "=2.4.2", features = ["deep-link"] }
+tauri-plugin-deep-link = "=2.4.10"
 rodio = { version = "0.22.2", features = ["mp3", "symphonia-aac", "symphonia-isomp4", "symphonia-ogg"] }
 cpal = "0.17"
 biquad = "0.5"
