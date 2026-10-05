@@ -352,7 +352,8 @@ Additional browser keys:
 - `lomifynext_yandex_twins`, `lomifynext_lyrics_cache`, and `lomifynext_sc_client_id_cache` in `src/lib/api.ts`.
 - `lomify-library-liked-view` in `Library.svelte`.
 - `lomify-artist-track-sort` in `ArtistPage.svelte` remembers popularity, newest, oldest or title ordering; playback queues use that same order. Library artist cards also support likes, name and recent-addition ordering within the open library view.
-- `spotify_auth_code` in the callback route.
+- Obsolete `spotify_auth_code` is cleared at credential bootstrap. The legacy callback
+  route no longer writes it; current Spotify PKCE uses the native loopback event.
 - `lomifynext_spotify_session` in `src/lib/spotify.ts` stores public Client ID/expiry metadata.
   Spotify access/refresh credentials use keyring; unlinking removes both credentials and metadata.
 - `lomifynext_lastfm_session`, `lomifynext_lastfm_pending`, and

@@ -8,6 +8,7 @@ import { writable, readable, derived, get } from 'svelte/store';
 async function setup({ failWrite = false, lastfm = false } = {}) {
   const original = JSON.stringify({ searchSource: 'yandex', yandexToken: 'fake-old-yandex', volume: 0.6 });
   const storage = new Map([['lomifynext_settings', original]]);
+  storage.set('spotify_auth_code', 'unused-one-time-code');
   if (lastfm) storage.set('lomifynext_lastfm_session', JSON.stringify({ apiKey: 'public', username: 'listener', sharedSecret: 'fake-lastfm-secret', sessionKey: 'fake-lastfm-session' }));
   const vault = new Map();
   const calls = [];
@@ -62,6 +63,7 @@ async function setup({ failWrite = false, lastfm = false } = {}) {
 test('startup is single-flight and publishes Yandex credentials before waiting requests resume', async () => {
   const f = await setup();
   const ready = f.secrets.whenSecretsReady();
+  assert.equal(f.storage.has('spotify_auth_code'), false);
   assert.equal(ready, f.secrets.whenSecretsReady());
   assert.equal(get(f.stores.settings).yandexToken, '');
   assert.equal(f.storage.get('lomifynext_settings'), f.original);

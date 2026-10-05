@@ -55,6 +55,9 @@ export function whenSecretsReady(): Promise<void> {
   if (bootstrap) return bootstrap;
   bootstrap = (async () => {
     if (typeof localStorage === 'undefined') return;
+    // This obsolete one-time code has no reader. Active PKCE authorization keeps
+    // code/state/verifier in memory through the native loopback callback.
+    try { localStorage.removeItem('spotify_auth_code'); } catch { /* Storage may be unavailable. */ }
     try { requireDesktop(); await invoke('secret_migrate_legacy'); }
     catch { startupErrors.push('Перенос старых файлов аккаунта не завершён. Неудалённые копии сохранены.'); }
     const fallback = new Map<SecretKey, string>();
