@@ -2,6 +2,7 @@ mod app;
 mod rockium;
 mod audio;
 mod auth;
+mod secrets;
 mod discord;
 mod import;
 mod network;
@@ -141,6 +142,7 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_keyring_store::init())
         .plugin(tauri_plugin_liquid_glass::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_http::init())
@@ -306,6 +308,9 @@ pub fn run() {
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![exit_app,
+            secrets::secret_save,
+            secrets::secret_get,
+            secrets::secret_delete,
             rockium::rockium_publish,
             rockium::rockium_configure,
             app::updater::check_and_download_update,

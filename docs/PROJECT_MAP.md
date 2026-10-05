@@ -604,6 +604,14 @@ When changing the application version, verify all of these locations:
 
 ## 11. Maintaining this map
 
+### Secure account storage (Windows)
+
+`src/lib/secretStorage.ts` exposes named secret save/read/delete operations through
+`src-tauri/src/secrets.rs`. The native module verifies every write by reading it back.
+`tauri-plugin-keyring-store` uses the OS credential store; raw plugin export/import
+permissions are denied. `src-tauri/permissions/account-secrets.toml` restricts the
+application secret commands to the main window capability.
+
 ### Rockium local playback integration (2026-09-25)
 
 `src/lib/rockiumBridge.ts` is mounted once by `Player.svelte`. It publishes playback,
