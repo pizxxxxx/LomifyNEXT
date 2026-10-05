@@ -5,6 +5,7 @@ import { LEGACY_RECORDS, legacySecrets, migrateRecord, readLegacyRecord, without
 export type SecretKey = SecretName;
 export const SECRETS_READY_EVENT = 'lomify:secrets-ready';
 const cache = new Map<SecretKey, string>();
+const present = new Set<SecretKey>();
 let bootstrap: Promise<void> | null = null;
 let ready = false;
 let operationTail: Promise<unknown> = Promise.resolve();
@@ -29,6 +30,14 @@ async function rawSave(key: SecretKey, value: string): Promise<void> {
 }
 
 export function cachedSecret(key: SecretKey): string { return ready ? cache.get(key) || '' : ''; }
+export function hasSecret(key: SecretKey): boolean { return ready && present.has(key); }
+
+export async function refreshSecretPresence(keys: SecretKey[]): Promise<void> {
+  for (const key of keys) {
+    if (await invoke<boolean>('secret_exists', { key })) present.add(key);
+    else present.delete(key);
+  }
+}
 export function secretStartupErrors(): string[] { return [...startupErrors]; }
 
 export function settingsSecretsRemoved(): boolean {
@@ -54,7 +63,10 @@ export function whenSecretsReady(): Promise<void> {
       try {
         const old = legacySecrets(readLegacyRecord(localStorage, record.storageKey), record.fields);
         for (const [key, value] of old) { rememberSecret(value); fallback.set(key, value); }
-        await migrateRecord(localStorage, { save: rawSave, read: rawRead }, record.storageKey, record.fields);
+        // secret_save verifies private Last.fm values natively; they are never read back into JS.
+        await migrateRecord(localStorage, { save: rawSave, read: async (key) => key.startsWith('lastfm_')
+          ? (await invoke<boolean>('secret_exists', { key }) ? old.get(key) || null : null) : rawRead(key)
+        }, record.storageKey, record.fields);
       } catch {
         for (const field of record.fields) failedKeys.add(field.key);
         startupErrors.push(`Перенос ${record.storageKey} не завершён. Старая копия сохранена.`);
@@ -62,10 +74,15 @@ export function whenSecretsReady(): Promise<void> {
     }
     for (const key of new Set(LEGACY_RECORDS.flatMap((record) => record.fields.map((field) => field.key)))) {
       try {
+        if (key.startsWith('lastfm_')) {
+          if (failedKeys.has(key) && fallback.has(key)) present.add(key);
+          else await refreshSecretPresence([key]);
+          continue;
+        }
         const value = failedKeys.has(key) && fallback.has(key) ? fallback.get(key)! : await rawRead(key);
-        if (value) cache.set(key, value);
+        if (value) { cache.set(key, value); present.add(key); }
       } catch {
-        if (fallback.has(key)) cache.set(key, fallback.get(key)!);
+        if (fallback.has(key)) { cache.set(key, fallback.get(key)!); present.add(key); }
         startupErrors.push('Не удалось загрузить секрет из системного хранилища. Подключение аккаунта не изменено.');
       }
     }
@@ -99,10 +116,12 @@ export async function saveSecrets(values: Partial<Record<SecretKey, string>>): P
     const entries = Object.entries(values) as [SecretKey, string][];
     for (const [key, value] of entries) {
       await rawSave(key, value);
-      if (await rawRead(key) !== value) throw new Error('Проверка сохранения секрета не прошла');
+      if (key.startsWith('lastfm_')) {
+        if (!await invoke<boolean>('secret_exists', { key })) throw new Error('Проверка сохранения секрета не прошла');
+      } else if (await rawRead(key) !== value) throw new Error('Проверка сохранения секрета не прошла');
     }
     removeVerifiedLegacyFields(entries.map(([key]) => key));
-    for (const [key, value] of entries) cache.set(key, value);
+    for (const [key, value] of entries) { present.add(key); if (!key.startsWith('lastfm_')) cache.set(key, value); }
   });
 }
 
@@ -121,7 +140,7 @@ export async function deleteSecrets(keys: SecretKey[]): Promise<void> {
     requireDesktop();
     for (const key of keys) await invoke('secret_delete', { key });
     removeVerifiedLegacyFields(keys);
-    for (const key of keys) cache.delete(key);
+    for (const key of keys) { cache.delete(key); present.delete(key); }
   });
 }
 

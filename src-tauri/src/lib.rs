@@ -12,6 +12,7 @@ mod app;
 mod rockium;
 mod audio;
 mod secrets;
+mod lastfm;
 mod discord;
 mod import;
 mod network;
@@ -314,9 +315,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![exit_app,
             secrets::secret_save,
             secrets::secret_get,
+            secrets::secret_exists,
             secrets::secret_delete,
             secrets::secret_migrate_legacy,
             secrets::secret_clear_legacy,
+            lastfm::lastfm_signed_request,
             rockium::rockium_publish,
             rockium::rockium_configure,
             app::updater::check_and_download_update,

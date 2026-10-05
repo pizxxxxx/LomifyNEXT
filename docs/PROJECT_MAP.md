@@ -629,6 +629,12 @@ No legacy token is returned to frontend. Unlinking SoundCloud/reset removes thes
 Native stdout/stderr and `app/diagnostics.rs` use `shared/log_redaction.rs`; both mask
 credential fields and known credential values. Yandex diagnostics omit server bodies.
 
+`src-tauri/src/lastfm.rs` signs and sends the four supported private Last.fm methods.
+Personal shared secrets and session keys stay native; `secret_get` rejects Last.fm keys,
+and `secret_exists` provides presence only. `lastfm_signed_request` returns public session
+metadata after saving/reading back session credentials. `VITE_LASTFM_SHARED_SECRET` is
+unsupported; `.env.example` permits only the public API key.
+
 ### Rockium local playback integration (2026-09-25)
 
 `src/lib/rockiumBridge.ts` is mounted once by `Player.svelte`. It publishes playback,

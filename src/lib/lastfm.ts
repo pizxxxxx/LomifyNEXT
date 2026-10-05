@@ -1,6 +1,6 @@
-import md5 from 'md5';
+import { invoke } from '@tauri-apps/api/core';
 import { redactText } from './logRedaction';
-import { cachedSecret, deleteSecrets, saveSecrets, whenSecretsReady } from './secretStorage';
+import { hasSecret, deleteSecrets, saveSecrets, whenSecretsReady, refreshSecretPresence } from './secretStorage';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 
 const LASTFM_API_URL = 'https://ws.audioscrobbler.com/2.0/';
@@ -13,14 +13,9 @@ const OVERVIEW_CACHE_TTL_MS = 15 * 60 * 1000;
 export const LASTFM_CREATE_APP_URL = 'https://www.last.fm/api/account/create';
 export const LASTFM_TASTE_UPDATED_EVENT = 'lastfm:taste-updated';
 export const LASTFM_CONFIGURED_API_KEY = String(import.meta.env.VITE_LASTFM_API_KEY || '').trim();
-export const LASTFM_CONFIGURED_SHARED_SECRET = String(
-  import.meta.env.VITE_LASTFM_SHARED_SECRET || ''
-).trim();
 
 export interface LastFmSession {
   apiKey: string;
-  sharedSecret: string;
-  sessionKey: string;
   username: string;
   subscriber: boolean;
   avatarUrl: string;
@@ -87,8 +82,6 @@ export interface LastFmOverview {
 
 interface LastFmPendingAuthorization {
   apiKey: string;
-  sharedSecret: string;
-  token: string;
   createdAt: number;
 }
 
@@ -116,6 +109,7 @@ interface ActiveScrobble {
 }
 
 let activeScrobble: ActiveScrobble | null = null;
+let authorizationGeneration = 0;
 
 function browserStorage(): Storage | null {
   return typeof window === 'undefined' ? null : window.localStorage;
@@ -140,9 +134,8 @@ function emitLastFmStateChanged() {
 }
 
 export function getLastFmSession(): LastFmSession | null {
-  const metadata = readJson<LastFmSession>(LASTFM_SESSION_KEY);
-  const value = metadata && { ...metadata, sharedSecret: cachedSecret('lastfm_shared_secret'), sessionKey: cachedSecret('lastfm_session_key') };
-  if (!value?.apiKey || !value.sharedSecret || !value.sessionKey || !value.username) return null;
+  const value = readJson<LastFmSession>(LASTFM_SESSION_KEY);
+  if (!value?.apiKey || !hasSecret('lastfm_shared_secret') || !hasSecret('lastfm_session_key') || !value.username) return null;
   return value;
 }
 
@@ -159,18 +152,15 @@ async function clearPendingAuthorization() {
   browserStorage()?.removeItem(LASTFM_PENDING_KEY);
 }
 
-async function writeSession(session: LastFmSession) {
-  await saveSecrets({ lastfm_shared_secret: session.sharedSecret, lastfm_session_key: session.sessionKey });
-  writePublicSession(session);
-}
-
-function writePublicSession(session: LastFmSession) {
-  if (cachedSecret('lastfm_session_key') !== session.sessionKey) return;
-  const { sharedSecret: _sharedSecret, sessionKey: _sessionKey, ...metadata } = session;
-  writeJson(LASTFM_SESSION_KEY, metadata);
+function writePublicSession(session: LastFmSession, newAccount = false) {
+  if (!hasSecret('lastfm_session_key')) return;
+  const current = getLastFmSession();
+  if (!newAccount && (current?.username !== session.username || current.apiKey !== session.apiKey)) return;
+  writeJson(LASTFM_SESSION_KEY, session);
 }
 
 export async function disconnectLastFm() {
+  authorizationGeneration++;
   await deleteSecrets(['lastfm_shared_secret', 'lastfm_session_key', 'lastfm_auth_token', 'lastfm_pending_shared_secret']);
   browserStorage()?.removeItem(LASTFM_SESSION_KEY);
   browserStorage()?.removeItem(LASTFM_PENDING_KEY);
@@ -192,15 +182,6 @@ async function lastFmHttp(url: string, init?: RequestInit): Promise<Response> {
   }
 }
 
-function signature(params: Record<string, string>, sharedSecret: string): string {
-  const payload = Object.entries(params)
-    .filter(([key]) => key !== 'format' && key !== 'callback')
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `${key}${value}`)
-    .join('');
-  return md5(`${payload}${sharedSecret}`);
-}
-
 function lastFmError(body: any): Error {
   const code = Number(body?.error || 0);
   if (code === 4 || code === 9) return new Error('Last.fm отклонил сессию. Подключи аккаунт заново.');
@@ -213,19 +194,14 @@ async function apiRequest<T>(
   method: string,
   params: Record<string, string>,
   apiKey: string,
-  sharedSecret?: string,
-  usePost = false
+  signed = false
 ): Promise<T> {
+  if (signed) {
+    return invoke<T>('lastfm_signed_request', { method, apiKey, params });
+  }
   const signedParams: Record<string, string> = { method, api_key: apiKey, ...params };
-  if (sharedSecret) signedParams.api_sig = signature(signedParams, sharedSecret);
   const requestParams = new URLSearchParams({ ...signedParams, format: 'json' });
-  const response = await lastFmHttp(usePost ? LASTFM_API_URL : `${LASTFM_API_URL}?${requestParams}`, usePost
-    ? {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: requestParams.toString()
-      }
-    : undefined);
+  const response = await lastFmHttp(`${LASTFM_API_URL}?${requestParams}`);
 
   if (response.status === 403) {
     throw new Error(
@@ -256,17 +232,19 @@ export async function beginLastFmAuthorization(
   sharedSecretRaw: string
 ): Promise<LastFmAuthorization> {
   await whenSecretsReady();
+  const generation = ++authorizationGeneration;
   const { apiKey, sharedSecret } = validateCredentials(apiKeyRaw, sharedSecretRaw);
-  const body = await apiRequest<{ token?: string }>('auth.getToken', {}, apiKey, sharedSecret);
+  await saveSecrets({ lastfm_pending_shared_secret: sharedSecret });
+  if (generation !== authorizationGeneration) throw new Error('Подключение Last.fm отменено');
+  const body = await apiRequest<{ token?: string }>('auth.getToken', {}, apiKey, true);
+  if (generation !== authorizationGeneration) throw new Error('Подключение Last.fm отменено');
   if (!body.token) throw new Error('Last.fm не вернул код подтверждения.');
 
   const pending: LastFmPendingAuthorization = {
     apiKey,
-    sharedSecret,
-    token: body.token,
     createdAt: Date.now()
   };
-  await saveSecrets({ lastfm_pending_shared_secret: pending.sharedSecret, lastfm_auth_token: pending.token });
+  await refreshSecretPresence(['lastfm_auth_token']);
   writeJson(LASTFM_PENDING_KEY, { apiKey: pending.apiKey, createdAt: pending.createdAt });
   return {
     authorizationUrl: `https://www.last.fm/api/auth/?api_key=${encodeURIComponent(apiKey)}&token=${encodeURIComponent(body.token)}`,
@@ -292,8 +270,8 @@ function profileFromResponse(body: any, fallbackName: string): Pick<LastFmSessio
 
 export async function finishLastFmAuthorization(): Promise<LastFmSession> {
   await whenSecretsReady();
-  const metadata = readJson<LastFmPendingAuthorization>(LASTFM_PENDING_KEY);
-  const pending = metadata && { ...metadata, sharedSecret: cachedSecret('lastfm_pending_shared_secret'), token: cachedSecret('lastfm_auth_token') };
+  const generation = authorizationGeneration;
+  const pending = readJson<LastFmPendingAuthorization>(LASTFM_PENDING_KEY);
   if (!pending || Date.now() - pending.createdAt >= AUTH_TOKEN_TTL_MS) {
     await clearPendingAuthorization();
     throw new Error('Код подтверждения Last.fm истёк. Начни подключение ещё раз.');
@@ -301,24 +279,24 @@ export async function finishLastFmAuthorization(): Promise<LastFmSession> {
 
   const result = await apiRequest<any>(
     'auth.getSession',
-    { token: pending.token },
+    {},
     pending.apiKey,
-    pending.sharedSecret
+    true
   );
-  const sessionKey = String(result?.session?.key || '');
+  if (generation !== authorizationGeneration) throw new Error('Подключение Last.fm отменено');
+  await refreshSecretPresence(['lastfm_shared_secret', 'lastfm_session_key']);
   const username = String(result?.session?.name || '');
-  if (!sessionKey || !username) throw new Error('Last.fm не вернул сессию аккаунта.');
+  if (!hasSecret('lastfm_session_key') || !username) throw new Error('Last.fm не вернул сессию аккаунта.');
 
   let session: LastFmSession = {
     apiKey: pending.apiKey,
-    sharedSecret: pending.sharedSecret,
-    sessionKey,
     username,
     subscriber: String(result?.session?.subscriber || '0') === '1',
     avatarUrl: '',
     profileUrl: `https://www.last.fm/user/${encodeURIComponent(username)}`
   };
-  await writeSession(session);
+  if (generation !== authorizationGeneration) throw new Error('Подключение Last.fm отменено');
+  writePublicSession(session, true);
   await clearPendingAuthorization();
   emitLastFmStateChanged();
 
@@ -552,7 +530,7 @@ function normalizedTrack(track: ScrobbleTrack) {
 async function signedWrite(method: string, values: Record<string, string>) {
   const session = getLastFmSession();
   if (!session) return;
-  await apiRequest(method, { ...values, sk: session.sessionKey }, session.apiKey, session.sharedSecret, true);
+  await apiRequest(method, values, session.apiKey, true);
 }
 
 export function beginLastFmTrack(track: ScrobbleTrack, durationSeconds: number) {

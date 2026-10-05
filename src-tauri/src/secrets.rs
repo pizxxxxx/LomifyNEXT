@@ -61,19 +61,30 @@ pub(crate) async fn with_vault<T: Send + 'static>(
 pub async fn secret_save(app: tauri::AppHandle, window: tauri::WebviewWindow, key: String, value: String) -> Result<(), String> {
     check_key(&window, &key)?;
     if value.is_empty() || value.len() > 16_384 { return Err("Некорректный секрет".into()); }
-    with_vault(app, move |vault| save_verified(vault, &key, &value)).await
+    with_vault(app, move |vault| {
+        if key == "lastfm_pending_shared_secret" { crate::lastfm::invalidate_authorization(); }
+        save_verified(vault, &key, &value)
+    }).await
 }
 
 #[tauri::command]
 pub async fn secret_get(app: tauri::AppHandle, window: tauri::WebviewWindow, key: String) -> Result<Option<String>, String> {
     check_key(&window, &key)?;
+    if key.starts_with("lastfm_") { return Err("Секрет Last.fm используется только в Rust".into()); }
     with_vault(app, move |vault| vault.read(&key)).await
+}
+
+#[tauri::command]
+pub async fn secret_exists(app: tauri::AppHandle, window: tauri::WebviewWindow, key: String) -> Result<bool, String> {
+    check_key(&window, &key)?;
+    with_vault(app, move |vault| Ok(vault.read(&key)?.is_some())).await
 }
 
 #[tauri::command]
 pub async fn secret_delete(app: tauri::AppHandle, window: tauri::WebviewWindow, key: String) -> Result<(), String> {
     check_key(&window, &key)?;
     with_vault(app, move |vault| {
+        if key.starts_with("lastfm_") { crate::lastfm::invalidate_authorization(); }
         vault.remove(&key)?;
         if vault.read(&key)?.is_some() { return Err("Удаление секрета не подтверждено".into()); }
         Ok(())

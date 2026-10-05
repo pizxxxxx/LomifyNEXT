@@ -6,7 +6,6 @@
   import { notify } from '$lib/stores';
   import {
     LASTFM_CONFIGURED_API_KEY,
-    LASTFM_CONFIGURED_SHARED_SECRET,
     LASTFM_CREATE_APP_URL,
     beginLastFmAuthorization,
     disconnectLastFm,
@@ -20,13 +19,13 @@
   } from '$lib/lastfm';
   import MusicServiceIcon from './MusicServiceIcon.svelte';
 
-  const hasAppCredentials = Boolean(LASTFM_CONFIGURED_API_KEY && LASTFM_CONFIGURED_SHARED_SECRET);
+  const hasAppCredentials = false;
   const LASTFM_APP_NAME = 'LomifyNEXT';
   const LASTFM_APP_DESCRIPTION = 'Desktop music player with Last.fm Now Playing and scrobbling support.';
   const LASTFM_APP_HOMEPAGE = 'https://github.com/pizxxxxx/LomifyNEXT';
   const LASTFM_RUSSIA_HELP_URL = 'https://support.last.fm/t/did-last-fm-just-block-russia/117851';
   let apiKey = LASTFM_CONFIGURED_API_KEY;
-  let sharedSecret = LASTFM_CONFIGURED_SHARED_SECRET;
+  let sharedSecret = '';
   let session: LastFmSession | null = null;
   let overview: LastFmOverview | null = null;
   let overviewLoading = false;
@@ -110,6 +109,7 @@
     busy = true;
     try {
       const authorization = await beginLastFmAuthorization(apiKey, sharedSecret);
+      sharedSecret = '';
       authorizationPending = true;
       await openExternal(authorization.authorizationUrl);
       notify('Last.fm открыт в браузере. Разреши доступ и вернись сюда.', 'info');
