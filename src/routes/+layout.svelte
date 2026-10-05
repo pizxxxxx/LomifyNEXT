@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { whenSecretsReady } from '$lib/secretStorage';
   import { startPlaylistSync } from '$lib/playlistSync';
   import '../app.css';
   import { settings, initStore, currentTrack, isPlaying, effectivePerformanceMode } from '$lib/stores';
@@ -22,6 +23,10 @@
   import { lockDevTools } from '$lib/utils/devLock';
   import { trackSheen } from '$lib/utils/sheen';
   import { trackTilt } from '$lib/utils/tilt';
+  import { trackPointerActions } from '$lib/utils/hitGuard';
+  onMount(trackPointerActions);
+  import { startMusicLinks } from '$lib/shareLinks';
+  onMount(startMusicLinks);
   import { trackPress } from '$lib/utils/press';
   import {
     coverUrlForTrack,
@@ -193,7 +198,8 @@
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName?.toLowerCase();
       const isEditable = tag === 'input' || tag === 'textarea' || tag === 'select' || target?.isContentEditable;
-      if (isEditable) return;
+      const isInteractive = target?.closest('button, a[href], summary, [role="button"], [role="switch"], dialog[open]');
+      if (isEditable || isInteractive) return;
 
       e.preventDefault();
       if ($currentTrack) {
@@ -219,7 +225,11 @@
 
   onMount(() => {
     initStore();
-    const releasePlaylistSync = startPlaylistSync();
+    let startupDisposed = false;
+    let releasePlaylistSync: (() => void) | null = null;
+    void whenSecretsReady().then(() => {
+      if (!startupDisposed) releasePlaylistSync = startPlaylistSync();
+    });
     const initialSettings = get(settings);
     if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
       import('@tauri-apps/api/core').then(({ invoke }) => {
@@ -311,7 +321,7 @@
       likesSyncTask = setTimeout(() => {
         // `silent` — запуск не по просьбе человека: отказы уходят в консоль, а не
         // уведомлением поверх интерфейса. Об изменениях сверка скажет сама.
-        syncAllLikesAtStartup();
+        void whenSecretsReady().then(() => { if (!startupDisposed) syncAllLikesAtStartup(); });
       }, 500);
 
       // Обход диска не конкурирует с первым кадром, загрузкой главной и сверкой лайков.
@@ -411,7 +421,8 @@
     }
 
     return () => {
-      releasePlaylistSync();
+      startupDisposed = true;
+      releasePlaylistSync?.();
       downloadedCoversDisposed = true;
       releaseDownloadedCovers?.();
       releaseDevLock();

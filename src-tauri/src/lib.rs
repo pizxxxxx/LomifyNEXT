@@ -1,7 +1,18 @@
+// Native modules share the same sanitization at the stdout/stderr boundary.
+macro_rules! println {
+    () => { std::println!() };
+    ($($args:tt)*) => { std::println!("{}", crate::shared::log_redaction::redact_text(&format!($($args)*))) };
+}
+macro_rules! eprintln {
+    () => { std::eprintln!() };
+    ($($args:tt)*) => { std::eprintln!("{}", crate::shared::log_redaction::redact_text(&format!($($args)*))) };
+}
+
 mod app;
 mod rockium;
 mod audio;
-mod auth;
+mod secrets;
+mod lastfm;
 mod discord;
 mod import;
 mod network;
@@ -15,8 +26,9 @@ use discord::commands::DiscordState;
 use network::server::ServerState;
 
 #[tauri::command]
-fn exit_app() {
-    std::process::exit(0);
+fn exit_app(app: tauri::AppHandle) {
+    let _ = network::soundcloud_bypass::clear_playback_issue(&app);
+    app.exit(0);
 }
 
 /// WebView2 normally keeps decoded images, script heaps and render caches around for fast
@@ -140,7 +152,9 @@ pub fn run() {
                 let _ = w.set_focus();
             }
         }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_keyring_store::init())
         .plugin(tauri_plugin_liquid_glass::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_http::init())
@@ -164,6 +178,16 @@ pub fn run() {
         .setup(move |app| {
             request_low_webview_memory(app);
 
+            #[cfg(any(windows, all(not(debug_assertions), target_os = "linux")))]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                // Portable/dev Windows runs have no installer to register the URI.
+                // The version the listener starts owns its public Lomify links.
+                if let Err(error) = app.deep_link().register_all() {
+                    eprintln!("[music-links] registration failed: {}", shared::log_redaction::redact_text(&error.to_string()));
+                }
+            }
+
             let cache_dir = app
                 .path()
                 .app_cache_dir()
@@ -172,6 +196,7 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .expect("failed to resolve app data dir");
+            network::soundcloud_bypass::start_playback_issue_cleanup(app.handle());
 
             let audio_dir = cache_dir.join("audio");
             std::fs::create_dir_all(&audio_dir).ok();
@@ -199,7 +224,6 @@ pub fn run() {
             let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
 
             let http_client = reqwest::Client::builder().build().unwrap();
-            let auth_http_client = http_client.clone();
 
             network::proxy::STATE
                 .set(network::proxy::State {
@@ -267,10 +291,6 @@ pub fn run() {
             app.manage(app::popover::TrayState::default());
             app::tray::setup_tray(app).expect("failed to setup tray");
 
-            let auth_state =
-                auth::SessionStore::init(data_dir.clone(), auth_http_client, rt_handle.clone());
-            app.manage(auth_state);
-
             let call_state = network::call::CallState::init(data_dir.clone(), rt_handle);
             network::call::manage_state(app.handle(), call_state.clone());
             network::call::maybe_autostart(app.handle(), call_state);
@@ -306,6 +326,13 @@ pub fn run() {
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![exit_app,
+            secrets::secret_save,
+            secrets::secret_get,
+            secrets::secret_exists,
+            secrets::secret_delete,
+            secrets::secret_migrate_legacy,
+            secrets::secret_clear_legacy,
+            lastfm::lastfm_signed_request,
             rockium::rockium_publish,
             rockium::rockium_configure,
             app::updater::check_and_download_update,
@@ -346,8 +373,6 @@ pub fn run() {
             audio::audio_preview_play,
             audio::audio_preview_stop,
             audio::save_track_to_path,
-             import::ym_import_start,
-             import::ym_import_stop,
              import::spotify_oauth_start,
             track_cache::track_ensure_cached,
             track_cache::track_export,
@@ -374,28 +399,32 @@ pub fn run() {
             network::call::call_set_enabled,
             network::call::call_is_enabled,
             network::call::call_status,
-            auth::auth_status,
-            auth::auth_set_session,
-            auth::auth_logout,
-            auth::auth_set_premium,
             network::wallpapers::wallpaper_search,
             network::direct_fetch::net_fetch_direct,
+            network::soundcloud_fetch::soundcloud_fetch_text,
             network::soundcloud_bypass::soundcloud_bypass_start,
             network::soundcloud_bypass::soundcloud_bypass_stop,
             network::soundcloud_bypass::soundcloud_bypass_status,
             network::soundcloud_bypass::soundcloud_bypass_test_connection,
             network::soundcloud_bypass::soundcloud_bypass_report_playback_failure,
+            network::soundcloud_bypass::soundcloud_clear_playback_issue,
             network::soundcloud_bypass::soundcloud_bypass_strategy_options,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 if window.label() == "main" {
+                    let _ = network::soundcloud_bypass::clear_playback_issue(window.app_handle());
                     std::process::exit(0);
                 }
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }) {
+                let _ = network::soundcloud_bypass::clear_playback_issue(app);
+            }
+        });
 }
 
 #[tauri::command]

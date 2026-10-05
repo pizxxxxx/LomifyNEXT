@@ -15,6 +15,11 @@
   import ArtistPage from '$lib/components/ArtistPage.svelte';
   import Notifications from '$lib/components/Notifications.svelte';
   import WaveHero from '$lib/components/WaveHero.svelte';
+  import DailyMixes from '$lib/components/DailyMixes.svelte';
+  import DailyMixPage from '$lib/components/DailyMixPage.svelte';
+  import { activeDailyMix, type DailyMixSelection } from '$lib/dailyMixActions';
+  import { transitionDailyMix, cancelDailyMixMotion } from '$lib/utils/dailyMixMotion';
+  import { dailyReleaseArtists, localMixDay } from '$lib/dailyMixesCore';
   import GlyphWake from '$lib/components/GlyphWake.svelte';
   import { currentView, previousView, currentTrack, isPlaying, queue, likedTracks, listenStats, searchHistory, playlists, navHistory, navFuture, isHistoryNavigation, currentArtist, searchQuery as searchQueryStore, settings, effectivePerformanceMode, notify, pageAtmosphere } from '$lib/stores';
   import { getTrendingTracks } from '$lib/api';
@@ -27,6 +32,8 @@
   let osUsername = 'User';
   let trendingTracks: any[] = [];
   let newReleases: any[] = [];
+  let recommendationsDay = '';
+  let releasesDay = '';
   let similarArtists: {name: string, coverUrl: string}[] = [];
   let isLoadingHome = true;
   let isLoadingMore = false;
@@ -75,6 +82,10 @@
     return `${track?.title || ''}\u0000${track?.artist || ''}`.toLocaleLowerCase('ru-RU');
   }
 
+  function feedContext() {
+    return `${$settings.searchSource}:${$settings.searchSource === 'yandex' ? $settings.yandexUser?.uid || '' : $settings.scUser?.id || ''}`;
+  }
+
   async function loadMoreTracks() {
     // Сначала показываем уже загруженную порцию. Повторный сетевой запрос и перестройка всей
     // сетки ради карточек, которые и так лежат в памяти, только давали задержку на кнопке.
@@ -109,23 +120,26 @@
    * спиннер гарантированно выключается — при любом исходе, включая брошенный запрос.
    */
   async function loadFeed() {
+    const context = feedContext();
     isLoadingHome = true;
     homeError = null;
     try {
       const tracks = await withTimeout(getTrendingTracks($likedTracks, $listenStats, $searchHistory, $playlists));
+      if (context !== feedContext()) return;
       // Свои плейлисты — сильный сигнал вкуса, а не содержимое главной. В API их треки уже
       // исключены из результата; эта проверка дополнительно не пропустит контейнер-плейлист.
-      trendingTracks = tracks.filter((t) => !Array.isArray(t?.tracks));
+      const received = tracks.filter((t) => !Array.isArray(t?.tracks));
+      if (received.length) { trendingTracks = received; recommendationsDay = localMixDay(); }
       visibleHomeCount = HOME_INITIAL_TRACKS;
       // `getTrendingTracks` внутри гасит отказы через Promise.allSettled и на мёртвой
       // сети возвращает пустой массив, а не ошибку. Формально это успех, по факту —
       // тихий провал: без этой проверки пользователь получил бы пустую страницу без
       // единого объяснения, почему на ней ничего нет.
-      if (trendingTracks.length === 0) {
+      if (received.length === 0) {
         // Называем тот сервис, из которого лента и собиралась: совет про VPN к Музыке
         // неприменим, а у неё свой типичный отказ — просроченный токен.
-        homeError = $settings.searchSource === 'yandex' && $settings.yandexToken
-          ? 'Рекомендации не пришли. Возможно, токен Яндекс.Музыки устарел — переподключи аккаунт в настройках.'
+        homeError = $settings.searchSource === 'yandex'
+          ? ($settings.yandexToken ? 'Яндекс Музыка не прислала рекомендации. Проверь соединение или переподключи аккаунт в настройках.' : 'Подключи Яндекс Музыку в настройках, чтобы получить рекомендации.')
           : 'Рекомендации не пришли. Возможно, SoundCloud недоступен без VPN.';
       }
     } catch (err) {
@@ -185,11 +199,19 @@
   }
 
   async function loadNewReleases() {
+    const context = feedContext();
     try {
-      newReleases = await withTimeout(import('$lib/api').then(m => m.getNewReleases($likedTracks)));
+      const source = $settings.searchSource === 'yandex' ? 'yandex' : 'soundcloud';
+      const tracks = await withTimeout(import('$lib/api').then(m => m.getNewReleases($likedTracks, { artistNames: dailyReleaseArtists($likedTracks, $listenStats.history, source), limit: 30 })));
+      if (context !== feedContext()) return;
+      if (tracks.length) { newReleases = tracks; releasesDay = localMixDay(); }
     } catch (e) {
       console.error("Failed to fetch new releases", e);
     }
+  }
+
+  async function refreshDailySources() {
+    await Promise.allSettled([loadFeedAuto(), loadNewReleases()]);
   }
 
   async function loadDesktopInfo() {
@@ -236,9 +258,10 @@
     // `loadFeed` выше уже идёт.
     let feedSource: string | null = null;
     const unsubscribeSettings = settings.subscribe((s) => {
-      const key = `${s.searchSource}:${s.yandexToken ? 'auth' : 'anon'}`;
+      const key = `${s.searchSource}:${s.searchSource === 'yandex' ? s.yandexUser?.uid || '' : s.scUser?.id || ''}:${s.yandexToken ? 'auth' : 'anon'}`;
       if (feedSource === null || feedSource === key) { feedSource = key; return; }
       feedSource = key;
+      trendingTracks = []; newReleases = []; recommendationsDay = ''; releasesDay = '';
       loadFeedAuto();
       loadNewReleases();
     });
@@ -298,6 +321,7 @@
         $isHistoryNavigation = true;
         $currentArtist = e.state.artist || '';
         $searchQueryStore = e.state.search || '';
+        $activeDailyMix = e.state.dailyMix || null;
         $currentView = e.state.view;
       } else {
         goBack();
@@ -306,7 +330,7 @@
 
     if (typeof window !== 'undefined' && window.history && !window.history.state) {
       try {
-        window.history.replaceState({ view: $currentView, artist: $currentArtist, search: $searchQueryStore }, '');
+        window.history.replaceState({ view: $currentView, artist: $currentArtist, search: $searchQueryStore, dailyMix: $activeDailyMix }, '');
       } catch {}
     }
 
@@ -350,12 +374,12 @@
   //      own, so Back would drop you straight into fullscreen mode.
   //   2. every keystroke in search — typing mutates the current window, it doesn't
   //      open a new one, so Back walked back through the query letter by letter.
-  function windowKey(s: { view: string; artist: string }) {
-    return s.view === 'artist' ? `artist:${s.artist}` : s.view;
+  function windowKey(s: import('$lib/stores').NavState) {
+    return s.view === 'artist' ? `artist:${s.artist}` : s.view === 'daily-mix' ? `daily-mix:${s.dailyMix?.id || ''}` : s.view;
   }
 
   $: {
-    const currentState = { view: $currentView, artist: $currentArtist, search: $searchQueryStore };
+    const currentState = { view: $currentView, artist: $currentArtist, search: $searchQueryStore, dailyMix: $activeDailyMix };
     if (currentState.view !== 'fullscreen') {
       if (windowKey(currentState) !== windowKey(lastState) && !$isHistoryNavigation) {
         navHistory.update(h => [...h, lastState]);
@@ -387,6 +411,7 @@
       if (prev) {
         $currentArtist = prev.artist;
         $searchQueryStore = prev.search;
+        $activeDailyMix = prev.dailyMix || null;
         $currentView = prev.view as any;
       }
     }
@@ -405,11 +430,37 @@
       if (next) {
         $currentArtist = next.artist;
         $searchQueryStore = next.search;
+        $activeDailyMix = next.dailyMix || null;
         $currentView = next.view as any;
       }
     }
   }
-   let previousRoute = '';
+  function openDailyMix(selection: DailyMixSelection) {
+    $activeDailyMix = selection;
+    $currentView = 'daily-mix';
+  }
+  let motionView = 'home';
+  let motionKey = 'home';
+  $: routeMotionKey = displayView === 'daily-mix' ? `daily-mix:${$activeDailyMix?.id || ''}` : displayView;
+  let motionMixId = '';
+  let homeScroll = 0;
+  $: if (mainEl && routeMotionKey !== motionKey) {
+    const old = motionView;
+    const id = old === 'daily-mix' && displayView === 'daily-mix' && motionMixId !== $activeDailyMix?.id ? '' : displayView === 'daily-mix' ? $activeDailyMix?.id || '' : motionMixId;
+    if (old === 'home') homeScroll = mainEl.scrollTop;
+    motionView = displayView;
+    motionKey = routeMotionKey;
+    motionMixId = displayView === 'daily-mix' ? $activeDailyMix?.id || '' : '';
+    if (old === 'daily-mix' || displayView === 'daily-mix') {
+      const destination = displayView;
+      void transitionDailyMix(id, () => {
+        if (!mainEl || destination !== displayView) return;
+        mainEl.scrollTo({ top: destination === 'home' ? homeScroll : 0, behavior: 'instant' });
+        syncAtmosShift();
+        if (destination === 'daily-mix') document.getElementById('daily-mix-heading')?.focus({ preventScroll: true });
+      }, $effectivePerformanceMode);
+    } else { cancelDailyMixMotion(); }
+  }
 
   /**
    * Прокрутка атмосферной подложки страницы.
@@ -440,6 +491,7 @@
 
   onDestroy(() => {
     if (atmosRaf) cancelAnimationFrame(atmosRaf);
+    cancelDailyMixMotion();
   });
 
   // `<main>` один на все разделы, и переключение раздела его прокрутку не сбрасывает —
@@ -579,7 +631,6 @@
       <WaveHero
         {greeting}
         username={osUsername}
-        sourceTracks={trendingTracks}
         onPage={$currentView === 'home'}
         motionEnabled={!$effectivePerformanceMode}
       />
@@ -588,6 +639,9 @@
     {#if displayView === 'artist'}
       <ArtistPage />
     {:else if displayView === 'home'}
+      <div class="w-full max-w-[1480px] mx-auto relative z-10 mb-12 pt-2">
+        <DailyMixes recommendations={trendingTracks} {recommendationsDay} releases={newReleases} {releasesDay} onrefresh={refreshDailySources} onopen={openDailyMix} />
+      </div>
       {#if isLoadingHome}
         <div class="home-feed-loading w-full flex flex-col items-center gap-4 py-20 text-primary">
           <Loader2 class="animate-spin" size={40} />
@@ -664,6 +718,8 @@
           </div>
         </div>
       {/if}
+    {:else if displayView === 'daily-mix' && $activeDailyMix}
+      {#key $activeDailyMix.id}<DailyMixPage selection={$activeDailyMix} onback={goBack} />{/key}
     {:else if displayView === 'search'}
       <Search />
     {:else if displayView === 'lyrics'}

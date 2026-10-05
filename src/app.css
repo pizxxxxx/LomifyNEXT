@@ -2489,7 +2489,7 @@ textarea:focus-visible,
 
    Скруглённые обёртки правило не касается: строки списков (`rounded-xl`), панели профиля и
    настроек (`rounded-2xl/3xl`) получают оба слоя точно по своей кромке, как и задумано.
-   Плитки при этом ничего не теряют — их свечение под курсором рисует `.tile-art::before` и
+   Плитки при этом ничего не теряют - их свечение под курсором рисует `.cover-tilt-surface::before` и
    `.art-glow::before`, то есть сама обложка, наследующая собственный радиус. */
 .interactive-item:not([class*="rounded"])::before,
 .interactive-item:not([class*="rounded"])::after {
@@ -5109,6 +5109,20 @@ body[data-perf="light"] .ui-tip[data-tip]::after {
      `.interactive-item` со своим `position: relative`. */
   min-width: 0;
   padding: 0.5rem 0.5rem 0.65rem;
+  border: 1px solid transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* Фон и серая кромка наклоняются вместе с обложкой. Корень карточки сохраняет
+   размеры для наведения, а кнопки лежат вне декоративных поверхностей. */
+.tile-card-surface {
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  transform-origin: 50% var(--tilt-cover-center-y, 50%);
   border: 1px solid rgba(255, 255, 255, 0.055);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.052), rgba(255, 255, 255, 0.018));
@@ -5116,13 +5130,14 @@ body[data-perf="light"] .ui-tip[data-tip]::after {
               0 12px 30px -24px rgba(0, 0, 0, 0.9);
 }
 
-/* У обложки уже есть физически привязанный specular-блик. Второе пятно поверх всей
-   карточки сделало бы свет двойным, поэтому здесь оставляем только тень `::before`. */
+/* У обложки уже есть отражение, а тень лежит на подвижной подложке. Плоские
+   псевдоэлементы корня карточки не должны оставлять неподвижную рамку. */
+.track-tile.interactive-item::before,
 .track-tile.interactive-item::after {
   display: none;
 }
 
-.track-tile.is-active {
+.track-tile.is-active > .tile-card-surface {
   border-color: color-mix(in srgb, var(--color-primary) 34%, rgba(255, 255, 255, 0.08));
   background:
     linear-gradient(
@@ -5138,11 +5153,31 @@ body[data-perf="light"] .ui-tip[data-tip]::after {
   aspect-ratio: 1 / 1;
   margin-bottom: 0.65rem;
   border-radius: 0.95rem;
+  overflow: visible;
+  border: 1px solid transparent;
+}
+
+/* Неподвижная рамка задает размеры и области нажатия. Только декоративная
+   поверхность с картинкой, закруглением, тенью и отражением наклоняется целиком.
+   Обрезка остается внутри поверхности, иначе фиксированный квадрат скрывает наклон. */
+.cover-tilt-frame {
+  overflow: visible;
+}
+
+.cover-tilt-surface,
+.cover-tilt-surface.spec-art {
+  position: absolute;
+  inset: 0;
   overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.tile-art > .cover-tilt-surface {
+  inset: -1px;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.06);
   box-shadow: 0 16px 34px -18px rgba(0, 0, 0, 0.95);
-  transition: border-color var(--duration-hover) var(--ease-standard);
 }
 
 .tile-cover-image {
@@ -5159,10 +5194,21 @@ body[data-perf="light"] .ui-tip[data-tip]::after {
 .tile-cover-overlay {
   position: absolute;
   inset: 0;
+  border-radius: inherit;
   z-index: 5;
   display: flex;
   align-items: center;
   justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms var(--ease-out);
+}
+
+.tile-cover-shade {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  border-radius: inherit;
   background:
     radial-gradient(circle at 50% 55%, rgba(0, 0, 0, 0.04), rgba(0, 0, 0, 0.48) 78%),
     linear-gradient(180deg, rgba(6, 7, 10, 0.08), rgba(6, 7, 10, 0.3));
@@ -5253,7 +5299,8 @@ body[data-perf="light"] .ui-tip[data-tip]::after {
     transform: translate3d(0, 0, 0) scale(1.025);
   }
 
-  .track-tile:hover .tile-cover-overlay {
+  .track-tile:hover .tile-cover-overlay,
+  .track-tile:hover .tile-cover-shade {
     opacity: 1;
   }
 
@@ -5267,7 +5314,7 @@ body[data-perf="light"] .ui-tip[data-tip]::after {
 
 /* `.group` — маркер, который разметка плитки уже носит для своих hover-состояний;
    читая его здесь, держим ховер плитки в одном месте вместо шести строк утилит.
-   Сам подъём живёт на `.interactive-item`, чтобы карточка двигалась как один объект.
+   Подъем и наклон живут на `.cover-tilt-surface`; карточка и кнопки остаются неподвижными.
    Тень при наведении не анимируется: она нарисована сразу и проявляется по
    прозрачности — иначе это был бы paint на каждом кадре.
 
@@ -5277,7 +5324,7 @@ body[data-perf="light"] .ui-tip[data-tip]::after {
    которая вылезает при наведении». Заменено на размытое свечение внутрь от кромки: тот же
    акцент, та же читаемость отклика, но без линии. Разброс отрицательный, чтобы свет не
    доходил до центра обложки и не мутил картинку. */
-.tile-art::before {
+.tile-art > .cover-tilt-surface::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -5289,7 +5336,7 @@ body[data-perf="light"] .ui-tip[data-tip]::after {
   z-index: 6;
 }
 
-.group:hover > .tile-art::before {
+.group:hover > .tile-art > .cover-tilt-surface::before {
   opacity: 1;
 }
 
@@ -5359,12 +5406,14 @@ body[data-perf="light"] .ui-tip[data-tip]::after {
    `will-change: transform`. Здесь `will-change` уместен по той же причине наоборот: он
    действует только на той обложке, которая реально движется. К моменту снятия атрибута
    углы уже нулевые с точностью до сотой градуса, поэтому исчезновение правила не видно. */
-[data-tilt] .tile-art,
-[data-tilt] .art-glow {
+[data-tilt] .cover-tilt-surface.spec-art,
+[data-tilt] > .tile-card-surface,
+[data-tilt] .tile-label-surface {
   transform: perspective(var(--tilt-perspective))
              translateZ(var(--tilt-lift, 0px))
              rotateX(var(--tilt-rx, 0deg))
              rotateY(var(--tilt-ry, 0deg));
+  transition: none;
   will-change: transform;
 }
 
@@ -5412,8 +5461,9 @@ body[data-perf="light"] .ui-tip[data-tip]::after {
    настройке обложки продолжали бы поворачиваться. Соседство с правилом, которое он гасит,
    заодно и страхует от повторения этой ошибки: перенести одно и забыть другое уже не выйдет. */
 @media (prefers-reduced-motion: reduce) {
-  [data-tilt] .tile-art,
-  [data-tilt] .art-glow {
+  [data-tilt] .cover-tilt-surface.spec-art,
+  [data-tilt] > .tile-card-surface,
+  [data-tilt] .tile-label-surface {
     transform: none;
     will-change: auto;
   }
@@ -5423,7 +5473,7 @@ body[data-perf="light"] .ui-tip[data-tip]::after {
   }
 }
 
-.tile-art.is-active {
+.tile-art.is-active > .cover-tilt-surface {
   border-color: var(--color-primary);
   box-shadow: 0 0 0 1px var(--color-primary),
               0 16px 36px -16px color-mix(in srgb, var(--color-primary) 55%, transparent);
@@ -5432,6 +5482,18 @@ body[data-perf="light"] .ui-tip[data-tip]::after {
 .tile-meta {
   position: relative;
   padding: 0 0.2rem 0.05rem;
+}
+
+/* Рамка подписи остается в потоке и задает неподвижную точку отсчета.
+   Текст поворачивается в той же плоскости, что обложка и подложка карточки.
+   Ссылки на исполнителей сохраняют обычное управление мышью и клавиатурой. */
+.tile-label-frame,
+.tile-label-surface {
+  min-width: 0;
+}
+
+.tile-label-surface {
+  transform-origin: var(--tilt-label-origin-x, 50%) var(--tilt-label-origin-y, 50%);
 }
 
 .tile-title {
@@ -5610,9 +5672,7 @@ body[data-perf="light"] .ui-tip[data-tip]::after {
 }
 
 .library-track-tile > .tile-art,
-.library-track-tile > .tile-art.spec-art,
-.library-track-tile.has-open-menu > .tile-art,
-.library-track-tile.has-open-menu > .tile-art.spec-art {
+.library-track-tile.has-open-menu > .tile-art {
   margin-bottom: 0.7rem;
   overflow: visible !important;
   contain: none !important;
@@ -5621,14 +5681,6 @@ body[data-perf="light"] .ui-tip[data-tip]::after {
 .library-track-tile.has-open-menu .tile-play-button {
   opacity: 0;
   pointer-events: none;
-}
-
-.library-tile-art-clip {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  border-radius: inherit;
-  background: inherit;
 }
 
 .library-tile-art-empty {
@@ -5885,7 +5937,8 @@ body[data-perf="light"] .ui-tip[data-tip]::after {
     transform: none;
   }
 
-  .library-track-tile .tile-cover-overlay {
+  .library-track-tile .tile-cover-overlay,
+  .library-track-tile .tile-cover-shade {
     opacity: 0.72;
   }
 
@@ -6027,6 +6080,19 @@ body[data-perf="light"] .ui-tip[data-tip]::after {
      полоса гарантированно поверх всего внутри плитки, чем бы её ни наполнили дальше. */
   isolation: isolate;
 }
+
+/* Home mix actions keep the shared sheen, with no clipped Aurora outline layer. */
+.mix-action-button {
+  position: relative;
+  border: 0;
+  border-radius: .8rem;
+  color: #eceff0;
+  background: rgba(255, 255, 255, .065);
+  transition: background-color var(--duration-quick) var(--ease-smooth-out), color var(--duration-quick) var(--ease-smooth-out);
+}
+.mix-action-button:hover:not(:disabled) { background: rgba(255, 255, 255, .12); }
+.mix-action-button.mix-action-primary { color: var(--color-dark); background: var(--color-primary); }
+.mix-action-button.mix-action-primary:hover:not(:disabled) { background: color-mix(in srgb, var(--color-primary) 85%, white); }
 
 /* Тот же маркер, но накладкой во всю карточку — для случаев, когда саму карточку обрезать
    нельзя. `.sheen-art` включает `overflow: hidden`, а у `.glass-button` свечение наведения
@@ -6316,8 +6382,9 @@ body[data-perf="light"] .ui-tip[data-tip]::after {
    ровно тот же вес (`body[data-design="aurora"] .interactive-item::after`), а этот блок стоит
    в app.css, то есть ПОСЛЕ `@import "./design-aurora.css"` из шапки файла. При равном весе
    побеждает правило, записанное позже. */
-body[data-fx-tilt="off"] .tile-art,
-body[data-fx-tilt="off"] .art-glow {
+body[data-fx-tilt="off"] .cover-tilt-surface.spec-art,
+body[data-fx-tilt="off"] .tile-card-surface,
+body[data-fx-tilt="off"] .tile-label-surface {
   transform: none;
   will-change: auto;
 }
@@ -13738,7 +13805,7 @@ body[data-ui-style="style2"] .sidebar-shell {
   }
 }
 
-@media (max-height: 680px) {
+@media (max-height: 820px) {
   .sidebar-shell {
     margin-top: 1rem;
     margin-bottom: 7rem;
@@ -14462,9 +14529,10 @@ body[data-perf="light"] .track-tile,
 body[data-perf="light"] .tile-art,
 body[data-perf="light"] .tile-cover-image,
 body[data-perf="light"] .tile-cover-overlay,
+body[data-perf="light"] .tile-cover-shade,
 body[data-perf="light"] .tile-play-button,
 body[data-perf="light"] .tile-like-button,
-body[data-perf="light"] .tile-art::before,
+body[data-perf="light"] .cover-tilt-surface::before,
 body[data-perf="light"] .art-glow::before,
 body[data-perf="light"] .interactive-item::before,
 body[data-perf="light"] .interactive-item::after {

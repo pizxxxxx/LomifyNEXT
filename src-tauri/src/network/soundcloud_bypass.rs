@@ -4,11 +4,87 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 #[cfg(windows)]
 static LAST_AUTO_START: AtomicU64 = AtomicU64::new(0);
+const PLAYBACK_ISSUE_TTL_MS: u64 = 180_000;
+static PLAYBACK_REPORT_GENERATION: AtomicU64 = AtomicU64::new(0);
+static PLAYBACK_REPORT_LOCK: Mutex<()> = Mutex::new(());
+
+fn playback_issue_path(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path().app_data_dir().map(|dir| dir.join("soundcloud-bypass-playback.json"))
+        .map_err(|_| "Не удалось найти папку диагностики SoundCloud".into())
+}
+
+pub fn clear_playback_issue(app: &AppHandle) -> Result<(), String> {
+    let _guard = PLAYBACK_REPORT_LOCK.lock().map_err(|_| "Диагностика SoundCloud занята".to_string())?;
+    PLAYBACK_REPORT_GENERATION.fetch_add(1, Ordering::SeqCst);
+    remove_playback_file(&playback_issue_path(app)?)
+}
+
+fn remove_playback_file(path: &Path) -> Result<(), String> {
+    match std::fs::remove_file(path) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err("Не удалось удалить диагностику SoundCloud".into()),
+        _ => Ok(()),
+    }
+}
+
+fn read_recent_playback_issue(path: &Path, now: u64) -> Option<PlaybackIssue> {
+    let _guard = PLAYBACK_REPORT_LOCK.lock().ok()?;
+    let bytes = std::fs::read(path).ok()?;
+    let issue = serde_json::from_slice::<PlaybackIssue>(&bytes).ok();
+    if let Some(issue) = issue {
+        if issue.reported_at <= now && now - issue.reported_at < PLAYBACK_ISSUE_TTL_MS { return Some(issue); }
+    }
+    let _ = remove_playback_file(path);
+    None
+}
+
+pub fn start_playback_issue_cleanup(app: &AppHandle) {
+    let _ = clear_playback_issue(app);
+    if let Ok(path) = playback_issue_path(app) {
+        tauri::async_runtime::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                let _ = read_recent_playback_issue(&path, now_millis());
+            }
+        });
+    }
+}
+
+#[tauri::command]
+pub fn soundcloud_clear_playback_issue(app: AppHandle) -> Result<(), String> { clear_playback_issue(&app) }
+
+#[cfg(test)]
+mod playback_lifetime_tests {
+    use super::*;
+    #[test]
+    fn expired_future_and_corrupt_reports_are_deleted() {
+        let path = std::env::temp_dir().join(format!("lomify-playback-lifetime-{}.json", std::process::id()));
+        let now = 1_000_000;
+        for reported_at in [now - PLAYBACK_ISSUE_TTL_MS, now + 1] {
+            let issue = PlaybackIssue { reported_at, kind: "network".into(), message: "test".into(), needs_bypass: true, probe_url: None };
+            std::fs::write(&path, serde_json::to_vec(&issue).unwrap()).unwrap();
+            assert!(read_recent_playback_issue(&path, now).is_none());
+            assert!(!path.exists());
+        }
+        std::fs::write(&path, b"invalid JSON").unwrap();
+        assert!(read_recent_playback_issue(&path, now).is_none());
+        assert!(!path.exists());
+    }
+    #[test]
+    fn fresh_reports_survive_until_their_lifetime_ends() {
+        let path = std::env::temp_dir().join(format!("lomify-playback-fresh-{}.json", std::process::id()));
+        let issue = PlaybackIssue { reported_at: 1_000_000, kind: "network".into(), message: "test".into(), needs_bypass: true, probe_url: None };
+        std::fs::write(&path, serde_json::to_vec(&issue).unwrap()).unwrap();
+        assert!(read_recent_playback_issue(&path, 1_000_001).is_some());
+        assert!(path.exists());
+        std::fs::remove_file(path).unwrap();
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BypassStatus {
@@ -205,6 +281,7 @@ pub async fn soundcloud_bypass_report_playback_failure(
     detail: String,
 ) -> Result<(), String> {
     if phase != "resolve" && phase != "stream" { return Err("Некорректный этап проверки".into()); }
+    let generation = PLAYBACK_REPORT_GENERATION.load(Ordering::SeqCst);
     let (_, status_path, _) = paths(&app)?;
     let issue_path = status_path.with_file_name("soundcloud-bypass-playback.json");
     let detail = detail.trim().chars().take(180).collect::<String>().to_lowercase();
@@ -238,8 +315,12 @@ pub async fn soundcloud_bypass_report_playback_failure(
         needs_bypass,
         probe_url: if needs_bypass { parsed_url.map(|url| url.to_string()) } else { None },
     };
-    std::fs::write(&issue_path, serde_json::to_vec(&issue).map_err(|error| error.to_string())?)
-        .map_err(|error| error.to_string())?;
+    {
+        let _guard = PLAYBACK_REPORT_LOCK.lock().map_err(|_| "Диагностика SoundCloud занята".to_string())?;
+        if PLAYBACK_REPORT_GENERATION.load(Ordering::SeqCst) != generation { return Ok(()); }
+        std::fs::write(&issue_path, serde_json::to_vec(&issue).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+    }
     #[cfg(windows)]
     if needs_bypass && status_path.with_file_name("soundcloud-bypass-enabled").exists() {
         let status = read_status(&status_path);
@@ -338,7 +419,7 @@ fn paths(app: &AppHandle) -> Result<(PathBuf, PathBuf, PathBuf), String> {
 fn read_status(path: &Path) -> BypassStatus {
     let mut status: BypassStatus = std::fs::read(path)
         .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .and_then(|bytes| parse_status(&bytes))
         .unwrap_or_else(BypassStatus::idle);
     let max_age = match status.state.as_str() {
         // «Ожидаю подтверждения Windows» пишет само приложение и больше не трогает, пока
@@ -380,6 +461,12 @@ fn read_status(path: &Path) -> BypassStatus {
     status
 }
 
+fn parse_status(bytes: &[u8]) -> Option<BypassStatus> {
+    // Windows PowerShell 5.1 writes a UTF-8 BOM with Text.Encoding.UTF8.
+    // serde_json rejects it, otherwise every script state would look like idle.
+    serde_json::from_slice(bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes)).ok()
+}
+
 fn write_status(path: &Path, status: &BypassStatus) -> Result<(), String> {
     let bytes = serde_json::to_vec(status).map_err(|error| error.to_string())?;
     std::fs::write(path, bytes).map_err(|error| error.to_string())
@@ -388,6 +475,19 @@ fn write_status(path: &Path, status: &BypassStatus) -> Result<(), String> {
 #[cfg(windows)]
 fn ps_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
+}
+
+/// Windows PowerShell providers cannot resolve Tauri's extended-length path prefix.
+#[cfg(windows)]
+fn plain_path(path: &Path) -> String {
+    let text = path.to_string_lossy().to_string();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        text
+    }
 }
 
 #[cfg(windows)]
@@ -472,14 +572,10 @@ pub fn soundcloud_bypass_status(app: AppHandle) -> Result<BypassStatus, String> 
         }
     }
     status.auto_enabled = status_path.with_file_name("soundcloud-bypass-enabled").is_file();
-    if let Ok(bytes) = std::fs::read(status_path.with_file_name("soundcloud-bypass-playback.json")) {
-        if let Ok(issue) = serde_json::from_slice::<PlaybackIssue>(&bytes) {
-            if now_millis().saturating_sub(issue.reported_at) < 3_600_000 {
-                status.diagnosis_state = issue.kind;
-                status.diagnosis_message = issue.message;
-                status.diagnosis_at = issue.reported_at;
-            }
-        }
+    if let Some(issue) = read_recent_playback_issue(&status_path.with_file_name("soundcloud-bypass-playback.json"), now_millis()) {
+        status.diagnosis_state = issue.kind;
+        status.diagnosis_message = issue.message;
+        status.diagnosis_at = issue.reported_at;
     }
     Ok(status)
 }
@@ -604,20 +700,20 @@ pub async fn soundcloud_bypass_start(
 
     let script = root.join("soundcloud-bypass.ps1");
     let child_command = CHILD_TEMPLATE
-        .replace("@SCRIPT@", &ps_literal(&script.to_string_lossy()))
+        .replace("@SCRIPT@", &ps_literal(&plain_path(&script)))
         .replace("@HASH@", &ps_literal(&bundled_script_hash()))
-        .replace("@STATUS@", &ps_literal(&status_path.to_string_lossy()))
-        .replace("@LOG@", &ps_literal(&log_path.to_string_lossy()))
-        .replace("@ROOT@", &ps_literal(&root.to_string_lossy()))
-        .replace("@STOP@", &ps_literal(&stop_path.to_string_lossy()))
-        .replace("@INPUT@", &ps_literal(&input_path.to_string_lossy()))
+        .replace("@STATUS@", &ps_literal(&plain_path(&status_path)))
+        .replace("@LOG@", &ps_literal(&plain_path(&log_path)))
+        .replace("@ROOT@", &ps_literal(&plain_path(&root)))
+        .replace("@STOP@", &ps_literal(&plain_path(&stop_path)))
+        .replace("@INPUT@", &ps_literal(&plain_path(&input_path)))
         .replace("@MODE@", &ps_literal(mode))
         .replace("@PICK@", &ps_literal(pick.as_deref().unwrap_or("")))
         .replace("@PID@", &std::process::id().to_string());
     let launcher_command = LAUNCHER_TEMPLATE
         .replace("@ENC@", &ps_literal(&encode_powershell(&child_command)))
-        .replace("@STATUS@", &ps_literal(&status_path.to_string_lossy()))
-        .replace("@LOG@", &ps_literal(&log_path.to_string_lossy()))
+        .replace("@STATUS@", &ps_literal(&plain_path(&status_path)))
+        .replace("@LOG@", &ps_literal(&plain_path(&log_path)))
         .replace("@MODE@", &ps_literal(mode))
         .replace("@PID@", &std::process::id().to_string());
     let encoded_launcher = encode_powershell(&launcher_command);
@@ -669,7 +765,7 @@ pub async fn soundcloud_bypass_start(
             return;
         }
         let log = std::fs::read_to_string(&log_path).unwrap_or_default();
-        let log = log.trim();
+        let log = log.trim_start_matches('\u{feff}').trim();
         let message = if !started {
             "Windows не дала прав администратора, без них обход не запустить. Нажмите «Подобрать и включить» ещё раз, а если появится окно Windows с вопросом - выберите «Да»."
                 .to_string()
@@ -706,7 +802,32 @@ pub async fn soundcloud_bypass_start(
 
 #[cfg(test)]
 mod tests {
-    use super::soundcloud_url;
+    use super::{soundcloud_url, parse_status};
+
+    #[test]
+    fn powershell_status_with_bom_preserves_failure_and_report() {
+        let payload = br#"{"state":"failed","message":"launch failed","strategy":"","index":0,"total":0,"report":"reason"}"#;
+        for bytes in [payload.to_vec(), [b"\xef\xbb\xbf".as_slice(), payload].concat()] {
+            let status = parse_status(&bytes).unwrap();
+            assert_eq!(status.state, "failed");
+            assert_eq!(status.report, "reason");
+        }
+        assert!(parse_status(b"{unfinished").is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_paths_handle_drive_unc_and_plain_paths() {
+        use super::plain_path;
+        use std::path::Path;
+        for (input, expected) in [
+            (r"\\?\C:\Program Files\LomifyNEXT", r"C:\Program Files\LomifyNEXT"),
+            (r"\\?\UNC\server\share\LomifyNEXT", r"\\server\share\LomifyNEXT"),
+            (r"C:\LomifyNEXT", r"C:\LomifyNEXT"),
+        ] {
+            assert_eq!(plain_path(Path::new(input)), expected);
+        }
+    }
 
     #[test]
     fn probe_urls_stay_on_soundcloud_https_hosts() {

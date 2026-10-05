@@ -110,35 +110,36 @@
         class:has-open-menu={infoTrack === track}
         onclick={() => toggleFromTile(track)}
       >
-        <div class="tile-art spec-art" class:is-active={isActive}>
-          <div class="library-tile-art-clip">
+        <div class="tile-card-surface" aria-hidden="true"></div>
+        <div class="tile-art" class:is-active={isActive}>
+          <div class="cover-tilt-surface spec-art art-glow">
             {#if track.coverUrl}
               <img src={coverUrlAtSize(coverUrlForTrack(track, $downloadedCoverCache), 400)} alt="" class="tile-cover-image" loading="lazy" decoding="async" />
             {:else}
               <div class="library-tile-art-empty"><Music2 size={34} /></div>
             {/if}
-
-            <div class="tile-cover-overlay">
-              <button
-                type="button"
-                class="tile-play-button"
-                class:is-muted={track.isBanned}
-                aria-label={isActive && $isPlaying ? `Поставить «${track.title}» на паузу` : `Воспроизвести «${track.title}»`}
-                onclick={(event) => { event.stopPropagation(); toggleFromTile(track); }}
-                onmouseenter={() => onpreview(track)}
-                onmouseleave={onpreviewend}
-              >
-                <MorphIcon
-                  icon={isActive && $isPlaying ? PauseIcon : PlayIcon}
-                  size={20}
-                  strokeWidth={2.35}
-                  fill="currentColor"
-                  class="play-pause-morph"
-                  spring="snappy"
-                  reducedMotion="user"
-                />
-              </button>
-            </div>
+            <div class="tile-cover-shade"></div>
+          </div>
+          <div class="tile-cover-overlay">
+            <button
+              type="button"
+              class="tile-play-button"
+              class:is-muted={track.isBanned}
+              aria-label={isActive && $isPlaying ? `Поставить «${track.title}» на паузу` : `Воспроизвести «${track.title}»`}
+              onclick={(event) => { event.stopPropagation(); toggleFromTile(track); }}
+              onmouseenter={() => onpreview(track)}
+              onmouseleave={onpreviewend}
+            >
+              <MorphIcon
+                icon={isActive && $isPlaying ? PauseIcon : PlayIcon}
+                size={20}
+                strokeWidth={2.35}
+                fill="currentColor"
+                class="play-pause-morph"
+                spring="snappy"
+                reducedMotion="user"
+              />
+            </button>
           </div>
 
           <div class="library-tile-actions">
@@ -167,10 +168,14 @@
         </div>
 
         <div class="tile-meta library-tile-meta">
-          <h3 class="tile-title" class:is-active={isActive} title={track.title}>{track.title}</h3>
-          <div class="library-tile-caption">
-            <span class="tile-sub"><ArtistTag artist={track.artist} artists={track.artists} /></span>
-            <span class="tile-duration tnum">{formatTrackDuration(track.duration)}</span>
+          <div class="tile-label-frame">
+            <div class="tile-label-surface">
+              <h3 class="tile-title" class:is-active={isActive} title={track.title}>{track.title}</h3>
+              <div class="library-tile-caption">
+                <span class="tile-sub"><ArtistTag artist={track.artist} artists={track.artists} /></span>
+                <span class="tile-duration tnum">{formatTrackDuration(track.duration)}</span>
+              </div>
+            </div>
           </div>
         </div>
 

@@ -41,8 +41,8 @@ export function pointerMissed(event: MouseEvent, element?: Element | null): bool
   if (event.detail === 0 && event.clientX === 0 && event.clientY === 0) return false;
 
   const box = target.getBoundingClientRect();
-  // Нулевая рамка - элемент ещё не разложен. Это не промах, и блокировать его нельзя.
-  if (box.width === 0 || box.height === 0) return false;
+  // An invisible or detached action cannot be a valid pointer target.
+  if (box.width === 0 || box.height === 0) return true;
 
   const overX = Math.max(box.left - event.clientX, event.clientX - box.right);
   const overY = Math.max(box.top - event.clientY, event.clientY - box.bottom);
@@ -59,4 +59,54 @@ export function pointerMissed(event: MouseEvent, element?: Element | null): bool
     );
   }
   return true;
+}
+
+const GUARDED_ACTIONS = 'button.library-tile-action, button.track-row-action, button.tile-like-button, .library-playlist-track-actions button';
+
+function actionAt(event: Event): HTMLElement | null {
+  return event.target instanceof Element
+    ? event.target.closest<HTMLElement>(GUARDED_ACTIONS)
+    : null;
+}
+
+function actionVisible(button: HTMLElement): boolean {
+  if (!button.isConnected || button.matches(':disabled')) return false;
+  if (getComputedStyle(button).pointerEvents === 'none') return false;
+  for (let node: HTMLElement | null = button; node; node = node.parentElement) {
+    const style = getComputedStyle(node);
+    if (style.visibility === 'hidden' || style.display === 'none' || Number(style.opacity) < 0.05) return false;
+  }
+  return true;
+}
+
+/** A pointer action must begin and end on the same visible, stationary button. */
+export function trackPointerActions(): () => void {
+  let pressed: HTMLElement | null = null;
+  const reset = () => { pressed = null; };
+  const down = (event: PointerEvent) => {
+    const button = actionAt(event);
+    pressed = event.button === 0 && button && actionVisible(button) && !pointerMissed(event, button)
+      ? button : null;
+  };
+  const click = (event: MouseEvent) => {
+    const button = actionAt(event);
+    const startedOn = pressed;
+    reset();
+    // Keyboard and assistive activation do not have a pointerdown.
+    if (!button || event.detail === 0) return;
+    if (startedOn === button && actionVisible(button) && !pointerMissed(event, button)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  };
+  window.addEventListener('pointerdown', down, true);
+  window.addEventListener('click', click, true);
+  window.addEventListener('pointercancel', reset, true);
+  window.addEventListener('blur', reset);
+  return () => {
+    window.removeEventListener('pointerdown', down, true);
+    window.removeEventListener('click', click, true);
+    window.removeEventListener('pointercancel', reset, true);
+    window.removeEventListener('blur', reset);
+    reset();
+  };
 }

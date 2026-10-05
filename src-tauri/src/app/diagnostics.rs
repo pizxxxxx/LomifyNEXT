@@ -23,7 +23,7 @@ fn append_log_line(app: &AppHandle, line: &str) -> Result<(), String> {
         .open(&path)
         .map_err(|e| format!("failed to open log file: {e}"))?;
 
-    writeln!(file, "{line}").map_err(|e| format!("failed to write log file: {e}"))?;
+    writeln!(file, "{}", crate::shared::log_redaction::redact_text(line)).map_err(|e| format!("failed to write log file: {e}"))?;
     Ok(())
 }
 
