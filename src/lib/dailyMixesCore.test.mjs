@@ -26,7 +26,7 @@ test('local day uses the device calendar and rolls over at local midnight', () =
 
 test('discoveries exclude familiar, disliked, duplicate and wrong-provider tracks', () => {
   const a = track(1), b = track(2), c = track(3), d = track(4), fresh = track(5);
-  const snapshot = buildDailyMixes(input({ likes: [a], history: { b }, playlists: [{ tracks: [c] }], disliked: [d], recommendations: [a, b, c, d, fresh, { ...fresh, id: 'duplicate' }, track(6, { source: 'yandex' }), track(7, { isLocal: true })] }));
+  const snapshot = buildDailyMixes(input({ likes: [a], history: { b }, playlists: [{ tracks: [c] }], disliked: [d], recommendations: [{ ...a, title: 'Renamed by service' }, b, c, d, fresh, { ...fresh, id: 'duplicate' }, track(6, { source: 'yandex' }), track(7, { isLocal: true })] }));
   assert.deepEqual(ids(snapshot, 'discover'), ['soundcloud:5']);
 });
 

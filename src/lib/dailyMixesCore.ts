@@ -159,10 +159,12 @@ export function buildDailyMixes(input: DailyMixInput, cached?: DailyMixSnapshot 
   const liked = unique(input.likes, input.source, blocked);
   const likeOrder = new Map(input.likes.map((track, index) => [songKey(track), index]));
   const likeInfo = new Map(input.likes.map((track) => [songKey(track), track]));
-  const knownSongs = new Set([...input.likes, ...history, ...input.playlists.flatMap((playlist) => playlist.tracks || [])].map(songKey));
+  const known = [...input.likes, ...history, ...input.playlists.flatMap((playlist) => playlist.tracks || [])];
+  const knownSongs = new Set(known.map(songKey));
+  const knownIds = new Set(known.filter((track) => track?.source === input.source && track?.id != null).map(mixTrackIdentity));
   const repeat = unique(history.filter((entry) => Number(entry.lastPlayedAt) >= input.now - 30 * DAY_MS)
     .map((entry) => ({ ...entry, ...(bySong.get(songKey(entry)) || {}) })), input.source, blocked);
-  const discoveries = unique(input.recommendations, input.source, blocked).filter((track) => !knownSongs.has(songKey(track)));
+  const discoveries = unique(input.recommendations, input.source, blocked).filter((track) => !knownSongs.has(songKey(track)) && !knownIds.has(mixTrackIdentity(track)));
   const releases = unique(input.releases, input.source, blocked).filter((track) => {
     const releasedAt = Date.parse(track.releaseDate || '');
     return Number.isFinite(releasedAt) && releasedAt <= input.now + 7 * DAY_MS && input.now - releasedAt <= 60 * DAY_MS;
@@ -183,7 +185,7 @@ export function buildDailyMixes(input: DailyMixInput, cached?: DailyMixSnapshot 
     const fresh = definition.kind === 'discover' ? input.recommendationsDay === input.day
       : definition.kind === 'releases' ? input.releasesDay === input.day : true;
     const previous = old ? unique(Array.isArray(old.tracks) ? old.tracks : [], input.source, blocked)
-      .filter((track) => definition.kind !== 'discover' || old.day === input.day || !knownSongs.has(songKey(track))) : [];
+      .filter((track) => definition.kind !== 'discover' || old.day === input.day || (!knownSongs.has(songKey(track)) && !knownIds.has(mixTrackIdentity(track)))) : [];
     if ((!fresh || (!force && old?.day === input.day && previous.length > 0)) && previous.length > 0) {
       return { ...definition, day: old!.day, tracks: previous.slice(0, DAILY_MIX_SIZE) };
     }

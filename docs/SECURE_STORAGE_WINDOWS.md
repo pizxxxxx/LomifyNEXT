@@ -90,3 +90,64 @@ auth IPC. Временный проверочный код удалён посл
 
 Вход в реальные аккаунты, обновление Spotify после истечения access token и реальный
 скробблинг Last.fm требуют ручной проверки. Android и macOS: не проверено.
+
+## Полный список файлов этого изменения
+
+Список относится к коммитам текущей задачи. Прежние незакоммиченные правки в него не включены.
+
+### Нативная часть и её конфигурация
+
+- `src-tauri/Cargo.lock` - изменён.
+- `src-tauri/Cargo.toml` - изменён.
+- `src-tauri/build.rs` - изменён.
+- `src-tauri/capabilities/default.json` - изменён.
+- `src-tauri/capabilities/tray-desktop.json` - добавлен.
+- `src-tauri/permissions/account-secrets.toml` - добавлен.
+- `src-tauri/permissions/desktop-commands.toml` - добавлен.
+- `src-tauri/src/app/diagnostics.rs` - изменён.
+- `src-tauri/src/auth/mod.rs` - удалён из активной сборки.
+- `src-tauri/src/import/mod.rs` - изменён.
+- `src-tauri/src/import/ym.rs` - удалён из активной сборки.
+- `src-tauri/src/lastfm.rs` - добавлен.
+- `src-tauri/src/lib.rs` - изменён.
+- `src-tauri/src/network/direct_fetch.rs` - изменён.
+- `src-tauri/src/network/soundcloud_bypass.rs` - изменён.
+- `src-tauri/src/secrets.rs` - добавлен.
+- `src-tauri/src/shared/log_redaction.rs` - добавлен.
+- `src-tauri/src/shared/mod.rs` - изменён.
+
+### Frontend и его тесты
+
+- `src/hooks.client.ts` - добавлен.
+- `src/lib/api.ts` - изменён.
+- `src/lib/changelog.ts` - изменён.
+- `src/lib/components/DailyMixes.svelte` - добавлен.
+- `src/lib/components/LastFmConnect.svelte` - изменён.
+- `src/lib/components/Settings.svelte` - изменён.
+- `src/lib/components/SpotifyImport.svelte` - изменён.
+- `src/lib/dailyMixes.test.mjs` - добавлен.
+- `src/lib/dailyMixes.ts` - добавлен.
+- `src/lib/dailyMixesCore.test.mjs` - добавлен.
+- `src/lib/dailyMixesCore.ts` - добавлен.
+- `src/lib/lastfm.ts` - изменён.
+- `src/lib/logRedaction.test.mjs` - добавлен.
+- `src/lib/logRedaction.ts` - добавлен.
+- `src/lib/secretMigration.test.mjs` - добавлен.
+- `src/lib/secretMigration.ts` - добавлен.
+- `src/lib/secretStorage.ts` - добавлен.
+- `src/lib/spotify.ts` - изменён.
+- `src/lib/stores.ts` - изменён.
+- `src/lib/yandex.ts` - изменён.
+- `src/routes/+layout.svelte` - изменён.
+- `src/routes/+page.svelte` - изменён.
+- `src/routes/callback/+page.svelte` - изменён.
+
+### Документы, проверки и настройки репозитория
+
+- `.env.example` - изменён.
+- `.gitignore` - изменён.
+- `docs/DAILY_MIXES.md` - добавлен.
+- `docs/PROJECT_MAP.md` - изменён.
+- `docs/SECURE_STORAGE_WINDOWS.md` - добавлен.
+- `scripts/audit-secret-history.mjs` - добавлен.
+- `scripts/secret-storage-test.mjs` - добавлен.
