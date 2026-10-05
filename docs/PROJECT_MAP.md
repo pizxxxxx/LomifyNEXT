@@ -48,6 +48,7 @@ Svelte routes/components
 | App startup, global theme, window-level effects | `src/routes/+layout.svelte`, `src/app.css` |
 | Windows taskbar, shortcut and executable icons | `src-tauri/src/lib.rs` (`apply_windows_window_icons`), `src-tauri/icons/tray.png`, `src-tauri/icons/icon.ico`, `src-tauri/tauri.conf.json`, `src-tauri/src/app/tray.rs` |
 | Page/view navigation and home layout | `src/routes/+page.svelte`, `src/lib/stores.ts` |
+| Daily personalized home mixes | `src/lib/components/DailyMixes.svelte`, `src/lib/dailyMixes.ts`, `src/lib/dailyMixesCore.ts`; source pools: `src/lib/api.ts` |
 | Player controls, listening time or queue behavior | `src/lib/components/Player.svelte`, `src/lib/stores.ts`, `src/lib/wave.ts`, `src-tauri/src/audio/commands.rs` |
 | Native playback, seeking, volume, crossfade | `src-tauri/src/audio/commands.rs`, `src-tauri/src/audio/engine.rs`, `src-tauri/src/audio/state.rs` |
 | Audio output devices | `src/lib/audioOutput.ts`, `src-tauri/src/audio/device.rs` |
@@ -347,6 +348,9 @@ Important event families:
 The settings payload also persists `windowControlsStyle`.
 
 Additional browser keys:
+
+- `lomifynext_daily_mixes` in `src/lib/dailyMixes.ts` stores up to four provider/account
+  snapshots with ordinary track metadata. Playback URLs and credentials are excluded.
 
 - `lomifynext_likes_sync` in `src/lib/likes.ts`.
 - `lomifynext_yandex_twins`, `lomifynext_lyrics_cache`, and `lomifynext_sc_client_id_cache` in `src/lib/api.ts`.
@@ -649,6 +653,27 @@ src/lib/logRedaction.test.mjs` and `node --experimental-vm-modules --test
 scripts/secret-storage-test.mjs`. Rust tests cover native file migration, masking,
 Last.fm request validation/signatures, report expiry and an isolated Windows keyring
 round trip. The keyring test uses a separate namespace and removes its test credential.
+
+### Daily personalized home mixes (2026-10-05)
+
+`DailyMixes.svelte` appears below the wave and before optional network shelves, so
+cached/local mixes remain usable during home loading or a network error. It waits
+for credential and playlist hydration before the first reconciliation. Four mixes
+contain up to 30 tracks: likes, recent 30-day repeats, unheard recommendations and
+60-day releases. Selection is deterministic per local calendar day and account/source;
+dislikes are removed immediately. Previous network mixes keep their actual date until
+a fresh pool arrives. Midnight, window focus and remount after an overnight absence
+refresh sources. An explicit refresh can rebuild the current day's mix.
+
+`dailyMixesCore.ts` owns selection, metadata whitelisting and recent release-artist
+weights. `dailyMixes.ts` owns optional browser cache with memory-only fallback.
+`+page.svelte` supplies current recommendations and release pools plus freshness dates;
+`api.ts:getNewReleases` accepts six artist seeds and up to 30 results for these pools.
+Playback uses the existing queue; saving creates an ordinary dated playlist snapshot
+through the existing IndexedDB playlist storage. Listening ticks do not rebuild mixes.
+
+Checks: `node --experimental-strip-types --test src/lib/dailyMixesCore.test.mjs
+src/lib/dailyMixes.test.mjs`. Product behavior/manual checks: `docs/DAILY_MIXES.md`.
 
 ### Rockium local playback integration (2026-09-25)
 

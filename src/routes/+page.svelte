@@ -15,6 +15,8 @@
   import ArtistPage from '$lib/components/ArtistPage.svelte';
   import Notifications from '$lib/components/Notifications.svelte';
   import WaveHero from '$lib/components/WaveHero.svelte';
+  import DailyMixes from '$lib/components/DailyMixes.svelte';
+  import { dailyReleaseArtists, localMixDay } from '$lib/dailyMixesCore';
   import GlyphWake from '$lib/components/GlyphWake.svelte';
   import { currentView, previousView, currentTrack, isPlaying, queue, likedTracks, listenStats, searchHistory, playlists, navHistory, navFuture, isHistoryNavigation, currentArtist, searchQuery as searchQueryStore, settings, effectivePerformanceMode, notify, pageAtmosphere } from '$lib/stores';
   import { getTrendingTracks } from '$lib/api';
@@ -27,6 +29,8 @@
   let osUsername = 'User';
   let trendingTracks: any[] = [];
   let newReleases: any[] = [];
+  let recommendationsDay = '';
+  let releasesDay = '';
   let similarArtists: {name: string, coverUrl: string}[] = [];
   let isLoadingHome = true;
   let isLoadingMore = false;
@@ -75,6 +79,10 @@
     return `${track?.title || ''}\u0000${track?.artist || ''}`.toLocaleLowerCase('ru-RU');
   }
 
+  function feedContext() {
+    return `${$settings.searchSource}:${$settings.searchSource === 'yandex' ? $settings.yandexUser?.uid || '' : $settings.scUser?.id || ''}`;
+  }
+
   async function loadMoreTracks() {
     // Сначала показываем уже загруженную порцию. Повторный сетевой запрос и перестройка всей
     // сетки ради карточек, которые и так лежат в памяти, только давали задержку на кнопке.
@@ -109,13 +117,16 @@
    * спиннер гарантированно выключается — при любом исходе, включая брошенный запрос.
    */
   async function loadFeed() {
+    const context = feedContext();
     isLoadingHome = true;
     homeError = null;
     try {
       const tracks = await withTimeout(getTrendingTracks($likedTracks, $listenStats, $searchHistory, $playlists));
+      if (context !== feedContext()) return;
       // Свои плейлисты — сильный сигнал вкуса, а не содержимое главной. В API их треки уже
       // исключены из результата; эта проверка дополнительно не пропустит контейнер-плейлист.
       trendingTracks = tracks.filter((t) => !Array.isArray(t?.tracks));
+      if (trendingTracks.length) recommendationsDay = localMixDay();
       visibleHomeCount = HOME_INITIAL_TRACKS;
       // `getTrendingTracks` внутри гасит отказы через Promise.allSettled и на мёртвой
       // сети возвращает пустой массив, а не ошибку. Формально это успех, по факту —
@@ -185,11 +196,20 @@
   }
 
   async function loadNewReleases() {
+    const context = feedContext();
     try {
-      newReleases = await withTimeout(import('$lib/api').then(m => m.getNewReleases($likedTracks)));
+      const source = $settings.searchSource === 'yandex' ? 'yandex' : 'soundcloud';
+      const tracks = await withTimeout(import('$lib/api').then(m => m.getNewReleases($likedTracks, { artistNames: dailyReleaseArtists($likedTracks, $listenStats.history, source), limit: 30 })));
+      if (context !== feedContext()) return;
+      newReleases = tracks;
+      if (newReleases.length) releasesDay = localMixDay();
     } catch (e) {
       console.error("Failed to fetch new releases", e);
     }
+  }
+
+  async function refreshDailySources() {
+    await Promise.allSettled([loadFeedAuto(), loadNewReleases()]);
   }
 
   async function loadDesktopInfo() {
@@ -588,6 +608,9 @@
     {#if displayView === 'artist'}
       <ArtistPage />
     {:else if displayView === 'home'}
+      <div class="w-full max-w-[1480px] mx-auto relative z-10 mb-12 pt-2">
+        <DailyMixes recommendations={trendingTracks} {recommendationsDay} releases={newReleases} {releasesDay} onrefresh={refreshDailySources} />
+      </div>
       {#if isLoadingHome}
         <div class="home-feed-loading w-full flex flex-col items-center gap-4 py-20 text-primary">
           <Loader2 class="animate-spin" size={40} />

@@ -2066,17 +2066,19 @@ const NEW_RELEASE_WINDOW_MS = 60 * 24 * 60 * 60 * 1000;
  * Собирается в том сервисе, который выбран источником: до этого шли только треки с
  * SoundCloud, поэтому при Яндекс.Музыке на главной оказывались чужие ссылки.
  */
-export async function getNewReleases(likedTracks: any[]) {
-  if (!likedTracks || likedTracks.length === 0) return [];
+export async function getNewReleases(likedTracks: any[], options: { artistNames?: string[]; limit?: number } = {}) {
+  await whenSecretsReady();
+  if ((!likedTracks || likedTracks.length === 0) && !options.artistNames?.length) return [];
+  const limit = Math.max(1, Math.min(30, options.limit || 15));
 
   const counts = likedTracks.reduce((acc, t) => { if (t.artist) acc[t.artist] = (acc[t.artist] || 0) + 1; return acc; }, {});
-  const topArtists = Object.keys(counts).sort((a, b) => counts[b] - counts[a]).slice(0, 3);
+  const topArtists = options.artistNames ? [...new Set(options.artistNames)].slice(0, 6) : Object.keys(counts).sort((a, b) => counts[b] - counts[a]).slice(0, 3);
 
   if (topArtists.length === 0) return [];
 
   const current = get(settings);
   if (current.searchSource === 'yandex' && current.yandexToken) {
-    const fromYandex = await yandexNewReleases(current.yandexToken, topArtists);
+    const fromYandex = await yandexNewReleases(current.yandexToken, topArtists, limit);
     // Пустой ответ отдаём как есть: на SoundCloud тут молча не переключаемся.
     if (fromYandex !== null) return fromYandex;
   }
@@ -2089,7 +2091,7 @@ export async function getNewReleases(likedTracks: any[]) {
       const userId = await getArtistUserId(artistName);
       if (!userId) return [];
       
-      const tracksUrl = `https://api-v2.soundcloud.com/users/${userId}/tracks?client_id=${clientId}&limit=5`;
+      const tracksUrl = `https://api-v2.soundcloud.com/users/${userId}/tracks?client_id=${clientId}&limit=${limit > 15 ? 12 : 5}`;
       const res = await safeFetch(tracksUrl, { method: 'GET' });
       if (res.ok) {
         const data = await res.json();
@@ -2136,7 +2138,7 @@ export async function getNewReleases(likedTracks: any[]) {
       return tDate > twoMonthsAgo;
     });
 
-    return releases.slice(0, 15);
+    return releases.slice(0, limit);
 
   } catch (e) {
     console.error("Failed to fetch new releases:", e);
@@ -2157,7 +2159,7 @@ export async function getNewReleases(likedTracks: any[]) {
  * дате сами релизы и только за свежими идём за треками — так запрос на альбом уходит
  * ноль-один раз на артиста, а не по разу на каждую позицию дискографии.
  */
-async function yandexNewReleases(token: string, artistNames: string[]): Promise<any[] | null> {
+async function yandexNewReleases(token: string, artistNames: string[], limit = 15): Promise<any[] | null> {
   const since = Date.now() - NEW_RELEASE_WINDOW_MS;
 
   const perArtist = await Promise.allSettled(artistNames.map(async (name) => {
@@ -2190,5 +2192,5 @@ async function yandexNewReleases(token: string, artistNames: string[]): Promise<
 
   return [...unique.values()]
     .sort((a, b) => (new Date(b.releaseDate).getTime() || 0) - (new Date(a.releaseDate).getTime() || 0))
-    .slice(0, 15);
+    .slice(0, limit);
 }
