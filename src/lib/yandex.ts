@@ -805,13 +805,13 @@ export async function yandexAvatarUrl(rawToken: string): Promise<string> {
  * попросили. Первую страницу ждём, чтобы узнать `total` и размер страницы, остальные тянем
  * разом — иначе поиск стоил бы трёх последовательных обращений вместо двух.
  */
-export async function searchYandex(rawToken: string, query: string, limit = 50, page = 0) {
+export async function searchYandex(rawToken: string, query: string, limit = 50, page = 0, signal?: AbortSignal) {
   const token = normalizeYandexToken(rawToken);
   const text = query.trim();
   if (!token || !text) return [];
 
   const ask = (p: number) =>
-    ymJson(`${API}/search?text=${encodeURIComponent(text)}&type=track&page=${p}&nocorrect=false`, token);
+    ymJson(`${API}/search?text=${encodeURIComponent(text)}&type=track&page=${p}&nocorrect=false`, token, { signal });
 
   const first = await ask(page);
   const found: any[] = first?.tracks?.results ?? [];
@@ -838,10 +838,10 @@ export async function searchYandex(rawToken: string, query: string, limit = 50, 
 }
 
 /** Порт related.rs — на нём держится автоплей, когда очередь закончилась. */
-export async function getYandexSimilar(rawToken: string, trackId: string | number, limit = 15) {
+export async function getYandexSimilar(rawToken: string, trackId: string | number, limit = 15, signal?: AbortSignal) {
   const token = normalizeYandexToken(rawToken);
   if (!token || !trackId) return [];
-  const result = await ymJson(`${API}/tracks/${trackId}/similar`, token);
+  const result = await ymJson(`${API}/tracks/${trackId}/similar`, token, { signal });
   const similar = result?.similarTracks ?? [];
   return similar.map(mapYandexTrack).filter(Boolean).slice(0, limit);
 }
@@ -979,7 +979,8 @@ export interface YandexWaveBatch {
 export async function yandexWaveBatch(
   rawToken: string,
   prevTrackId?: string | number | null,
-  station = WAVE_STATION
+  station = WAVE_STATION,
+  signal?: AbortSignal
 ): Promise<YandexWaveBatch> {
   const token = normalizeYandexToken(rawToken);
   if (!token) throw new Error('Яндекс Музыка не подключена — вставьте токен в настройках.');
@@ -989,7 +990,7 @@ export async function yandexWaveBatch(
   if (tail) params.set('queue', tail);
 
   const targetStation = station || WAVE_STATION;
-  const result = await ymJson(`${API}/rotor/station/${targetStation}/tracks?${params}`, token);
+  const result = await ymJson(`${API}/rotor/station/${encodeURIComponent(targetStation)}/tracks?${params}`, token, { signal });
 
   // Порция приходит как `sequence: [{ type, track, liked }]`; `mapYandexTrack` умеет
   // разворачивать такую обёртку сам (в лайках и плейлистах она такая же).
@@ -1397,6 +1398,10 @@ export async function getYandexLikes(
   const uid = await accountUid(token);
 
   const library = await ymJson(`${API}/users/${uid}/likes/tracks`, token);
+  const dates = new Map<string, number>((library?.library?.tracks ?? []).map((entry: any) => {
+    const at = typeof entry.timestamp === 'string' ? Date.parse(entry.timestamp) : Number(entry.timestamp);
+    return [String(entry.id), Number.isFinite(at) && at > 0 && at <= Date.now() ? at : 0];
+  }));
   const ids: string[] = (library?.library?.tracks ?? [])
     .map((t: any) => `${t?.id ?? ''}`.trim())
     .filter(Boolean);
@@ -1447,7 +1452,7 @@ export async function getYandexLikes(
   if (missingIds.length === 0) onProgress?.(ids.length, ids.length);
 
   return {
-    tracks: ids.map((id) => cache.get(id)).filter(Boolean),
+    tracks: ids.map((id) => { const track = cache.get(id); return track && dates.get(id) ? { ...track, likedAt: dates.get(id) } : track; }).filter(Boolean),
     complete: results.every((result) => result.ok),
   };
 }

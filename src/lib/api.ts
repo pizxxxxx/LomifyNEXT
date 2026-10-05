@@ -1,9 +1,12 @@
-import { whenSecretsReady } from './secretStorage';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
+import { whenSecretsReady } from './secretStorage';
 import { get } from 'svelte/store';
-import { settings, notify, dislikedTracks } from './stores';
+import { settings, notify, dislikedTracks, likedTracks as savedLikes, listenStats as savedStats } from './stores';
+import { searchWithCorrections } from './utils/searchText';
+import { allowServiceTwin } from './uncensoredCore';
+import { buildTasteProfile, chooseTasteSeeds } from './utils/tasteProfile';
 import { isTrackDisliked } from './dislikes';
-import { convertFileSrc } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import {
   searchYandex,
   getYandexSimilar,
@@ -29,8 +32,26 @@ const DEFAULT_BROWSER_HEADERS: Record<string, string> = {
   'Sec-Ch-Ua-Platform': '"Windows"',
 };
 
+async function boundedSoundCloudFetch(url: string, options: any, fetcher: typeof tauriFetch | typeof window.fetch) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  options.signal?.addEventListener('abort', abort, { once: true });
+  if (options.signal?.aborted) controller.abort();
+  const timeout = setTimeout(abort, 12000);
+  let rejectAbort: () => void = () => {};
+  const aborted = new Promise<never>((_, reject) => {
+    rejectAbort = () => reject(new DOMException('SoundCloud request timed out or cancelled', 'AbortError'));
+    controller.signal.addEventListener('abort', rejectAbort, { once: true });
+    if (controller.signal.aborted) rejectAbort();
+  });
+  try { return await Promise.race([fetcher(url, { ...options, signal: controller.signal }), aborted]); }
+  finally { clearTimeout(timeout); options.signal?.removeEventListener('abort', abort); controller.signal.removeEventListener('abort', rejectAbort); }
+}
+let lastSoundCloudNetworkReport = 0;
+
 export async function safeFetch(url: string, options?: any) {
-  const isSoundCloud = url.includes('soundcloud.com') || url.includes('sndcdn.com');
+  let isSoundCloud = false;
+  try { const host = new URL(url).hostname; isSoundCloud = ['soundcloud.com', 'sndcdn.com'].some(domain => host === domain || host.endsWith(`.${domain}`)); } catch { /* fetch handles invalid addresses */ }
   const finalOptions = options ? { ...options } : {};
   if (isSoundCloud) {
     finalOptions.headers = {
@@ -44,16 +65,30 @@ export async function safeFetch(url: string, options?: any) {
   let nativeError: unknown;
   try {
     if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
-      return await tauriFetch(url, finalOptions);
+      return isSoundCloud ? await boundedSoundCloudFetch(url, finalOptions, tauriFetch) : await tauriFetch(url, finalOptions);
     }
   } catch (err) {
+    if (finalOptions.signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
     nativeError = err;
-    console.warn('Tauri fetch unavailable or failed, falling back to window.fetch', err);
+    if (isSoundCloud && (!finalOptions.method || finalOptions.method === 'GET') && !finalOptions.body && !Object.keys(finalOptions.headers || {}).some(key => key.toLowerCase() === 'authorization')) {
+      try {
+        const response = await invoke<{ status: number; body: string }>('soundcloud_fetch_text', { url });
+        if (finalOptions.signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
+        return new Response([204, 205, 304].includes(response.status) ? null : response.body, { status: response.status });
+      } catch { if (finalOptions.signal?.aborted) throw new DOMException('Cancelled', 'AbortError'); }
+    }
+    console.warn('Сетевой запрос не прошёл, пробую соединение браузера.');
   }
 
   try {
-    return await window.fetch(url, finalOptions);
+    return isSoundCloud ? await boundedSoundCloudFetch(url, finalOptions, window.fetch.bind(window)) : await window.fetch(url, finalOptions);
   } catch (browserError) {
+    if (finalOptions.signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
+    if (isSoundCloud && '__TAURI_INTERNALS__' in window && Date.now() - lastSoundCloudNetworkReport > 60000) {
+      lastSoundCloudNetworkReport = Date.now();
+      // The runner only starts automatically when the user previously enabled it.
+      void invoke('soundcloud_bypass_report_playback_failure', { phase: 'resolve', url, detail: 'Сетевой запрос SoundCloud не ответил.' }).catch(() => {});
+    }
     // corsproxy.io no longer accepts anonymous legacy URLs (HTTP 403). Returning
     // its response hid the actual connection failure from SoundCloud callers.
     const message = isSoundCloud
@@ -235,12 +270,13 @@ export function findBestTranscoding(media: any) {
   return ranked[0] || null;
 }
 
-export async function searchSoundCloud(query: string, limit: number = 15, strict = false) {
+export async function searchSoundCloud(query: string, limit: number = 15, strict = false, signal?: AbortSignal) {
   try {
     const clientId = await getSoundCloudClientId();
+    if (signal?.aborted) throw new DOMException('Search cancelled', 'AbortError');
     const url = `https://api-v2.soundcloud.com/search/tracks?q=${encodeURIComponent(query)}&client_id=${clientId}&limit=${limit}`;
     
-    const response = await safeFetch(url, { method: 'GET' });
+    const response = await safeFetch(url, { method: 'GET', signal });
     if (!response.ok) throw new Error('Network response was not ok: ' + response.status);
     
     const data = await response.json();
@@ -254,6 +290,7 @@ export async function searchSoundCloud(query: string, limit: number = 15, strict
           coverUrl: cover,
           artistAvatarUrl: avatar,
           permalinkUrl: t.permalink_url || '',
+          originalArtist: t.publisher_metadata?.artist || '',
           albumTitle: t.publisher_metadata?.album_title || '',
           genre: t.genre || '',
           playbackCount: t.playback_count || 0,
@@ -267,6 +304,7 @@ export async function searchSoundCloud(query: string, limit: number = 15, strict
         };
       }).filter((t: any) => t.title);
   } catch (err) {
+    if (signal?.aborted) { if (strict) throw err; return []; }
     console.error("SoundCloud search error:", err);
     if (strict) throw err;
     return [];
@@ -308,11 +346,11 @@ export async function getRelatedTracks(track: any, likedTracks: any[] = [], list
  * so the recommendation builder can call it without the trending-tracks fallback —
  * that fallback calls `getTrendingTracks`, which would recurse straight back here.
  */
-async function fetchRelatedTracks(trackId: string | number, limit = 15) {
+export async function fetchRelatedTracks(trackId: string | number, limit = 15, signal?: AbortSignal) {
   try {
     const clientId = await getSoundCloudClientId();
     const url = `https://api-v2.soundcloud.com/tracks/${trackId}/related?client_id=${clientId}&limit=${limit}`;
-    const res = await safeFetch(url, { method: 'GET' });
+    const res = await safeFetch(url, { method: 'GET', signal });
     const data = await res.json();
     if (!data.collection) return [];
 
@@ -551,108 +589,6 @@ function pickRandom<T>(arr: T[], n: number): T[] {
   return copy.slice(0, Math.max(0, n));
 }
 
-interface TasteProfile {
-  /** normalised artist -> weight, roughly "how much you play them" */
-  artists: Map<string, number>;
-  /** normalised genre -> weight */
-  genres: Map<string, number>;
-  /** original casing for artist names, for building search queries */
-  displayNames: Map<string, string>;
-  /** liked SoundCloud track ids — seeds for SoundCloud's own /related graph */
-  seedIds: (string | number)[];
-  /** то же для Яндекса: у графа похожих треков в каждом сервисе свои идентификаторы */
-  yandexSeedIds: (string | number)[];
-  /** how much signal we have at all; decides whether the cold-start pool kicks in */
-  strength: number;
-}
-
-/**
- * Turns the user's library into weights. A like is the most explicit statement of taste,
- * repeat plays are weaker but broader, hand-made playlists sit in between.
- */
-function buildTasteProfile(likedTracks: any[], listenStats: any, playlists: any[]): TasteProfile {
-  const artists = new Map<string, number>();
-  const genres = new Map<string, number>();
-  const displayNames = new Map<string, string>();
-  const seedIds: (string | number)[] = [];
-  const yandexSeedIds: (string | number)[] = [];
-
-  const bump = (map: Map<string, number>, raw: string | undefined, by: number) => {
-    const key = normKey(raw);
-    if (!key) return;
-    map.set(key, (map.get(key) || 0) + by);
-    if (map === artists && raw && !displayNames.has(key)) displayNames.set(key, raw);
-  };
-
-  // Идентификатор трека имеет смысл только внутри своего сервиса: спросить SoundCloud про
-  // похожие на яндексовый id — это гарантированный 404, а не «просто пустой ответ».
-  // Поэтому затравки собираются в два списка, и берётся тот, который соответствует
-  // выбранному источнику.
-  const seed = (t: any) => {
-    if (!t?.id) return;
-    if (t.source === 'soundcloud') seedIds.push(t.id);
-    else if (t.source === 'yandex') yandexSeedIds.push(t.id);
-  };
-
-  for (const t of likedTracks || []) {
-    // Лайк — самый явный сигнал: он должен перевешивать случайный единичный запуск и
-    // присутствие трека в большой подборке.
-    bump(artists, t?.artist, 5);
-    bump(genres, t?.genre, 2.5);
-    seed(t);
-  }
-
-  const history = listenStats?.history ? (Object.values(listenStats.history) as any[]) : [];
-  for (const h of history) {
-    // Логарифм отличает «послушал один раз» от «возвращаюсь постоянно», но сотое
-    // прослушивание не способно навсегда запереть ленту на одном исполнителе.
-    const repeats = Math.max(1, Number(h?.count) || 1);
-    bump(artists, h?.artist, Math.min(5, 1 + Math.log2(repeats + 1) * 1.25));
-    bump(genres, h?.genre, Math.min(2, Math.log2(repeats + 1) * 0.45));
-  }
-
-  // Last.fm уже объединяет прослушивания из разных плееров. Берём только сохранённый
-  // месячный топ: сеть здесь не трогаем, а его вес держим ниже явного лайка в Lomify.
-  // Так связь полезна для главной, но не может перетянуть рекомендации на себя.
-  const lastFmArtists = getCachedLastFmTasteArtists();
-  for (const [index, artist] of lastFmArtists.entries()) {
-    const recencyWeight = Math.max(1.4, 3.2 - index * 0.38);
-    const repeatWeight = Math.min(1.2, Math.log2(Math.max(1, artist.playcount) + 1) * 0.18);
-    bump(artists, artist.name, recencyWeight + repeatWeight);
-  }
-  const lastFmDiscovery = getCachedLastFmDiscoveryArtists();
-  for (const artist of lastFmDiscovery) {
-    // Похожесть — исследовательский сигнал: он помогает открыть нового автора, но не
-    // должен конкурировать с лайком или реально прослушанным исполнителем.
-    bump(artists, artist.name, 0.55 + artist.match * 0.7);
-  }
-
-  let playlistTrackCount = 0;
-  for (const pl of playlists || []) {
-    for (const t of pl?.tracks || []) {
-      playlistTrackCount += 1;
-      bump(artists, t?.artist, 0.85);
-      bump(genres, t?.genre, 0.4);
-      seed(t);
-    }
-  }
-
-  return {
-    artists,
-    genres,
-    displayNames,
-    seedIds,
-    yandexSeedIds,
-    // Плейлист тоже выводит из cold start, но его размер учитывается с сильным насыщением:
-    // подборка на 500 треков не должна затоптать лайки и историю.
-    strength: (likedTracks?.length || 0) * 2
-      + history.length
-      + Math.min(12, playlistTrackCount * 0.25)
-      + Math.min(8, lastFmArtists.length * 1.25)
-      + Math.min(3, lastFmDiscovery.length * 0.25),
-  };
-}
-
 function topKeys(map: Map<string, number>, n: number) {
   return [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(e => e[0]);
 }
@@ -675,9 +611,9 @@ function topKeys(map: Map<string, number>, n: number) {
  * прибита к SoundCloud, поэтому при выбранной Яндекс.Музыке главная выдавала треки не из
  * того сервиса, которым человек пользуется.
  */
-export async function getTrendingTracks(likedTracks: any[] = [], listenStats: any = null, searchHistory: string[] = [], playlists: any[] = []) {
+export async function getTrendingTracks(likedTracks: any[] = [], listenStats: any = null, searchHistory: string[] = [], playlists: any[] = [], options: { source?: 'soundcloud' | 'yandex' } = {}) {
   await whenSecretsReady();
-  const taste = buildTasteProfile(likedTracks, listenStats, playlists);
+  const taste = buildTasteProfile(likedTracks, listenStats, playlists, getCachedLastFmTasteArtists(), getCachedLastFmDiscoveryArtists());
   const favArtists = topKeys(taste.artists, 12);
   const favGenres = topKeys(taste.genres, 6);
   const recentSearches = (searchHistory || [])
@@ -688,12 +624,12 @@ export async function getTrendingTracks(likedTracks: any[] = [], listenStats: an
 
   const current = get(settings);
   const yandexToken = current.yandexToken;
-  const yandexIsHost = current.searchSource === 'yandex' && Boolean(yandexToken);
+  const yandexIsHost = (options.source ?? current.searchSource) === 'yandex';
+  if (yandexIsHost && !yandexToken) return [];
 
   // --- Seeds ---------------------------------------------------------------------
   const seedsFor = (host: 'yandex' | 'soundcloud') => {
-    const pool = host === 'yandex' ? taste.yandexSeedIds : taste.seedIds;
-    return pickRandom([...new Set(pool)].slice(0, 60), taste.strength > 10 ? 4 : 3);
+    return chooseTasteSeeds(taste, host, taste.strength > 10 ? 5 : 3);
   };
   const primaryHost: 'yandex' | 'soundcloud' = yandexIsHost ? 'yandex' : 'soundcloud';
   const primarySeeds = seedsFor(primaryHost);
@@ -717,8 +653,7 @@ export async function getTrendingTracks(likedTracks: any[] = [], listenStats: an
   /**
    * Одна попытка собрать ленту в конкретном сервисе. `ok` — удался ли хоть один запрос:
    * по нему отличается «сервис ответил, но у него для нас ничего нет» от «сервис вообще
-   * не ответил» (протухший токен, сеть). Пустой ответ отдаём как есть — молча подменять
-   * источник нельзя, — а вот полный отказ разумно закрыть падением на SoundCloud.
+   * не ответил» (протухший токен, сеть). Отказ не меняет выбранный сервис.
    */
   const gather = async (host: 'yandex' | 'soundcloud', seeds: (string | number)[]) => {
     const [relatedResults, searchResults] = await Promise.all([
@@ -747,8 +682,7 @@ export async function getTrendingTracks(likedTracks: any[] = [], listenStats: an
     return { tracks, fromRelated, ok };
   };
 
-  let gathered = await gather(primaryHost, primarySeeds);
-  if (yandexIsHost && !gathered.ok) gathered = await gather('soundcloud', seedsFor('soundcloud'));
+  const gathered = await gather(primaryHost, primarySeeds);
 
   const fromRelated = gathered.fromRelated;
   let sc: any[] = gathered.tracks;
@@ -870,6 +804,15 @@ export interface SearchResponse {
   /** Фактический источник результата: при недоступном Яндексе им может стать SoundCloud. */
   source: 'soundcloud' | 'yandex';
   fallbackUsed: boolean;
+  correctedQuery?: string;
+}
+
+async function soundCloudSearchSuggestions(query: string): Promise<string[]> {
+  const clientId = await getSoundCloudClientId();
+  const response = await safeFetch(`https://api-v2.soundcloud.com/search/queries?q=${encodeURIComponent(query)}&client_id=${clientId}&limit=8`);
+  if (!response.ok) return [];
+  const data = await response.json();
+  return (data.collection || []).map((item: any) => item.query).filter((value: unknown) => typeof value === 'string');
 }
 
 /**
@@ -879,24 +822,29 @@ export interface SearchResponse {
 export async function performSearchDetailed(query: string): Promise<SearchResponse> {
   await whenSecretsReady();
   const current = get(settings);
+  const vocabulary = [...get(savedLikes), ...Object.values(get(savedStats).history)]
+    .flatMap(track => [track?.title, track?.artist]).filter((value): value is string => Boolean(value));
+  const soundcloud = () => searchWithCorrections(query,
+    text => searchSoundCloud(text, 50, true), soundCloudSearchSuggestions, vocabulary);
   if (current.searchSource === 'yandex' && current.yandexToken) {
     try {
       return {
-        tracks: await searchYandex(current.yandexToken, query, 50),
+        ...await searchWithCorrections(query,
+          text => searchYandex(current.yandexToken, text, 50), async () => [], vocabulary),
         source: 'yandex',
         fallbackUsed: false
       };
     } catch (e) {
       console.error('[yandex] поиск не удался, отдаём SoundCloud', e);
       return {
-        tracks: await searchSoundCloud(query, 50, true),
+        ...await soundcloud(),
         source: 'soundcloud',
         fallbackUsed: true
       };
     }
   }
   return {
-    tracks: await searchSoundCloud(query, 50, true),
+    ...await soundcloud(),
     source: 'soundcloud',
     fallbackUsed: false
   };
@@ -1106,7 +1054,7 @@ export async function getAudioUrl(track: any, opts: { silent?: boolean; forcePre
    * уже известное соответствие, если оно есть, и не ищем новое. Отрывок для наведения и так
    * достаточен, он затем и нужен.
    */
-  const yandexIsHost = current.crossPlatformSync !== false && current.searchSource === 'yandex' && Boolean(current.yandexToken);
+  const yandexIsHost = allowServiceTwin(track, current.crossPlatformSync !== false) && current.searchSource === 'yandex' && Boolean(current.yandexToken);
   let yandexMissedTrack = false;
   if (yandexIsHost && track.source !== 'yandex') {
     const twinId = await findYandexTwin(track, current.yandexToken, !opts.silent);
@@ -1159,7 +1107,7 @@ export async function getAudioUrl(track: any, opts: { silent?: boolean; forcePre
     if (ranked.length === 0) {
       // Прежде чем падать с ошибкой DRM: если у пользователя подключена Яндекс Музыка
       // и включена синхронизация площадок, проверим, нет ли трека там!
-      if (current.crossPlatformSync !== false && current.yandexToken) {
+      if (allowServiceTwin(track, current.crossPlatformSync !== false) && current.yandexToken) {
         try {
           const twinId = await findYandexTwin(track, current.yandexToken, !opts.silent);
           if (twinId) {
@@ -1210,7 +1158,7 @@ export async function getAudioUrl(track: any, opts: { silent?: boolean; forcePre
     }
 
     // Если все потоки SoundCloud отпали, но включена синхронизация и есть Яндекс Музыка:
-    if (current.crossPlatformSync !== false && current.yandexToken) {
+    if (allowServiceTwin(track, current.crossPlatformSync !== false) && current.yandexToken) {
       try {
         const twinId = await findYandexTwin(track, current.yandexToken, !opts.silent);
         if (twinId) {
@@ -2077,10 +2025,9 @@ export async function getNewReleases(likedTracks: any[], options: { artistNames?
   if (topArtists.length === 0) return [];
 
   const current = get(settings);
-  if (current.searchSource === 'yandex' && current.yandexToken) {
-    const fromYandex = await yandexNewReleases(current.yandexToken, topArtists, limit);
-    // Пустой ответ отдаём как есть: на SoundCloud тут молча не переключаемся.
-    if (fromYandex !== null) return fromYandex;
+  if (current.searchSource === 'yandex') {
+    if (!current.yandexToken) return [];
+    return (await yandexNewReleases(current.yandexToken, topArtists, limit)) || [];
   }
 
   let releases: any[] = [];
@@ -2149,7 +2096,7 @@ export async function getNewReleases(likedTracks: any[], options: { artistNames?
 /**
  * Яндексовая половина `getNewReleases`.
  *
- * `null` означает «сервис не ответил» — на него вызывающий падает обратно на SoundCloud.
+ * `null` означает «сервис не ответил» - вызывающий оставляет полку пустой.
  * Пустой массив — «ответил, свежего нет»: это законный результат, подменять источник в
  * таком случае нельзя.
  *

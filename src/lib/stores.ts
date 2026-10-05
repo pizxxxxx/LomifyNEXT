@@ -14,6 +14,8 @@ export const currentTrack = writable<{
   isLocal?: boolean;
   duration?: number;
   permalinkUrl?: string;
+  /** Explicitly selected edition, kept on this provider during stream resolution. */
+  playbackSource?: 'soundcloud';
   /** Яндекс сообщил, что у трека есть синхронный или обычный текст. */
   lyricsAvailable?: boolean;
   /** Язык слов, когда источник его сообщил: `ru`, `en` или другой ISO-код. */
@@ -257,6 +259,7 @@ const defaultSettings = {
   waveGenre: '',
   /** Разрешены ли нейротреки в «Моей тусне»: true - вкл, false - выкл, 'only' - только нейро. */
   waveAllowNeuro: true as boolean | 'only',
+  waveFreshTaste: true,
   /**
    * Режим производительности: снимает всё, что стоит кадров, а не только размытие панелей.
    * Живое `backdrop-filter` везде, крупные декоративные размытия (атмосферная подложка,
@@ -378,8 +381,8 @@ function scheduleListenStatsPersist(value: typeof defaultStats) {
 }
 
 // Navigation state
-export const currentView = writable<'home' | 'search' | 'library' | 'settings' | 'lyrics' | 'equalizer' | 'fullscreen' | 'profile' | 'artist'>('home');
-export const previousView = writable<'home' | 'search' | 'library' | 'settings' | 'lyrics' | 'equalizer' | 'fullscreen' | 'profile' | 'artist'>('home');
+export const currentView = writable<'home' | 'search' | 'library' | 'settings' | 'lyrics' | 'equalizer' | 'fullscreen' | 'profile' | 'artist' | 'daily-mix'>('home');
+export const previousView = writable<'home' | 'search' | 'library' | 'settings' | 'lyrics' | 'equalizer' | 'fullscreen' | 'profile' | 'artist' | 'daily-mix'>('home');
 export type LibraryTab = 'liked' | 'playlists' | 'artists' | 'local' | 'disliked';
 const VALID_LIBRARY_TABS: LibraryTab[] = ['liked', 'playlists', 'artists', 'local', 'disliked'];
 
@@ -412,6 +415,7 @@ export const lyricsStatus = writable<LyricsStatus>('unknown');
 export const lyricsReloadTrigger = writable<number>(0);
 
 export interface NavState {
+  dailyMix?: import('./dailyMixActions').DailyMixSelection | null;
   view: string;
   artist: string;
   search: string;

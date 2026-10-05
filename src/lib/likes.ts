@@ -40,6 +40,7 @@
 import { get } from 'svelte/store';
 import { likedTracks, dislikedTracks, settings, notify } from './stores';
 import { withCount } from './utils/plural';
+import { realLikeTimestamp } from './freshWaveCore';
 
 type SourceKey = 'yandex' | 'soundcloud';
 
@@ -138,7 +139,7 @@ export function setTrackLiked(track: any, liked: boolean): void {
 
   if (liked) {
     if (matches.length > 0) return;
-    likedTracks.set([track, ...list]);
+    likedTracks.set([{ ...track, likedAt: Date.now() }, ...list]);
     rememberIntent(track, true);
     const disliked = get(dislikedTracks);
     if (disliked.some((t) => sameTrack(t, track))) {
@@ -438,9 +439,14 @@ async function mergeSide(side: Side, result: LikesSyncResult): Promise<void> {
 
   let added = 0;
   let removed = 0;
-  if (gone.size > 0 || incoming.length > 0) {
+  const newerDates = local.some(track => track?.source === side.source && realLikeTimestamp(remote.get(trackId(track) || '')?.likedAt) > realLikeTimestamp(track.likedAt));
+  if (gone.size > 0 || incoming.length > 0 || newerDates) {
     likedTracks.update((list) => {
-      let next = list;
+      let next = newerDates ? list.map(track => {
+        if (track?.source !== side.source) return track;
+        const at = realLikeTimestamp(remote.get(trackId(track) || '')?.likedAt);
+        return at > realLikeTimestamp(track.likedAt) ? { ...track, likedAt: at } : track;
+      }) : list;
       if (gone.size > 0) {
         next = next.filter((track) => {
           if (track?.source !== side.source) return true;

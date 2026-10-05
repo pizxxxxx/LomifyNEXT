@@ -30,6 +30,7 @@ async function rawSave(key: SecretKey, value: string): Promise<void> {
 }
 
 export function cachedSecret(key: SecretKey): string { return ready ? cache.get(key) || '' : ''; }
+export function secretsAreReady(): boolean { return ready; }
 export function hasSecret(key: SecretKey): boolean { return ready && present.has(key); }
 
 export async function refreshSecretPresence(keys: SecretKey[]): Promise<void> {
