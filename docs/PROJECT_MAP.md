@@ -549,12 +549,15 @@ The desktop application tracks `src-tauri/Cargo.lock`. Tauri and its plugins are
 `src-tauri/Cargo.toml` and `package.json` to the matching versions verified for the release.
 Keep both lockfiles when building installers; update the native and JavaScript packages together.
 
-Desktop 9.5.0 was published on 2026-10-02 as GitHub release `v9.5.0` with the NSIS installer
+Published Windows releases use GitHub tags `v<version>` with the NSIS installer
 attached; `npm run tauri build` produces
 `src-tauri/target/release/bundle/nsis/LomifyNEXT_<version>_x64-setup.exe` from the forked
-template in `src-tauri/installer/`. The earlier, prematurely published desktop 9.5.1 release
-and tag were withdrawn before that, and the number was reused for the current version. The
-Android 1.0.14 release remains published in the mobile repository.
+template in `src-tauri/installer/`. Desktop `v9.5.1` is published and is the baseline for
+the 9.5.2 release notes in `docs/releases/v9.5.2.md`. The 9.5.2 Windows x64 installer was
+built on 2026-10-05 from application commit `d652096`; its version, custom template and
+SHA-256 were verified. The release-note commit changes documentation only, so the
+installer's application sources remain identical. Packaged installation is not smoke-tested.
+The mobile project is outside this release.
 
 ### SoundCloud bypass launch chain
 
