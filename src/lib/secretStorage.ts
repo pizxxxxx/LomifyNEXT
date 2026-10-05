@@ -1,25 +1,124 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
+import { LEGACY_RECORDS, legacySecrets, migrateRecord, readLegacyRecord, withoutSecretFields, type SecretName } from './secretMigration';
 
-export type SecretKey =
-  | 'yandex_music_token' | 'spotify_access_token' | 'spotify_refresh_token'
-  | 'lastfm_shared_secret' | 'lastfm_session_key' | 'lastfm_auth_token'
-  | 'lastfm_pending_shared_secret';
+export type SecretKey = SecretName;
+export const SECRETS_READY_EVENT = 'lomify:secrets-ready';
+const cache = new Map<SecretKey, string>();
+let bootstrap: Promise<void> | null = null;
+let ready = false;
+let operationTail: Promise<unknown> = Promise.resolve();
+const startupErrors: string[] = [];
+
+function serialized<T>(operation: () => Promise<T>): Promise<T> {
+  const result = operationTail.then(operation);
+  operationTail = result.catch(() => {});
+  return result;
+}
+
+async function rawRead(key: SecretKey): Promise<string | null> {
+  requireDesktop();
+  return invoke<string | null>('secret_get', { key });
+}
+async function rawSave(key: SecretKey, value: string): Promise<void> {
+  requireDesktop();
+  await invoke('secret_save', { key, value });
+}
+
+export function cachedSecret(key: SecretKey): string { return ready ? cache.get(key) || '' : ''; }
+export function secretStartupErrors(): string[] { return [...startupErrors]; }
+
+export function settingsSecretsRemoved(): boolean {
+  if (!ready || typeof localStorage === 'undefined') return false;
+  try {
+    return legacySecrets(readLegacyRecord(localStorage, LEGACY_RECORDS[0].storageKey), LEGACY_RECORDS[0].fields).size === 0;
+  } catch { return false; }
+}
+
+export function publicSettings<T>(settings: T): T {
+  return withoutSecretFields(settings, LEGACY_RECORDS[0].fields);
+}
+
+export function whenSecretsReady(): Promise<void> {
+  if (bootstrap) return bootstrap;
+  bootstrap = (async () => {
+    if (typeof localStorage === 'undefined') return;
+    const fallback = new Map<SecretKey, string>();
+    const failedKeys = new Set<SecretKey>();
+    for (const record of LEGACY_RECORDS) {
+      try {
+        const old = legacySecrets(readLegacyRecord(localStorage, record.storageKey), record.fields);
+        for (const [key, value] of old) fallback.set(key, value);
+        await migrateRecord(localStorage, { save: rawSave, read: rawRead }, record.storageKey, record.fields);
+      } catch {
+        for (const field of record.fields) failedKeys.add(field.key);
+        startupErrors.push(`Перенос ${record.storageKey} не завершён. Старая копия сохранена.`);
+      }
+    }
+    for (const key of new Set(LEGACY_RECORDS.flatMap((record) => record.fields.map((field) => field.key)))) {
+      try {
+        const value = failedKeys.has(key) && fallback.has(key) ? fallback.get(key)! : await rawRead(key);
+        if (value) cache.set(key, value);
+      } catch {
+        if (fallback.has(key)) cache.set(key, fallback.get(key)!);
+        startupErrors.push('Не удалось загрузить секрет из системного хранилища. Подключение аккаунта не изменено.');
+      }
+    }
+    ready = true;
+    window.dispatchEvent(new CustomEvent(SECRETS_READY_EVENT));
+    window.dispatchEvent(new CustomEvent('lastfm:taste-updated'));
+  })();
+  return bootstrap;
+}
+
+function removeVerifiedLegacyFields(keys: SecretKey[]): void {
+  for (const record of LEGACY_RECORDS) {
+    const fields = record.fields.filter((field) => keys.includes(field.key));
+    if (!fields.length) continue;
+    const value = readLegacyRecord(localStorage, record.storageKey);
+    if (value) localStorage.setItem(record.storageKey, JSON.stringify(withoutSecretFields(value, fields)));
+  }
+}
 
 function requireDesktop(): void {
   if (!isTauri()) throw new Error('Системное хранилище доступно в приложении LomifyNEXT');
 }
 
 export async function saveSecret(key: SecretKey, value: string): Promise<void> {
-  requireDesktop();
-  await invoke('secret_save', { key, value });
+  await saveSecrets({ [key]: value });
+}
+
+export async function saveSecrets(values: Partial<Record<SecretKey, string>>): Promise<void> {
+  await whenSecretsReady();
+  return serialized(async () => {
+    const entries = Object.entries(values) as [SecretKey, string][];
+    for (const [key, value] of entries) {
+      await rawSave(key, value);
+      if (await rawRead(key) !== value) throw new Error('Проверка сохранения секрета не прошла');
+    }
+    removeVerifiedLegacyFields(entries.map(([key]) => key));
+    for (const [key, value] of entries) cache.set(key, value);
+  });
 }
 
 export async function getSecret(key: SecretKey): Promise<string | null> {
-  requireDesktop();
-  return invoke<string | null>('secret_get', { key });
+  await whenSecretsReady();
+  return serialized(() => rawRead(key));
 }
 
 export async function deleteSecret(key: SecretKey): Promise<void> {
-  requireDesktop();
-  await invoke('secret_delete', { key });
+  await deleteSecrets([key]);
+}
+
+export async function deleteSecrets(keys: SecretKey[]): Promise<void> {
+  await whenSecretsReady();
+  return serialized(async () => {
+    requireDesktop();
+    for (const key of keys) await invoke('secret_delete', { key });
+    removeVerifiedLegacyFields(keys);
+    for (const key of keys) cache.delete(key);
+  });
+}
+
+export async function deleteAllSecrets(): Promise<void> {
+  await deleteSecrets([...new Set(LEGACY_RECORDS.flatMap((record) => record.fields.map((field) => field.key)))]);
 }

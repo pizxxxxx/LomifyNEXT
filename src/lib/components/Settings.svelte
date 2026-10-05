@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { saveSecret, deleteSecret, deleteAllSecrets } from '$lib/secretStorage';
   import PlaylistSyncSettings from './PlaylistSyncSettings.svelte';
   import { playlistSyncStatus, syncPlaylists } from '$lib/playlistSync';
   import { settings, waveDisplayName, automaticPerformanceMode, playlists, listenStats, notify, dislikedTracks, currentView, activeLibraryTab, rebootCurrentTrack } from '$lib/stores';
@@ -776,6 +777,7 @@
       // Аватар отдаёт Паспорт, а не Музыка, и права на него у музыкального токена может не
       // быть — поэтому отдельным запросом, который не умеет бросать (вернёт пустую строку).
       const avatarUrl = await yandexAvatarUrl(raw);
+      await saveSecret('yandex_music_token', normalizeYandexToken(raw));
       $settings.yandexToken = normalizeYandexToken(raw);
       $settings.yandexUser = { ...account, avatarUrl };
       $settings.searchSource = 'yandex';
@@ -800,7 +802,9 @@
     ymLoading = false;
   }
 
-  function unlinkYandex() {
+  async function unlinkYandex() {
+    try { await deleteSecret('yandex_music_token'); }
+    catch { notify('Не удалось удалить данные Яндекса из системного хранилища. Повтори отключение.', 'error'); return; }
     $settings.yandexToken = '';
     $settings.yandexUser = null;
     // Оставлять выбранным источник, доступа к которому больше нет, нельзя — поиск бы
@@ -960,8 +964,10 @@
     }
   }
 
-  function resetAllData() {
+  async function resetAllData() {
     if (confirm('Снести всё: настройки, историю, лайки, плейлисты. Вернуть не получится. Точно?')) {
+      try { await deleteAllSecrets(); }
+      catch { notify('Не удалось очистить системное хранилище. Данные не сброшены.', 'error'); return; }
       localStorage.clear();
       window.location.reload();
     }

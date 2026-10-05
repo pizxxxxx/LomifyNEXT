@@ -1,3 +1,4 @@
+import { whenSecretsReady } from './secretStorage';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { get } from 'svelte/store';
 import { settings, notify, dislikedTracks } from './stores';
@@ -675,6 +676,7 @@ function topKeys(map: Map<string, number>, n: number) {
  * того сервиса, которым человек пользуется.
  */
 export async function getTrendingTracks(likedTracks: any[] = [], listenStats: any = null, searchHistory: string[] = [], playlists: any[] = []) {
+  await whenSecretsReady();
   const taste = buildTasteProfile(likedTracks, listenStats, playlists);
   const favArtists = topKeys(taste.artists, 12);
   const favGenres = topKeys(taste.genres, 6);
@@ -875,6 +877,7 @@ export interface SearchResponse {
  * оставлен как компактный API для мест, которым нужны только треки.
  */
 export async function performSearchDetailed(query: string): Promise<SearchResponse> {
+  await whenSecretsReady();
   const current = get(settings);
   if (current.searchSource === 'yandex' && current.yandexToken) {
     try {
@@ -1080,6 +1083,7 @@ async function findYandexTwin(
  * ограничение при этом никуда не денется — про него скажут при обычном запуске.
  */
 export async function getAudioUrl(track: any, opts: { silent?: boolean; forcePreview?: boolean } = {}) {
+  await whenSecretsReady();
   if (!track) return null;
   if (track.isLocal || track.source === 'local' || track.source === 'Локальный') {
     return convertFileSrc(track.audioUrl);

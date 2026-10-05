@@ -1,4 +1,5 @@
 import { derived, readable, writable, get } from 'svelte/store';
+import { cachedSecret, publicSettings, secretStartupErrors, settingsSecretsRemoved, whenSecretsReady, SECRETS_READY_EVENT } from './secretStorage';
 import { dedupePlaylists, loadPlaylistSnapshot, savePlaylistSnapshot } from '$lib/playlistStorage';
 
 // Global app state
@@ -616,7 +617,8 @@ export function initStore() {
         const savedSettings = JSON.parse(stored);
         settings.set({
           ...defaultSettings,
-          ...savedSettings,
+          ...publicSettings(savedSettings),
+          yandexToken: '',
           ...(savedSettings?.fullscreenYandexVideoFillDefaultApplied === true
             ? {}
             : { fullscreenYandexVideoFill: true })
@@ -626,8 +628,19 @@ export function initStore() {
       }
     }
     settings.subscribe(val => {
-      localStorage.setItem('lomifynext_settings', JSON.stringify(val));
+      if (settingsSecretsRemoved()) {
+        localStorage.setItem('lomifynext_settings', JSON.stringify(publicSettings(val)));
+      }
     });
+    let secretsApplied = false;
+    const applySecrets = () => {
+      if (secretsApplied) return;
+      secretsApplied = true;
+      settings.update((value) => ({ ...value, yandexToken: cachedSecret('yandex_music_token') }));
+      for (const message of new Set(secretStartupErrors())) notify(message, 'error');
+    };
+    window.addEventListener(SECRETS_READY_EVENT, applySecrets, { once: true });
+    void whenSecretsReady().then(applySecrets);
 
     const storedStats = localStorage.getItem('lomifynext_stats');
     if (storedStats) {

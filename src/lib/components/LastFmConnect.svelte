@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { whenSecretsReady } from '$lib/secretStorage';
   import { onMount } from 'svelte';
   import { BarChart3, Check, Clock3, ClipboardCopy, ExternalLink, Headphones, KeyRound, Loader2, RefreshCw, Radio, TriangleAlert } from 'lucide-svelte';
   import { openUrl } from '@tauri-apps/plugin-opener';
@@ -34,10 +35,15 @@
   let busy = false;
 
   onMount(() => {
+    let disposed = false;
+    void whenSecretsReady().then(() => {
+    if (disposed) return;
     session = getLastFmSession();
     overview = getCachedLastFmOverview();
     authorizationPending = hasPendingLastFmAuthorization();
     if (session) void loadOverview(false);
+    });
+    return () => { disposed = true; };
   });
 
   async function openExternal(url: string) {
@@ -143,9 +149,10 @@
     }
   }
 
-  function unlink() {
+  async function unlink() {
     if (!confirm('Отвязать Last.fm? Уже отправленные скробблы останутся в профиле.')) return;
-    disconnectLastFm();
+    try { await disconnectLastFm(); }
+    catch { notify('Не удалось удалить данные Last.fm из системного хранилища. Повтори отключение.', 'error'); return; }
     session = null;
     overview = null;
     overviewError = '';

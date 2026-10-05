@@ -612,6 +612,14 @@ When changing the application version, verify all of these locations:
 permissions are denied. `src-tauri/permissions/account-secrets.toml` restricts the
 application secret commands to the main window capability.
 
+`src/lib/secretMigration.ts` verifies each legacy credential before removing its field
+from browser storage. `secretStorage.ts` loads credentials separately before service
+requests; failed migrations preserve their source and block settings persistence until
+its secret fields have been verified. Yandex settings retain a memory-only token.
+Spotify and Last.fm browser session/pending records contain public metadata only;
+their tokens, refresh tokens, session keys and personal shared secrets use keyring.
+Disconnect actions remove provider credentials before reporting success.
+
 ### Rockium local playback integration (2026-09-25)
 
 `src/lib/rockiumBridge.ts` is mounted once by `Player.svelte`. It publishes playback,

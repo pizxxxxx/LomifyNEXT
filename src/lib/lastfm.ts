@@ -1,4 +1,5 @@
 import md5 from 'md5';
+import { cachedSecret, deleteSecrets, saveSecrets, whenSecretsReady } from './secretStorage';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 
 const LASTFM_API_URL = 'https://ws.audioscrobbler.com/2.0/';
@@ -138,7 +139,8 @@ function emitLastFmStateChanged() {
 }
 
 export function getLastFmSession(): LastFmSession | null {
-  const value = readJson<LastFmSession>(LASTFM_SESSION_KEY);
+  const metadata = readJson<LastFmSession>(LASTFM_SESSION_KEY);
+  const value = metadata && { ...metadata, sharedSecret: cachedSecret('lastfm_shared_secret'), sessionKey: cachedSecret('lastfm_session_key') };
   if (!value?.apiKey || !value.sharedSecret || !value.sessionKey || !value.username) return null;
   return value;
 }
@@ -147,11 +149,28 @@ export function hasPendingLastFmAuthorization(): boolean {
   const pending = readJson<LastFmPendingAuthorization>(LASTFM_PENDING_KEY);
   if (!pending) return false;
   if (Date.now() - pending.createdAt < AUTH_TOKEN_TTL_MS) return true;
-  browserStorage()?.removeItem(LASTFM_PENDING_KEY);
+  void clearPendingAuthorization().catch(() => {});
   return false;
 }
 
-export function disconnectLastFm() {
+async function clearPendingAuthorization() {
+  await deleteSecrets(['lastfm_auth_token', 'lastfm_pending_shared_secret']);
+  browserStorage()?.removeItem(LASTFM_PENDING_KEY);
+}
+
+async function writeSession(session: LastFmSession) {
+  await saveSecrets({ lastfm_shared_secret: session.sharedSecret, lastfm_session_key: session.sessionKey });
+  writePublicSession(session);
+}
+
+function writePublicSession(session: LastFmSession) {
+  if (cachedSecret('lastfm_session_key') !== session.sessionKey) return;
+  const { sharedSecret: _sharedSecret, sessionKey: _sessionKey, ...metadata } = session;
+  writeJson(LASTFM_SESSION_KEY, metadata);
+}
+
+export async function disconnectLastFm() {
+  await deleteSecrets(['lastfm_shared_secret', 'lastfm_session_key', 'lastfm_auth_token', 'lastfm_pending_shared_secret']);
   browserStorage()?.removeItem(LASTFM_SESSION_KEY);
   browserStorage()?.removeItem(LASTFM_PENDING_KEY);
   browserStorage()?.removeItem(LASTFM_OVERVIEW_KEY);
@@ -235,6 +254,7 @@ export async function beginLastFmAuthorization(
   apiKeyRaw: string,
   sharedSecretRaw: string
 ): Promise<LastFmAuthorization> {
+  await whenSecretsReady();
   const { apiKey, sharedSecret } = validateCredentials(apiKeyRaw, sharedSecretRaw);
   const body = await apiRequest<{ token?: string }>('auth.getToken', {}, apiKey, sharedSecret);
   if (!body.token) throw new Error('Last.fm не вернул код подтверждения.');
@@ -245,7 +265,8 @@ export async function beginLastFmAuthorization(
     token: body.token,
     createdAt: Date.now()
   };
-  writeJson(LASTFM_PENDING_KEY, pending);
+  await saveSecrets({ lastfm_pending_shared_secret: pending.sharedSecret, lastfm_auth_token: pending.token });
+  writeJson(LASTFM_PENDING_KEY, { apiKey: pending.apiKey, createdAt: pending.createdAt });
   return {
     authorizationUrl: `https://www.last.fm/api/auth/?api_key=${encodeURIComponent(apiKey)}&token=${encodeURIComponent(body.token)}`,
     expiresAt: pending.createdAt + AUTH_TOKEN_TTL_MS
@@ -269,9 +290,11 @@ function profileFromResponse(body: any, fallbackName: string): Pick<LastFmSessio
 }
 
 export async function finishLastFmAuthorization(): Promise<LastFmSession> {
-  const pending = readJson<LastFmPendingAuthorization>(LASTFM_PENDING_KEY);
+  await whenSecretsReady();
+  const metadata = readJson<LastFmPendingAuthorization>(LASTFM_PENDING_KEY);
+  const pending = metadata && { ...metadata, sharedSecret: cachedSecret('lastfm_pending_shared_secret'), token: cachedSecret('lastfm_auth_token') };
   if (!pending || Date.now() - pending.createdAt >= AUTH_TOKEN_TTL_MS) {
-    browserStorage()?.removeItem(LASTFM_PENDING_KEY);
+    await clearPendingAuthorization();
     throw new Error('Код подтверждения Last.fm истёк. Начни подключение ещё раз.');
   }
 
@@ -294,8 +317,8 @@ export async function finishLastFmAuthorization(): Promise<LastFmSession> {
     avatarUrl: '',
     profileUrl: `https://www.last.fm/user/${encodeURIComponent(username)}`
   };
-  writeJson(LASTFM_SESSION_KEY, session);
-  browserStorage()?.removeItem(LASTFM_PENDING_KEY);
+  await writeSession(session);
+  await clearPendingAuthorization();
   emitLastFmStateChanged();
 
   // Токен авторизации одноразовый, поэтому рабочую сессию сохраняем до необязательного
@@ -304,7 +327,7 @@ export async function finishLastFmAuthorization(): Promise<LastFmSession> {
   try {
     const profileBody = await apiRequest<any>('user.getInfo', { user: username }, pending.apiKey);
     session = { ...session, ...profileFromResponse(profileBody, username) };
-    writeJson(LASTFM_SESSION_KEY, session);
+    writePublicSession(session);
   } catch (error) {
     console.warn('[last.fm] профиль не загрузился после авторизации', error);
   }
@@ -312,11 +335,12 @@ export async function finishLastFmAuthorization(): Promise<LastFmSession> {
 }
 
 export async function refreshLastFmProfile(): Promise<LastFmSession> {
+  await whenSecretsReady();
   const session = getLastFmSession();
   if (!session) throw new Error('Сначала подключи Last.fm.');
   const body = await apiRequest<any>('user.getInfo', { user: session.username }, session.apiKey);
   const refreshed = { ...session, ...profileFromResponse(body, session.username) };
-  writeJson(LASTFM_SESSION_KEY, refreshed);
+  writePublicSession(refreshed);
   return refreshed;
 }
 
@@ -413,6 +437,7 @@ function topTracksFromResponse(body: any): LastFmTopTrack[] {
 }
 
 export async function getLastFmOverview(force = false): Promise<LastFmOverview> {
+  await whenSecretsReady();
   const session = getLastFmSession();
   if (!session) throw new Error('Сначала подключи Last.fm.');
 
@@ -431,7 +456,7 @@ export async function getLastFmOverview(force = false): Promise<LastFmOverview> 
 
   const profile = profileFromResponse(profileBody, session.username);
   const refreshedSession = { ...session, ...profile };
-  writeJson(LASTFM_SESSION_KEY, refreshedSession);
+  writePublicSession(refreshedSession);
 
   const user = profileBody?.user || {};
   const fetchedTracks = asArray<any>(recentBody?.recenttracks?.track).map((track) => ({

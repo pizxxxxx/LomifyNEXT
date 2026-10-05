@@ -36,6 +36,7 @@
  */
 
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
+import { whenSecretsReady } from './secretStorage';
 import md5 from 'md5';
 
 const API = 'https://api.music.yandex.net';
@@ -295,6 +296,7 @@ async function ymFetch(
   token: string,
   init: Record<string, any> = {}
 ): Promise<YmResponse> {
+  await whenSecretsReady();
   if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
     throw new Error(
       'Яндекс Музыка доступна только в приложении: браузер не даёт выставить заголовки ' +

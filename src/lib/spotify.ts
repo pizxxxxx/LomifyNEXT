@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { cachedSecret, deleteSecrets, saveSecrets, whenSecretsReady } from './secretStorage';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { openUrl } from '@tauri-apps/plugin-opener';
@@ -115,19 +116,25 @@ function browserStorage(): Storage | null {
   return typeof window === 'undefined' ? null : window.localStorage;
 }
 
+let sessionGeneration = 0;
+let refreshInFlight: Promise<SpotifySession> | null = null;
+
 function readSession(): SpotifySession | null {
   const raw = browserStorage()?.getItem(SPOTIFY_SESSION_KEY);
   if (!raw) return null;
   try {
-    const value = JSON.parse(raw) as SpotifySession;
+    const value = { ...JSON.parse(raw), accessToken: cachedSecret('spotify_access_token'), refreshToken: cachedSecret('spotify_refresh_token') } as SpotifySession;
     return value?.clientId && value?.refreshToken ? value : null;
   } catch {
     return null;
   }
 }
 
-function writeSession(session: SpotifySession) {
-  browserStorage()?.setItem(SPOTIFY_SESSION_KEY, JSON.stringify(session));
+async function writeSession(session: SpotifySession, generation = sessionGeneration) {
+  if (generation !== sessionGeneration) throw new Error('Подключение Spotify отменено');
+  await saveSecrets({ spotify_access_token: session.accessToken, spotify_refresh_token: session.refreshToken });
+  if (generation !== sessionGeneration) throw new Error('Подключение Spotify отменено');
+  browserStorage()?.setItem(SPOTIFY_SESSION_KEY, JSON.stringify({ clientId: session.clientId, expiresAt: session.expiresAt }));
 }
 
 export function hasSpotifySession(clientId?: string): boolean {
@@ -135,7 +142,9 @@ export function hasSpotifySession(clientId?: string): boolean {
   return Boolean(session && (!clientId || session.clientId === clientId.trim()));
 }
 
-export function disconnectSpotify() {
+export async function disconnectSpotify() {
+  sessionGeneration++;
+  await deleteSecrets(['spotify_access_token', 'spotify_refresh_token']);
   browserStorage()?.removeItem(SPOTIFY_SESSION_KEY);
 }
 
@@ -211,6 +220,9 @@ async function exchangeCode(
 }
 
 async function refreshSession(session: SpotifySession): Promise<SpotifySession> {
+  if (refreshInFlight) return refreshInFlight;
+  const generation = sessionGeneration;
+  const refresh = async () => {
   const response = await spotifyHttp(SPOTIFY_TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -228,11 +240,15 @@ async function refreshSession(session: SpotifySession): Promise<SpotifySession> 
     refreshToken: token.refresh_token || session.refreshToken,
     expiresAt: Date.now() + Math.max(60, token.expires_in || 3600) * 1000
   };
-  writeSession(refreshed);
+  await writeSession(refreshed, generation);
   return refreshed;
+  };
+  refreshInFlight = refresh();
+  try { return await refreshInFlight; } finally { refreshInFlight = null; }
 }
 
 async function validSession(clientId: string): Promise<SpotifySession> {
+  await whenSecretsReady();
   const session = readSession();
   if (!session || session.clientId !== clientId.trim()) {
     throw new Error('Сначала подключи Spotify');
@@ -265,6 +281,8 @@ function mapProfile(body: any): SpotifyProfile {
 }
 
 export async function authorizeSpotify(clientIdRaw: string): Promise<SpotifyProfile> {
+  await whenSecretsReady();
+  const generation = ++sessionGeneration;
   const clientId = clientIdRaw.trim();
   if (!/^[a-z0-9]{20,64}$/i.test(clientId)) {
     throw new Error('Client ID выглядит неверно');
@@ -315,7 +333,7 @@ export async function authorizeSpotify(clientIdRaw: string): Promise<SpotifyProf
     if (!result.code) throw new Error('Spotify не вернул код авторизации');
 
     const session = await exchangeCode(clientId, result.code, started.redirectUri, verifier);
-    writeSession(session);
+    await writeSession(session, generation);
     return mapProfile(await spotifyApi<any>(clientId, '/me'));
   } finally {
     if (timer) clearTimeout(timer);
