@@ -4,11 +4,59 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 #[cfg(windows)]
 static LAST_AUTO_START: AtomicU64 = AtomicU64::new(0);
+const PLAYBACK_ISSUE_TTL_MS: u64 = 180_000;
+static PLAYBACK_REPORT_GENERATION: AtomicU64 = AtomicU64::new(0);
+static PLAYBACK_REPORT_LOCK: Mutex<()> = Mutex::new(());
+
+fn playback_issue_path(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path().app_data_dir().map(|dir| dir.join("soundcloud-bypass-playback.json"))
+        .map_err(|_| "Не удалось найти папку диагностики SoundCloud".into())
+}
+
+pub fn clear_playback_issue(app: &AppHandle) -> Result<(), String> {
+    let _guard = PLAYBACK_REPORT_LOCK.lock().map_err(|_| "Диагностика SoundCloud занята".to_string())?;
+    PLAYBACK_REPORT_GENERATION.fetch_add(1, Ordering::SeqCst);
+    remove_playback_file(&playback_issue_path(app)?)
+}
+
+fn remove_playback_file(path: &Path) -> Result<(), String> {
+    match std::fs::remove_file(path) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err("Не удалось удалить диагностику SoundCloud".into()),
+        _ => Ok(()),
+    }
+}
+
+fn read_recent_playback_issue(path: &Path, now: u64) -> Option<PlaybackIssue> {
+    let _guard = PLAYBACK_REPORT_LOCK.lock().ok()?;
+    let bytes = std::fs::read(path).ok()?;
+    let issue = serde_json::from_slice::<PlaybackIssue>(&bytes).ok();
+    if let Some(issue) = issue {
+        if issue.reported_at <= now && now - issue.reported_at < PLAYBACK_ISSUE_TTL_MS { return Some(issue); }
+    }
+    let _ = remove_playback_file(path);
+    None
+}
+
+pub fn start_playback_issue_cleanup(app: &AppHandle) {
+    let _ = clear_playback_issue(app);
+    if let Ok(path) = playback_issue_path(app) {
+        tauri::async_runtime::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                let _ = read_recent_playback_issue(&path, now_millis());
+            }
+        });
+    }
+}
+
+#[tauri::command]
+pub fn soundcloud_clear_playback_issue(app: AppHandle) -> Result<(), String> { clear_playback_issue(&app) }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BypassStatus {
@@ -205,6 +253,7 @@ pub async fn soundcloud_bypass_report_playback_failure(
     detail: String,
 ) -> Result<(), String> {
     if phase != "resolve" && phase != "stream" { return Err("Некорректный этап проверки".into()); }
+    let generation = PLAYBACK_REPORT_GENERATION.load(Ordering::SeqCst);
     let (_, status_path, _) = paths(&app)?;
     let issue_path = status_path.with_file_name("soundcloud-bypass-playback.json");
     let detail = detail.trim().chars().take(180).collect::<String>().to_lowercase();
@@ -238,8 +287,12 @@ pub async fn soundcloud_bypass_report_playback_failure(
         needs_bypass,
         probe_url: if needs_bypass { parsed_url.map(|url| url.to_string()) } else { None },
     };
-    std::fs::write(&issue_path, serde_json::to_vec(&issue).map_err(|error| error.to_string())?)
-        .map_err(|error| error.to_string())?;
+    {
+        let _guard = PLAYBACK_REPORT_LOCK.lock().map_err(|_| "Диагностика SoundCloud занята".to_string())?;
+        if PLAYBACK_REPORT_GENERATION.load(Ordering::SeqCst) != generation { return Ok(()); }
+        std::fs::write(&issue_path, serde_json::to_vec(&issue).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+    }
     #[cfg(windows)]
     if needs_bypass && status_path.with_file_name("soundcloud-bypass-enabled").exists() {
         let status = read_status(&status_path);
@@ -472,14 +525,10 @@ pub fn soundcloud_bypass_status(app: AppHandle) -> Result<BypassStatus, String> 
         }
     }
     status.auto_enabled = status_path.with_file_name("soundcloud-bypass-enabled").is_file();
-    if let Ok(bytes) = std::fs::read(status_path.with_file_name("soundcloud-bypass-playback.json")) {
-        if let Ok(issue) = serde_json::from_slice::<PlaybackIssue>(&bytes) {
-            if now_millis().saturating_sub(issue.reported_at) < 3_600_000 {
-                status.diagnosis_state = issue.kind;
-                status.diagnosis_message = issue.message;
-                status.diagnosis_at = issue.reported_at;
-            }
-        }
+    if let Some(issue) = read_recent_playback_issue(&status_path.with_file_name("soundcloud-bypass-playback.json"), now_millis()) {
+        status.diagnosis_state = issue.kind;
+        status.diagnosis_message = issue.message;
+        status.diagnosis_at = issue.reported_at;
     }
     Ok(status)
 }

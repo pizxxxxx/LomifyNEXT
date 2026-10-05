@@ -635,6 +635,11 @@ and `secret_exists` provides presence only. `lastfm_signed_request` returns publ
 metadata after saving/reading back session credentials. `VITE_LASTFM_SHARED_SECRET` is
 unsupported; `.env.example` permits only the public API key.
 
+SoundCloud playback diagnosis has a three-minute lifetime matching the elevated
+helper's probe limit. Native startup, app exit and SoundCloud unlink/reset clear
+`soundcloud-bypass-playback.json`; a background cleanup also deletes expired files.
+`soundcloud_clear_playback_issue` exposes only this cleanup. Public `client_id` is unchanged.
+
 ### Rockium local playback integration (2026-09-25)
 
 `src/lib/rockiumBridge.ts` is mounted once by `Player.svelte`. It publishes playback,

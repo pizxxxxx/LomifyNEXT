@@ -153,4 +153,5 @@ export async function clearLegacySecrets(): Promise<void> {
   await whenSecretsReady();
   requireDesktop();
   await invoke('secret_clear_legacy');
+  await invoke('soundcloud_clear_playback_issue');
 }

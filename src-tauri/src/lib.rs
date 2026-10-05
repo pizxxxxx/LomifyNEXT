@@ -26,8 +26,9 @@ use discord::commands::DiscordState;
 use network::server::ServerState;
 
 #[tauri::command]
-fn exit_app() {
-    std::process::exit(0);
+fn exit_app(app: tauri::AppHandle) {
+    let _ = network::soundcloud_bypass::clear_playback_issue(&app);
+    app.exit(0);
 }
 
 /// WebView2 normally keeps decoded images, script heaps and render caches around for fast
@@ -184,6 +185,7 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .expect("failed to resolve app data dir");
+            network::soundcloud_bypass::start_playback_issue_cleanup(app.handle());
 
             let audio_dir = cache_dir.join("audio");
             std::fs::create_dir_all(&audio_dir).ok();
@@ -393,17 +395,24 @@ pub fn run() {
             network::soundcloud_bypass::soundcloud_bypass_status,
             network::soundcloud_bypass::soundcloud_bypass_test_connection,
             network::soundcloud_bypass::soundcloud_bypass_report_playback_failure,
+            network::soundcloud_bypass::soundcloud_clear_playback_issue,
             network::soundcloud_bypass::soundcloud_bypass_strategy_options,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 if window.label() == "main" {
+                    let _ = network::soundcloud_bypass::clear_playback_issue(window.app_handle());
                     std::process::exit(0);
                 }
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }) {
+                let _ = network::soundcloud_bypass::clear_playback_issue(app);
+            }
+        });
 }
 
 #[tauri::command]
