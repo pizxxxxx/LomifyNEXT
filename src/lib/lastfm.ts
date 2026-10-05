@@ -1,4 +1,5 @@
 import md5 from 'md5';
+import { redactText } from './logRedaction';
 import { cachedSecret, deleteSecrets, saveSecrets, whenSecretsReady } from './secretStorage';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 
@@ -205,7 +206,7 @@ function lastFmError(body: any): Error {
   if (code === 4 || code === 9) return new Error('Last.fm отклонил сессию. Подключи аккаунт заново.');
   if (code === 14) return new Error('Last.fm ещё не получил разрешение. Подтверди доступ в браузере и повтори.');
   if (code === 10 || code === 13 || code === 26) return new Error('Last.fm временно недоступен. Попробуй чуть позже.');
-  return new Error(String(body?.message || 'Last.fm не смог выполнить запрос.'));
+  return new Error(redactText(String(body?.message || 'Last.fm не смог выполнить запрос.')));
 }
 
 async function apiRequest<T>(

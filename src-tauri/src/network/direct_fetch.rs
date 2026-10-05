@@ -89,17 +89,20 @@ pub async fn net_fetch_direct(args: DirectFetchArgs) -> Result<DirectFetchRespon
 
     let mut req = client()?.request(method, parsed);
     for (name, value) in args.headers.unwrap_or_default() {
+        if name.eq_ignore_ascii_case("authorization") {
+            crate::shared::log_redaction::remember_secret(value.split_once(' ').map_or(value.as_str(), |(_, secret)| secret));
+        }
         req = req.header(name, value);
     }
     if let Some(body) = args.body {
         req = req.body(body);
     }
 
-    let resp = req.send().await.map_err(|e| e.to_string())?;
+    let resp = req.send().await.map_err(|e| crate::shared::log_redaction::redact_text(&e.to_string()))?;
     let status = resp.status().as_u16();
     // Тело отдаём как текст: единственный потребитель — JSON-API, а на отказе периметра там
     // приезжает HTML или страница с капчей, и её тоже важно донести до диагностики.
-    let body = resp.text().await.map_err(|e| e.to_string())?;
+    let body = resp.text().await.map_err(|e| crate::shared::log_redaction::redact_text(&e.to_string()))?;
 
     Ok(DirectFetchResponse { status, body })
 }

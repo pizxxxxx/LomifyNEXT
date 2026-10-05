@@ -625,6 +625,10 @@ Old `auth_session.json` and `sc-auth.json` credentials are migrated independentl
 reserved keyring entries and each file is removed only after verified persistence.
 No legacy token is returned to frontend. Unlinking SoundCloud/reset removes these entries.
 
+`src/hooks.client.ts` installs console/error sanitization using `src/lib/logRedaction.ts`.
+Native stdout/stderr and `app/diagnostics.rs` use `shared/log_redaction.rs`; both mask
+credential fields and known credential values. Yandex diagnostics omit server bodies.
+
 ### Rockium local playback integration (2026-09-25)
 
 `src/lib/rockiumBridge.ts` is mounted once by `Player.svelte`. It publishes playback,

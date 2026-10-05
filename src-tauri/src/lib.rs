@@ -1,3 +1,13 @@
+// Native modules share the same sanitization at the stdout/stderr boundary.
+macro_rules! println {
+    () => { std::println!() };
+    ($($args:tt)*) => { std::println!("{}", crate::shared::log_redaction::redact_text(&format!($($args)*))) };
+}
+macro_rules! eprintln {
+    () => { std::eprintln!() };
+    ($($args:tt)*) => { std::eprintln!("{}", crate::shared::log_redaction::redact_text(&format!($($args)*))) };
+}
+
 mod app;
 mod rockium;
 mod audio;

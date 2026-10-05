@@ -1,4 +1,5 @@
 import { derived, readable, writable, get } from 'svelte/store';
+import { redactText } from './logRedaction';
 import { cachedSecret, publicSettings, secretStartupErrors, settingsSecretsRemoved, whenSecretsReady, SECRETS_READY_EVENT } from './secretStorage';
 import { dedupePlaylists, loadPlaylistSnapshot, savePlaylistSnapshot } from '$lib/playlistStorage';
 
@@ -561,6 +562,7 @@ export function dismissNotification(id: number) {
 }
 
 export function notify(message: string, type: 'success'|'info'|'error' = 'info', action?: NotificationAction) {
+  message = redactText(message);
   const id = Date.now() + Math.random();
   notifications.update(n => [...n, { id, message, type, action }]);
   // Плашка без кнопки живёт три секунды - этого хватает, чтобы её прочитать. Плашку с

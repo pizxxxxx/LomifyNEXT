@@ -43,3 +43,8 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+# Account credential and signed playback files
+auth_session.json
+sc-auth.json
+soundcloud-bypass-playback.json

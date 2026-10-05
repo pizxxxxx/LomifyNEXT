@@ -1,4 +1,5 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
+import { rememberSecret } from './logRedaction';
 import { LEGACY_RECORDS, legacySecrets, migrateRecord, readLegacyRecord, withoutSecretFields, type SecretName } from './secretMigration';
 
 export type SecretKey = SecretName;
@@ -17,9 +18,12 @@ function serialized<T>(operation: () => Promise<T>): Promise<T> {
 
 async function rawRead(key: SecretKey): Promise<string | null> {
   requireDesktop();
-  return invoke<string | null>('secret_get', { key });
+  const value = await invoke<string | null>('secret_get', { key });
+  if (value) rememberSecret(value);
+  return value;
 }
 async function rawSave(key: SecretKey, value: string): Promise<void> {
+  rememberSecret(value);
   requireDesktop();
   await invoke('secret_save', { key, value });
 }
@@ -49,7 +53,7 @@ export function whenSecretsReady(): Promise<void> {
     for (const record of LEGACY_RECORDS) {
       try {
         const old = legacySecrets(readLegacyRecord(localStorage, record.storageKey), record.fields);
-        for (const [key, value] of old) fallback.set(key, value);
+        for (const [key, value] of old) { rememberSecret(value); fallback.set(key, value); }
         await migrateRecord(localStorage, { save: rawSave, read: rawRead }, record.storageKey, record.fields);
       } catch {
         for (const field of record.fields) failedKeys.add(field.key);

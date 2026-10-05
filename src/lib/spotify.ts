@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { redactText, rememberSecret } from './logRedaction';
 import { cachedSecret, deleteSecrets, saveSecrets, whenSecretsReady } from './secretStorage';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
@@ -186,7 +187,7 @@ async function responseError(response: Response): Promise<SpotifyApiError> {
   } else if (response.status === 403) {
     message = 'Spotify не дал доступ. Проверь Premium и allowlist приложения.';
   }
-  return new SpotifyApiError(message, response.status, reason);
+  return new SpotifyApiError(redactText(String(message)), response.status, redactText(String(reason)));
 }
 
 async function exchangeCode(
@@ -208,6 +209,8 @@ async function exchangeCode(
   });
   if (!response.ok) throw await responseError(response);
   const token = (await response.json()) as SpotifyTokenResponse;
+  if (token.access_token) rememberSecret(token.access_token);
+  if (token.refresh_token) rememberSecret(token.refresh_token);
   if (!token.access_token || !token.refresh_token) {
     throw new Error('Spotify не вернул refresh token — подключи аккаунт ещё раз');
   }

@@ -18,9 +18,12 @@ pub(crate) trait SecretVault {
 
 impl SecretVault for KeyringStore {
     fn read(&self, key: &str) -> Result<Option<String>, String> {
-        self.get_password(key).map_err(|_| "Не удалось прочитать системное хранилище".into())
+        let value = self.get_password(key).map_err(|_| "Не удалось прочитать системное хранилище".to_string())?;
+        if let Some(ref value) = value { crate::shared::log_redaction::remember_secret(value); }
+        Ok(value)
     }
     fn write(&self, key: &str, value: &str) -> Result<(), String> {
+        crate::shared::log_redaction::remember_secret(value);
         self.set_password(key, value).map_err(|_| "Не удалось записать в системное хранилище".into())
     }
     fn remove(&self, key: &str) -> Result<(), String> {

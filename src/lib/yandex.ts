@@ -37,6 +37,7 @@
 
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { whenSecretsReady } from './secretStorage';
+import { redactText, rememberSecret } from './logRedaction';
 import md5 from 'md5';
 
 const API = 'https://api.music.yandex.net';
@@ -296,6 +297,7 @@ async function ymFetch(
   token: string,
   init: Record<string, any> = {}
 ): Promise<YmResponse> {
+  rememberSecret(normalizeYandexToken(token));
   await whenSecretsReady();
   if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
     throw new Error(
@@ -380,7 +382,7 @@ function bodyShape(raw: string): string {
   if (!text) return 'тело ответа пустое';
   if (/captcha/i.test(text)) return 'в ответе страница с капчей';
   if (/^<(!doctype|html)/i.test(text)) return 'в ответе HTML-страница, а не JSON';
-  return `в ответе не JSON: ${text.slice(0, 60)}`;
+  return 'в ответе неизвестный формат';
 }
 
 /**
@@ -453,19 +455,15 @@ export async function ymJson(url: string, token: string, init?: Record<string, a
     const err = body?.error;
     const name = typeof err === 'string' ? err : err?.name ?? '';
     const message = typeof err === 'string' ? err : err?.message ?? '';
-    // В консоль — то, чего нет в тексте уведомления и без чего причину не найти: какой
-    // метод, каким набором заголовков и что именно ответил Яндекс. Сам токен не пишем
-    // никогда, только его длину: по ней видно обрезанную при копировании строку, а
-    // воспользоваться ею нельзя.
+    // Diagnostics keep request/status metadata only. Server bodies may echo credentials.
     console.warn('[yandex] отказ', {
       url,
       status: res.status,
       profile: lastProfile,
       transport: lastTransport,
-      tokenLength: token.length,
-      body: raw.slice(0, 300),
+      code: redactText(String(name)),
     });
-    throw Object.assign(new Error(describeYmError(res.status, name, message, raw)), { status: res.status, code: name });
+    throw Object.assign(new Error(redactText(describeYmError(res.status, name, message, raw))), { status: res.status, code: redactText(String(name)) });
   }
 
   if (body?.error) {
@@ -474,7 +472,7 @@ export async function ymJson(url: string, token: string, init?: Record<string, a
     const err = body.error;
     const name = typeof err === 'string' ? err : err?.name ?? '';
     const message = typeof err === 'string' ? err : err?.message ?? '';
-    throw Object.assign(new Error(describeYmError(200, name, message)), { status: 200, code: name });
+    throw Object.assign(new Error(redactText(describeYmError(200, name, message))), { status: 200, code: redactText(String(name)) });
   }
 
   return body?.result ?? null;
