@@ -30,6 +30,7 @@ AGENTS.md
 docs/*
 !docs/SECURE_STORAGE_WINDOWS.md
 !docs/DAILY_MIXES.md
+!docs/share/
 skills-lock.json
 tauri-dev.log
 *.log

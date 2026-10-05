@@ -1,7 +1,7 @@
 # LomifyNEXT project map
 
-Last verified: 2026-10-03  
-Repository version at verification: 9.5.1
+Last verified: 2026-10-05
+Repository version at verification: 9.5.2
 
 This file is the navigation index for the repository. Read it before broad exploration.
 It explains where a change normally belongs; source code is still the final authority.
@@ -48,12 +48,12 @@ Svelte routes/components
 | App startup, global theme, window-level effects | `src/routes/+layout.svelte`, `src/app.css` |
 | Windows taskbar, shortcut and executable icons | `src-tauri/src/lib.rs` (`apply_windows_window_icons`), `src-tauri/icons/tray.png`, `src-tauri/icons/icon.ico`, `src-tauri/tauri.conf.json`, `src-tauri/src/app/tray.rs` |
 | Page/view navigation and home layout | `src/routes/+page.svelte`, `src/lib/stores.ts` |
-| Daily personalized home mixes | `src/lib/components/DailyMixes.svelte`, `src/lib/dailyMixes.ts`, `src/lib/dailyMixesCore.ts`; source pools: `src/lib/api.ts` |
+| Daily personalized home mixes | `src/lib/components/DailyMixes.svelte`, `src/lib/components/DailyMixPage.svelte`, `src/lib/dailyMixActions.ts`, `src/lib/dailyMixes.ts`, `src/lib/dailyMixesCore.ts`; source pools: `src/lib/api.ts` |
 | Player controls, listening time or queue behavior | `src/lib/components/Player.svelte`, `src/lib/stores.ts`, `src/lib/wave.ts`, `src-tauri/src/audio/commands.rs` |
 | Native playback, seeking, volume, crossfade | `src-tauri/src/audio/commands.rs`, `src-tauri/src/audio/engine.rs`, `src-tauri/src/audio/state.rs` |
 | Audio output devices | `src/lib/audioOutput.ts`, `src-tauri/src/audio/device.rs` |
 | Equalizer or FFT visualizer | `src/lib/components/Equalizer.svelte`, `src/lib/components/Fullscreen.svelte`, `src/lib/fft.ts`, `src-tauri/src/audio/eq.rs`, `src-tauri/src/audio/analyser.rs` |
-| SoundCloud search, metadata, playlist import by URL, stream choice | `src/lib/api.ts` |
+| SoundCloud search, metadata, playlist import by URL, stream choice | `src/lib/api.ts`, `src/lib/utils/searchText.ts` |
 | Windows SoundCloud Zapret bypass and strategy selection | `src/lib/components/Settings.svelte`, `src-tauri/src/network/soundcloud_bypass.rs`, `src-tauri/src/network/zapret_catalog.rs`, `src-tauri/resources/zapret/` |
 | Yandex Music account, search, likes, playlists, video shots, Wave, streams | `src/lib/yandex.ts`, `src/lib/playlistImport.ts`, `src/lib/wave.ts`, `src/lib/likes.ts` |
 | Lyrics | `src/lib/components/Lyrics.svelte`, `src/lib/api.ts`, `src/lib/lyrics.ts`, `src-tauri/src/audio/timing.rs` |
@@ -87,12 +87,12 @@ Svelte routes/components
 | `src-tauri/src/` | Active Rust/Tauri application. |
 | `src-tauri/capabilities/` | Tauri permission/capability declarations. |
 | `src-tauri/installer/` | Windows NSIS installer assets: forked `installer.nsi` template, `header.bmp`, `sidebar.bmp`, `license.rtf`. Referenced from `bundle.windows.nsis` in `src-tauri/tauri.conf.json`. |
-| `scripts/` | Repository helper scripts run by hand, not by the app. |
+| `scripts/` | Installer asset generation and focused frontend regression helpers. Not part of app runtime. |
 | `.gitattributes` | Pins `*.ps1` to LF. `core.autocrlf` is on in this repository, so without the rule git would hand out the SoundCloud bypass script with CRLF on one clone and LF on another. Its SHA-256 is compiled into the binary, so that would make the hash differ between clones. Every `.ps1` here is already LF with BOM, so the rule only fixes the current state in place. |
 | `utils/` | Rust helper crates referenced from `src-tauri/Cargo.toml`. |
 | `static/` | Files copied into the frontend build as static assets. |
 | `permissions/` | Additional permission definitions kept at repository root. |
-| `README.md` | User-facing project overview, features and download links. |
+| `README.md` | User-facing project overview, track Wave, installation and download links; actual catalog UI screenshot in `docs/screenshots/search.jpg`. |
 | `src/lib/changelog.ts` | Current and historical release notes shown in the app. |
 
 Generated, dependency, and local-only paths that should not be used for architecture
@@ -119,16 +119,17 @@ discovery:
 
 `currentView` in `src/lib/stores.ts` is the current manual view router. Its known values
 are `home`, `search`, `library`, `settings`, `lyrics`, `equalizer`, `fullscreen`, `profile`,
-and `artist`. When adding a view, update the union types, navigation history logic,
+`artist`, and `daily-mix`. When adding a view, update the union types, navigation history logic,
 `+page.svelte`, and the sidebar or other entry controls together.
 
 ### Main components
 
 | Component | Responsibility |
 | --- | --- |
+| `DailyMixCover.svelte`, `DailyMixPage.svelte` | Shared daily poster and centered detail view. The manual router remembers an ordinary metadata selection in Back/Forward history. |
 | `Player.svelte` | Playback orchestration, queue, preloading, crossfade decisions, Tauri audio commands, media/tray events, Discord activity, and listening statistics from the native output clock. |
 | `Search.svelte` | Search UI and results for configured sources. |
-| `Library.svelte` | Likes, playlists, SoundCloud/Yandex playlist import by URL, local files, disliked/hidden tracks, caching/download actions, library layouts. |
+| `Library.svelte` | Likes, playlists, SoundCloud/Yandex playlist import by URL, local files, disliked/hidden tracks, caching/download actions, library layouts. Layout switches reset rendering to 36 items; an intersection sentinel adds 24 (48 near the viewport) per animation frame. |
 | `Settings.svelte` | All settings groups, account/source configuration, Yandex account playlist import, cache controls, autostart, diagnostics-facing controls. |
 | `Lyrics.svelte` | Lyrics loading, synchronization, seeking, alignment, and line rendering. |
 | `Fullscreen.svelte` | Fullscreen player, fullscreen lyrics, FFT visualization, optional Yandex video shot background, playback-rate integration, and split/panning track titles. |
@@ -138,7 +139,8 @@ and `artist`. When adding a view, update the union types, navigation history log
 | `Profile.svelte` | User profile dashboard, local listening/likes/playlist statistics, ranked tracks, listening history grouped by day, SoundCloud/Yandex/Last.fm identity, and cloud Last.fm period reports. The history reuses `listenStats.history` (one record per track with `count` and `lastPlayedAt`) sorted by time, so a track appears once with its latest play; there is no separate chronological journal. |
 | `Sidebar.svelte` | Main view navigation, support entry to the existing Settings dialog, and the same account-identity precedence as the profile header. |
 | `Titlebar.svelte` | Custom Tauri window controls, persisted Windows/macOS-style placement, and window-state saving. |
-| `WaveHero.svelte` | Home-page Yandex “My Wave” hero and visual presentation. |
+| `WaveHero.svelte` | Home Wave controls/presentation for SoundCloud and Yandex; starts fresh shared sessions, displays their actual source and selected seed, returns to personal Wave. |
+| `TrackWaveButton.svelte` | Track Wave action beside download controls in Library likes (rows/cards) and playlist details. Starts the selected SoundCloud or Yandex track wave, shows loading, stops click propagation and cancels pending work on unmount. |
 | `PlaylistMenu.svelte` | Add-to-playlist menu. |
 | `PlaylistOrderControls.svelte` | Whole-playlist random/smart shuffle and shared persistent undo; smart mode separates artists and collaborations where possible. Saves through the playlist store. |
 | `PlaylistSearch.svelte` | Playlist search field, result count, clear action and Escape handling; `Library.svelte` owns the query and progressive results. |
@@ -165,7 +167,8 @@ order; do not scan the whole frontend before them:
 
 1. `src/routes/+page.svelte` — loads the feed, keeps playlists out of the rendered Home
    grid, and progressively exposes at most 96 recommendation cards.
-2. `src/lib/api.ts` — `buildTasteProfile()` and `getTrendingTracks()` build/rank the feed
+2. `src/lib/utils/tasteProfile.ts` and `src/lib/api.ts` — `buildTasteProfile()`,
+   `chooseTasteSeeds()` and `getTrendingTracks()` build/rank the feed
    from likes, repeat listens, recent searches, playlist tracks, cached Last.fm monthly/all-time
    favourites, and similar artists. Playlist and known Last.fm tracks are excluded from returned
    recommendations.
@@ -194,9 +197,10 @@ order; do not scan the whole frontend before them:
 | `src/lib/playlistImport.ts` | Shared SoundCloud/Yandex playlist link routing and identity-based local merge for Library and Settings; waits for IndexedDB persistence before reporting success. |
 | `src/lib/playlistStorage.ts` | IndexedDB snapshot and duplicate cleanup for playlists; replaces the localStorage size limit for large imports. |
 | `src/lib/playlistCover.ts` | Shared playlist-cover selection and local JPG/PNG/WebP normalization to a centered square JPEG, at most 768px. |
-| `src/lib/likes.ts` | Local like mutation and synchronization queues for remote sources. |
+| `src/lib/likes.ts` | Local like mutation (new manual likes record `likedAt`) and synchronization queues for remote sources. |
 | `src/lib/dislikes.ts` | Disliked/hidden tracks mutation, Yandex Music negative recommendations sync, and Wave/queue filtering. |
-| `src/lib/wave.ts` | Yandex Wave session lifecycle and queue refill. |
+| `src/lib/wave.ts` | Shared Wave lifecycle, memory-only source/seed/taste mode and stale-request generations. Default personal mode builds local fresh-taste queues on the selected provider; `freshWave.ts`/`freshWaveCore.ts` own catalog requests and selection. Service mode preserves Yandex Rotor feedback and legacy SoundCloud recommendations. Track waves keep native Yandex `track:<id>` stations or SC related tracks. Local continuations retain session exclusions and suppress repeatedly skipped artists. |
+| `src/lib/freshWaveCore.ts`, `src/lib/freshWave.ts` | Pure fresh-taste planning/selection and cancellable provider-specific catalog requests. Likes use 7 days, qualified plays 14 days; missing recent signals widen to 28 days then older dated preferences. Target shares 70/20/10 with 20-30% discoveries when inactive; limited pools fill gaps. Undated imports stay stable. Likes/dislikes, unavailable tracks and session repeats are excluded. Settings `waveFreshTaste` defaults to true; WaveHero selects this or service mode for the next personal launch. |
 | `src/lib/waveFilters.ts` | Wave language/content/genre filtering and labels. |
 | `src/lib/db.ts` | IndexedDB wrapper for locally imported track metadata. |
 | `src/lib/lyrics.ts` | LRC parsing and additional lyrics lookup helpers. |
@@ -211,8 +215,10 @@ order; do not scan the whole frontend before them:
 | `src/lib/utils/playlistOrder.ts` | Immutable random/smart shuffle and order-only undo, preserving current tracks and metadata; smart artist scheduling uses a heap and bounded candidate selection. |
 | `src/lib/utils/playlistSearch.ts` | Full-playlist title/artist matching with case and ё normalization; preserves source indices for numbering and playback from a search result. |
 | `src/lib/utils/artistTracks.ts` | Artist track sorting, release-date/duration formatting and the sort preference key. |
-| `src/lib/utils/hitGuard.ts` | `pointerMissed(event, element)` rejects clicks whose cursor point is outside the element's fresh `getBoundingClientRect`. Guards against the WebView hit-tree lagging behind a relayout (settings round-trip, tab switch, incremental grid rows); used from `Library.svelte` on the track action rows in capture phase. |
-| `src/lib/utils/tilt.ts` | Pointer tilt/glare for track cards. Caches the hovered card's box and re-measures it once per hover when the cursor is more than `OUTSIDE_SLACK` px outside, so cards that move during incremental loading stop tilting from a stale centre. |
+| `src/lib/utils/searchText.ts` | Shared normalization, incomplete-word and Damerau typo ranking, bounded query correction/merge. `api.ts` combines SoundCloud `/search/queries` suggestions and library/history vocabulary; Search also applies ranking to local files. |
+| `src/lib/utils/tasteProfile.ts` | Recommendation weights decay by play/like recency, cap playlist influence and sample seeds from the entire library/history with a recent anchor and artist diversity. Legacy likes retain eligibility through newest-first order. |
+| `src/lib/utils/hitGuard.ts` | Fresh rectangle checks plus delegated pointerdown/click guards mounted by `+layout.svelte`: track actions must start/end on the same visible, connected button. Keyboard activation remains available. `Library.svelte` also checks action rows in capture phase. |
+| `src/lib/utils/tilt.ts` | Pointer tilt/glare for track cards. Measures stationary card/cover/label frames on mouse move and invalidates on scroll/resize. `.cover-tilt-surface` (image, edges, shade, shadow and reflection), `.tile-card-surface` (background/border) and `.tile-label-surface` (track title/artist) share the cover's pivot. Playback/action/info controls stay outside these surfaces with stationary hitboxes; artist links move with the labels and remain clickable. Shared markup is in `ArchiveStation.svelte`, `Library.svelte`, `ArtistTrackList.svelte` and `ArtistPage.svelte`; styling is in `app.css` and `design-aurora.css`. |
 | `src/lib/fft.ts` | Fixed-size FFT payload normalization for UI visualizers. |
 | `src/lib/updater.ts` | GitHub Releases update checking, semver comparison, asset download tracking, and installer invocation. |
 | `src/lib/changelog.ts` | Structured application changelog history, release highlights, expandable details, and agent instructions. |
@@ -280,6 +286,7 @@ in exchange it picks the right frame from the set and scales it correctly.
 | `import/spotify.rs` | Short-lived fixed-port `127.0.0.1:43827` OAuth callback for Spotify PKCE; emits the authorization result without storing tokens. |
 | `network/call.rs` | Optional call-client state and persistence. |
 | `network/direct_fetch.rs` | Restricted direct native HTTP command. |
+| `network/soundcloud_fetch.rs` | Public GET fallback `soundcloud_fetch_text` after system-proxy transport failure. HTTPS SC/sndcdn host allowlist including redirects, no supplied headers/credentials, no system proxy, 15-second deadline and 16 MiB response cap. `api.ts:safeFetch` bounds the normal native/browser attempts and reports transport failures at most once per minute; ordinary HTTP denial does not switch transports. |
 | `network/image_cache.rs` | Ordinary image download/LRU plus downloaded-track covers stored by URN and served independently of their music service. |
 | `network/proxy.rs` | `scproxy` protocol handling and asset cache. |
 | `network/proxy_server.rs` | Local proxy server. |
@@ -310,7 +317,7 @@ The authoritative registration list is in `src-tauri/src/lib.rs`.
 - Image cache: `image_cache_size`, `image_cache_clear`, `image_cache_prune`.
 - Call client: commands prefixed with `call_`.
 - Account secrets: `secret_save`, `secret_get`, `secret_exists`, `secret_delete`, `secret_migrate_legacy`, `secret_clear_legacy`; native signing: `lastfm_signed_request`.
-- Wallpapers/direct network: `wallpaper_search`, `net_fetch_direct`.
+- Wallpapers/direct network: `wallpaper_search`, `net_fetch_direct`, `soundcloud_fetch_text` (public SC GET only).
 - SoundCloud bypass and connection check: `soundcloud_bypass_start` (optional `force`, optional
   `strategy` name for manual selection), `soundcloud_bypass_stop`, `soundcloud_bypass_status`
   (including Flowseal/Bol-van catalog, playback diagnosis, selection `report`, and `mode` of
@@ -345,7 +352,9 @@ Important event families:
 - `lomifynext_search_history`
 - `lomifynext_active_library_tab`
 
-The settings payload also persists `windowControlsStyle`.
+The settings payload also persists `windowControlsStyle`. Manual likes may include `likedAt`;
+legacy likes are not migrated. Taste recency reads `listenStats.history.lastPlayedAt`; Wave
+session feedback/seen tracks/skipped artists are memory-only and use no new persistence keys.
 
 Additional browser keys:
 
@@ -432,6 +441,8 @@ The same settings object also stores `fullscreenYandexVideo` and
 later changes to the fill switch persist normally.
 It also stores `waveCustomName`, the optional word after «Моя» in the Home station title;
 `waveDisplayName` in `src/lib/stores.ts` supplies the fallback «Моя тусня».
+Track Wave seeds live only in memory; they are not
+written to settings, localStorage, or native account storage.
 
 Every successful `track_ensure_cached` request may include `coverUrl`. Native code saves
 that image into `audio_covers/` without delaying playback. The loopback
@@ -518,12 +529,16 @@ repository-cleanup decision that requires an explicit task.
 | Desktop development | `npm run tauri dev` |
 | Svelte/TypeScript checks | `npm run check` |
 | Playlist shuffle/undo/search regression tests (Node.js 24+) | `node --test src/lib/utils/playlistOrder.test.mjs` |
+| Search correction and recommendation recency tests (Node.js 24+) | `node --experimental-strip-types --test src/lib/utils/searchText.test.mjs src/lib/utils/tasteProfile.test.mjs` |
+| Station lifecycle regression tests (Node.js 24+) | `node --experimental-vm-modules --test scripts/wave-test.mjs` |
+| Pointer action regression tests (Node.js 24+) | `node --experimental-strip-types --test src/lib/utils/hitGuard.test.mjs` |
 | Frontend production build | `npm run build` |
-| Rust tests | `cargo test --manifest-path src-tauri/Cargo.toml` |
+| Rust tests | `cargo test --manifest-path src-tauri/Cargo.toml` (also `npm run test:rust`) |
 | Desktop bundle | `npm run tauri build` |
 
 Rust unit tests currently live in active audio decode, HLS/shared network helpers,
-direct fetch, wallpapers, SoundCloud anonymous cache logic, and transcoding modules.
+direct fetch, wallpapers, SoundCloud bypass status/path handling, anonymous cache logic,
+and transcoding modules. Native commands use the standard Tauri/Cargo toolchain.
 
 The package script `npm run push` stages every change, creates a generic commit, and
 pushes it. Agents must not run it unless the user explicitly asks for that exact action.
@@ -543,6 +558,8 @@ Android 1.0.14 release remains published in the mobile repository.
 
 ### SoundCloud bypass launch chain
 
+The helper resolves A and AAAA for known service hosts and the validated recent playback probe host. Its raw WinDivert filter includes scoped inbound/outbound IPv4/IPv6 TCP 443 terms, at most 64 addresses. Curl probes use normal address-family selection rather than forcing IPv4. Tests: `powershell -NoProfile -File scripts/soundcloud-scope-test.ps1` and `node --test scripts/sc-fetch-test.mjs`. A live search/stream/audio-range smoke test is opt-in: `cargo test --manifest-path src-tauri/Cargo.toml live_search_and_audio_range -- --ignored`. It passed with VPN on 2026-10-05; blocked-network strategy effectiveness is not verified.
+
 The bypass needs administrator rights, so `soundcloud_bypass_start` runs an unelevated
 `powershell.exe` whose only job is `Start-Process -Verb RunAs` for a second `powershell.exe`
 that runs `resources/zapret/soundcloud-bypass.ps1`. Facts this shape depends on, all found
@@ -552,6 +569,11 @@ the hard way while fixing a launch that silently did nothing in 9.5.0:
   execution policy, but `& script.ps1` inside it is, and the Windows default for the machine
   scope is `Restricted`. Without the switch the bypass never ran at all on a machine where
   nobody had relaxed that policy.
+- Rust canonical paths use the Windows extended prefix (`\\?\`). All file paths passed
+  into the two PowerShell templates are normalized to drive/UNC syntax before use:
+  Windows PowerShell 5.1 file cmdlets can otherwise fail with a null drive.
+- PowerShell 5.1 writes UTF-8 JSON with a BOM. Rust strips it before parsing the status;
+  launch logs also strip the BOM so failures cannot appear as an idle bypass.
 - Nothing in the elevated process reports to the user by itself. Anything that fails before
   the script's own `try` - execution policy, a hash mismatch, an unbound parameter - dies in a
   hidden window. `CHILD_TEMPLATE` therefore wraps the whole call in `try`/`catch` and writes
@@ -659,11 +681,11 @@ round trip. The keyring test uses a separate namespace and removes its test cred
 `DailyMixes.svelte` appears below the wave and before optional network shelves, so
 cached/local mixes remain usable during home loading or a network error. It waits
 for credential and playlist hydration before the first reconciliation. Four mixes
-contain up to 30 tracks: likes, recent 30-day repeats, unheard recommendations and
+contain up to 30 tracks: personalized new tracks, recent unliked 30-day repeats, unheard recommendations and
 60-day releases. Selection is deterministic per local calendar day and account/source;
-dislikes are removed immediately. Previous network mixes keep their actual date until
+likes and dislikes are removed immediately by service ID and normalized song. Previous network mixes keep their actual date until
 a fresh pool arrives. Midnight, window focus and remount after an overnight absence
-refresh sources. An explicit refresh can rebuild the current day's mix.
+refresh sources. Manual refresh increments a persisted `variation`, prioritizes songs outside each mix's previous composition, fills sparse pools from remaining eligible tracks and retains the order when no alternatives exist. The UI reports additions or an unchanged composition.
 
 `dailyMixesCore.ts` owns selection, metadata whitelisting and recent release-artist
 weights. `dailyMixes.ts` owns optional browser cache with memory-only fallback.
@@ -672,8 +694,55 @@ weights. `dailyMixes.ts` owns optional browser cache with memory-only fallback.
 Playback uses the existing queue; saving creates an ordinary dated playlist snapshot
 through the existing IndexedDB playlist storage. Listening ticks do not rebuild mixes.
 
+DailyMixPage opens as the manual `daily-mix` view. `dailyMixActions.ts` owns the
+memory-only selection/playback identity and shared play/save operations. `dailyMixMotion.ts`
+measures a decorative cover and animates transform only, including reverse/interrupted
+navigation. Home scroll is restored on return. Card focus rings are inset. Stationary cards and cover frames use the existing
+trackTilt/spec-art reflection surfaces; labels share their pivot and actions remain outside.
+Save stays inside the stationary cover frame; Listen is only on the detail screen. Pointer rings and the glass-button outline are removed from these controls; keyboard focus remains visible. Sheens and internal press effects retain stationary hitboxes. Long poster titles have per-kind sizing. Reduced motion and performance mode skip the flight.
+`getTrendingTracks` and `getNewReleases` stay on the selected provider even on failure.
+
 Checks: `node --experimental-strip-types --test src/lib/dailyMixesCore.test.mjs
 src/lib/dailyMixes.test.mjs`. Product behavior/manual checks: `docs/DAILY_MIXES.md`.
+
+### Music share links (Windows, 2026-10-05)
+
+`shareLinksCore.ts` builds bounded HTTPS links at `https://pizxxxxx.github.io/LomifyNEXT/share/`
+and validates their fragments plus legacy `lomifynext://track` / `lomifynext://mix` URLs. Links contain public service IDs/title/artist only, never
+credentials, account IDs or stream URLs. Mix links preserve the actual dated composition.
+`shareLinks.ts` copies links, listens before reading startup URLs and opens the
+`daily-mix` view without autoplay. Player and DailyMixPage own the share buttons.
+`+layout.svelte` starts/stops the listener; malformed links leave playback unchanged.
+
+`tauri-plugin-deep-link` 2.4.10 is registered after single-instance (with its
+`deep-link` feature). The main capability grants get-current only; event listening uses
+the existing core event permission. `tauri.conf.json` declares the desktop scheme;
+the existing NSIS template registers it on installation. Windows startup calls `register_all`, including development and portable runs: HKCU's protocol command points to the current executable. Starting another build replaces the current user's handler. Linux release registers schemes at runtime. No mobile
+project changes. Native CLI cold/running-instance delivery was verified on Windows;
+installer protocol registration still needs a packaged-install smoke check.
+
+The standalone `web-share/` page imports only the pure public-link parser.
+`scripts/build-share-page.mjs` builds it into `docs/share/` for existing GitHub Pages
+(main branch, /docs). Its Open button launches the validated custom scheme; tracks
+also offer their service page/search. No desktop bundle, credentials, analytics or
+music API requests enter the page. The page uses a dark layout and the local `NewIconPPP.png` background; recovery instructions appear after a launch attempt without falsely asserting success. Publish only docs/share after building it. The Codex browser blocks custom-protocol navigation, so browser-to-app clicks require a manual check even when registration is verified.
+
+Checks: `node --experimental-strip-types --test src/lib/shareLinksCore.test.mjs
+scripts/daily-source-test.mjs`. User instructions: `docs/DAILY_MIXES.md`.
+
+### Uncensored alternatives (2026-10-05)
+
+`Player.svelte` renders `UncensoredButton.svelte` beside the track actions only for
+Yandex tracks. It sends three explicit SoundCloud searches, shows up to five matching
+editions, cancels on close/track change and times out after 20 seconds.
+`uncensoredCore.ts` owns query construction and title/artist/duration/edition filtering;
+labels distinguish uploader-marked uncensored versions from unmarked uploads.
+Selection replaces the current track and preserves the following queue. Its
+`playbackSource: soundcloud` metadata prevents all Yandex twin fallbacks in `api.ts`.
+`trackUrn.ts` isolates explicitly selected SC editions as `lomify:soundcloud:direct:<id>`
+so a cached Yandex twin cannot substitute for them. The numeric service ID remains last
+for the native anonymous resolver. No new native command or setting.
+Checks: `node --experimental-strip-types --test src/lib/uncensoredCore.test.mjs`.
 
 ### Rockium local playback integration (2026-09-25)
 
