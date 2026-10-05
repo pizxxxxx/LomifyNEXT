@@ -145,3 +145,81 @@ pub async fn secret_clear_legacy(app: tauri::AppHandle, window: tauri::WebviewWi
         Ok(())
     }).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[derive(Default)]
+    struct FakeVault { values: RefCell<HashMap<String, String>>, failure: &'static str }
+    impl SecretVault for FakeVault {
+        fn read(&self, key: &str) -> Result<Option<String>, String> {
+            if self.failure == "read" { return Err("read failed".into()); }
+            if self.failure == "mismatch" { return Ok(Some("wrong-fake-value".into())); }
+            Ok(self.values.borrow().get(key).cloned())
+        }
+        fn write(&self, key: &str, value: &str) -> Result<(), String> {
+            if self.failure == "write" { return Err("write failed".into()); }
+            self.values.borrow_mut().insert(key.into(), value.into()); Ok(())
+        }
+        fn remove(&self, key: &str) -> Result<(), String> { self.values.borrow_mut().remove(key); Ok(()) }
+    }
+
+    fn temp_file() -> std::path::PathBuf {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        std::env::temp_dir().join(format!("lomify-secret-test-{}-{}.json", std::process::id(), NEXT.fetch_add(1, Ordering::SeqCst)))
+    }
+
+    #[test]
+    fn legacy_files_are_removed_only_after_verified_storage() {
+        for source in [r#"{"token":"fake-legacy-token","premium":true}"#, r#"{"state":{"sessionId":"fake-legacy-token"}}"#] {
+            let path = temp_file();
+            std::fs::write(&path, source).unwrap();
+            let vault = FakeVault::default();
+            migrate_legacy_file(&vault, &path, "legacy_auth_session").unwrap();
+            assert!(!path.exists());
+            assert_eq!(vault.read("legacy_auth_session").unwrap().as_deref(), Some("fake-legacy-token"));
+        }
+    }
+
+    #[test]
+    fn legacy_file_survives_write_read_and_verification_failures() {
+        for failure in ["write", "read", "mismatch"] {
+            let path = temp_file();
+            let source = r#"{"token":"fake-legacy-token"}"#;
+            std::fs::write(&path, source).unwrap();
+            let vault = FakeVault { failure, ..Default::default() };
+            assert!(migrate_legacy_file(&vault, &path, "legacy_auth_session").is_err());
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn unrecognized_legacy_file_is_preserved() {
+        let path = temp_file();
+        let source = r#"{"unknown":"fake-unknown"}"#;
+        std::fs::write(&path, source).unwrap();
+        assert!(migrate_legacy_file(&FakeVault::default(), &path, "legacy_auth_session").is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_credential_manager_round_trip() {
+        // A separate namespace protects every real application credential.
+        let vault = KeyringStore::new(format!("com.lomify.security-test.{}", std::process::id()));
+        struct Cleanup(KeyringStore);
+        impl Drop for Cleanup { fn drop(&mut self) { let _ = self.0.delete("probe"); } }
+        let cleanup = Cleanup(vault.clone());
+        save_verified(&vault, "probe", "fake-windows-probe").unwrap();
+        assert_eq!(vault.read("probe").unwrap().as_deref(), Some("fake-windows-probe"));
+        vault.remove("probe").unwrap();
+        assert_eq!(vault.read("probe").unwrap(), None);
+        drop(cleanup);
+    }
+}

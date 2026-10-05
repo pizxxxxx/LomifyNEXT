@@ -58,6 +58,34 @@ pub fn start_playback_issue_cleanup(app: &AppHandle) {
 #[tauri::command]
 pub fn soundcloud_clear_playback_issue(app: AppHandle) -> Result<(), String> { clear_playback_issue(&app) }
 
+#[cfg(test)]
+mod playback_lifetime_tests {
+    use super::*;
+    #[test]
+    fn expired_future_and_corrupt_reports_are_deleted() {
+        let path = std::env::temp_dir().join(format!("lomify-playback-lifetime-{}.json", std::process::id()));
+        let now = 1_000_000;
+        for reported_at in [now - PLAYBACK_ISSUE_TTL_MS, now + 1] {
+            let issue = PlaybackIssue { reported_at, kind: "network".into(), message: "test".into(), needs_bypass: true, probe_url: None };
+            std::fs::write(&path, serde_json::to_vec(&issue).unwrap()).unwrap();
+            assert!(read_recent_playback_issue(&path, now).is_none());
+            assert!(!path.exists());
+        }
+        std::fs::write(&path, b"invalid JSON").unwrap();
+        assert!(read_recent_playback_issue(&path, now).is_none());
+        assert!(!path.exists());
+    }
+    #[test]
+    fn fresh_reports_survive_until_their_lifetime_ends() {
+        let path = std::env::temp_dir().join(format!("lomify-playback-fresh-{}.json", std::process::id()));
+        let issue = PlaybackIssue { reported_at: 1_000_000, kind: "network".into(), message: "test".into(), needs_bypass: true, probe_url: None };
+        std::fs::write(&path, serde_json::to_vec(&issue).unwrap()).unwrap();
+        assert!(read_recent_playback_issue(&path, 1_000_001).is_some());
+        assert!(path.exists());
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BypassStatus {
     pub state: String,

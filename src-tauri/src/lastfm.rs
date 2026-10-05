@@ -115,3 +115,27 @@ pub async fn lastfm_signed_request(
     }
     Ok(body)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn signature_uses_sorted_utf8_fields_and_excludes_transport_fields() {
+        let mut params = BTreeMap::from([("method".into(), "auth.getToken".into()), ("api_key".into(), "public".into())]);
+        let expected = format!("{:x}", Md5::digest(b"api_keypublicmethodauth.getTokenfake-secret"));
+        assert_eq!(signature(&params, "fake-secret"), expected);
+        params.insert("format".into(), "json".into());
+        params.insert("callback".into(), "ignored".into());
+        params.insert("api_sig".into(), "ignored".into());
+        assert_eq!(signature(&params, "fake-secret"), expected);
+        params.insert("artist".into(), "Артист".into());
+        assert_ne!(signature(&params, "fake-secret"), expected);
+    }
+    #[test]
+    fn private_requests_reject_arbitrary_methods_and_credentials_in_parameters() {
+        let key = "0123456789abcdef0123456789abcdef";
+        assert!(validate("auth.getToken", key, &BTreeMap::new()).is_ok());
+        assert!(validate("user.changePassword", key, &BTreeMap::new()).is_err());
+        assert!(validate("track.scrobble", key, &BTreeMap::from([("sk".into(), "fake-injected".into())])).is_err());
+    }
+}

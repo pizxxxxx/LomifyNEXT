@@ -640,6 +640,12 @@ helper's probe limit. Native startup, app exit and SoundCloud unlink/reset clear
 `soundcloud-bypass-playback.json`; a background cleanup also deletes expired files.
 `soundcloud_clear_playback_issue` exposes only this cleanup. Public `client_id` is unchanged.
 
+Focused checks: `node --experimental-strip-types --test src/lib/secretMigration.test.mjs
+src/lib/logRedaction.test.mjs` and `node --experimental-vm-modules --test
+scripts/secret-storage-test.mjs`. Rust tests cover native file migration, masking,
+Last.fm request validation/signatures, report expiry and an isolated Windows keyring
+round trip. The keyring test uses a separate namespace and removes its test credential.
+
 ### Rockium local playback integration (2026-09-25)
 
 `src/lib/rockiumBridge.ts` is mounted once by `Player.svelte`. It publishes playback,

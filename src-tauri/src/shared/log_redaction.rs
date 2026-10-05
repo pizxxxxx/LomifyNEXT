@@ -29,3 +29,25 @@ pub(crate) fn redact_text(value: &str) -> String {
     for pattern in patterns { text = pattern.replace_all(&text, format!("${{1}}{MASK}")).into_owned(); }
     text
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn credentials_are_masked_in_headers_json_queries_and_errors() {
+        for source in [
+            "Authorization: Bearer fake-access", "authorization=\"OAuth fake-yandex\"",
+            r#"{"access_token":"fake-access","refreshToken":"fake-refresh"}"#,
+            "https://example.test/?token=fake-token&sk=fake-session&public=yes",
+            "session key = fake-session", "sharedSecret: fake-secret",
+            "token%3Dfake-token&public=yes", "Cookie: session=fake-cookie; other=fake-other",
+        ] { assert!(!redact_text(source).contains("fake-")); }
+        assert_eq!(redact_text("status=403&client_id=public"), "status=403&client_id=public");
+    }
+    #[test]
+    fn bare_and_encoded_known_secrets_are_masked() {
+        remember_secret("fake+known/native-credential");
+        assert!(!redact_text("server echoed fake+known/native-credential").contains("credential"));
+        assert!(!redact_text("url/fake%2Bknown%2Fnative-credential").contains("credential"));
+    }
+}
