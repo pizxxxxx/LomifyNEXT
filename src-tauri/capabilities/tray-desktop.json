@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "tray-desktop",
+  "description": "Preserve ordinary native mini-player commands without granting account-secret or keyring plugin access.",
+  "windows": ["tray-popover"],
+  "permissions": ["allow-desktop-commands"]
+}

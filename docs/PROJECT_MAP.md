@@ -308,7 +308,7 @@ The authoritative registration list is in `src-tauri/src/lib.rs`.
 - Track cache: commands prefixed with `track_`.
 - Image cache: `image_cache_size`, `image_cache_clear`, `image_cache_prune`.
 - Call client: commands prefixed with `call_`.
-- Account secrets: `secret_save`, `secret_get`, `secret_delete`, `secret_migrate_legacy`, `secret_clear_legacy`.
+- Account secrets: `secret_save`, `secret_get`, `secret_exists`, `secret_delete`, `secret_migrate_legacy`, `secret_clear_legacy`; native signing: `lastfm_signed_request`.
 - Wallpapers/direct network: `wallpaper_search`, `net_fetch_direct`.
 - SoundCloud bypass and connection check: `soundcloud_bypass_start` (optional `force`, optional
   `strategy` name for manual selection), `soundcloud_bypass_stop`, `soundcloud_bypass_status`
@@ -353,18 +353,17 @@ Additional browser keys:
 - `lomify-library-liked-view` in `Library.svelte`.
 - `lomify-artist-track-sort` in `ArtistPage.svelte` remembers popularity, newest, oldest or title ordering; playback queues use that same order. Library artist cards also support likes, name and recent-addition ordering within the open library view.
 - `spotify_auth_code` in the callback route.
-- `lomifynext_spotify_session` in `src/lib/spotify.ts` stores the Spotify PKCE access and
-  refresh session separately from normal settings; unlinking Spotify removes only this key.
+- `lomifynext_spotify_session` in `src/lib/spotify.ts` stores public Client ID/expiry metadata.
+  Spotify access/refresh credentials use keyring; unlinking removes both credentials and metadata.
 - `lomifynext_lastfm_session`, `lomifynext_lastfm_pending`, and
-  `lomifynext_lastfm_overview` in `src/lib/lastfm.ts` store the signed Last.fm session,
-  short-lived browser-authorization attempt, and fifteen-minute dashboard/report/taste cache;
-  unlinking removes all three.
+  `lomifynext_lastfm_overview` in `src/lib/lastfm.ts` store public account/pending metadata
+  and the fifteen-minute dashboard/report/taste cache. Private credentials use keyring;
+  unlinking removes credentials and all three metadata/cache records.
 - `src/routes/+layout.svelte` removes the obsolete `lomifynext_apple_music_session` key at
   startup so tokens saved by builds that briefly exposed Apple Music do not remain on disk.
 
-Optional release-build credentials are documented in `.env.example`:
-`VITE_LASTFM_API_KEY` and `VITE_LASTFM_SHARED_SECRET`. Without them, Settings asks the
-local user for the corresponding Last.fm developer credentials.
+`.env.example` documents an optional public `VITE_LASTFM_API_KEY`. Personal Last.fm
+shared secrets are entered in Settings, kept in keyring and used only by native Rust.
 
 Local imported track metadata is stored in IndexedDB database `LomifyNextDB`, object
 store `offline_tracks`, through `src/lib/db.ts`.
@@ -398,7 +397,8 @@ most of them; the audio commands initialize `audio-normalization/` when needed:
   and removed when their matching audio is removed.
 - `ffmpeg/` — managed FFmpeg binary/location.
 
-Application data includes `auth_session.json` (with migration from `sc-auth.json`),
+Legacy `auth_session.json` and `sc-auth.json` are removed after verified keyring migration.
+Application data includes
 `call_enabled.json`, and `soundcloud-bypass-strategies.json` (validated Flowseal strategy
 parameters refreshed in the background every six hours). SoundCloud bypass also uses
 `soundcloud-bypass-playback.json` for the latest track failure and
@@ -610,6 +610,9 @@ When changing the application version, verify all of these locations:
 `tauri-plugin-keyring-store` uses the OS credential store; raw plugin export/import
 permissions are denied. `src-tauri/permissions/account-secrets.toml` restricts the
 application secret commands to the main window capability.
+`desktop-commands.toml` grants the existing non-secret commands to the main window;
+app ACL activation otherwise blocks unlisted playback/startup commands as well.
+`tray-desktop.json` preserves ordinary native mini-player commands without secret access.
 
 `src/lib/secretMigration.ts` verifies each legacy credential before removing its field
 from browser storage. `secretStorage.ts` loads credentials separately before service

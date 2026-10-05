@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 
 // Print locations only. Never print a matching line or credential value.
 const git = (args, input, binary = false) => {
@@ -37,4 +38,16 @@ for (const entry of entries) {
     }
   });
 }
-console.log(JSON.stringify({ scannedHistoricalTextBlobs: scanned, potentialSecrets: findings }, null, 2));
+let workingFiles = 0;
+const current = git(['ls-files', '--cached', '--others', '--exclude-standard', '-z']).split('\0');
+for (const path of new Set(current)) {
+  if (!path || /(?:^|\/)(?:node_modules|target|build|build_output|dist|\.svelte-kit)\//.test(path) || !/\.(?:rs|ts|js|mjs|svelte|json|toml|md|txt|ya?ml|env|example)$/i.test(path)) continue;
+  if (!fs.existsSync(path)) continue;
+  const data = fs.readFileSync(path);
+  if (data.includes(0)) continue;
+  workingFiles++;
+  data.toString('utf8').split('\n').forEach((line, index) => {
+    if (patterns.some((pattern) => { pattern.lastIndex = 0; return pattern.test(line); })) findings.push({ path, line: index + 1, workingTree: true });
+  });
+}
+console.log(JSON.stringify({ scannedHistoricalTextBlobs: scanned, scannedWorkingTextFiles: workingFiles, potentialSecrets: findings }, null, 2));

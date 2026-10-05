@@ -69,7 +69,8 @@ export function whenSecretsReady(): Promise<void> {
         }, record.storageKey, record.fields);
       } catch {
         for (const field of record.fields) failedKeys.add(field.key);
-        startupErrors.push(`Перенос ${record.storageKey} не завершён. Старая копия сохранена.`);
+        const account = record.storageKey.includes('spotify') ? 'Spotify' : record.storageKey.includes('lastfm') ? 'Last.fm' : 'сохранённых аккаунтов';
+        startupErrors.push(`Перенос ${account} не завершён. Старая копия сохранена.`);
       }
     }
     for (const key of new Set(LEGACY_RECORDS.flatMap((record) => record.fields.map((field) => field.key)))) {

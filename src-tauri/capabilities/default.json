@@ -8,6 +8,7 @@
     "core:window:default",
     "opener:default",
     "allow-account-secrets",
+    "allow-desktop-commands",
     "keyring-store:deny-export-passwords-plain",
     "keyring-store:deny-import-passwords-plain",
     "liquid-glass:default",
