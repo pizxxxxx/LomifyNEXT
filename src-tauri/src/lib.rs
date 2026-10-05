@@ -401,6 +401,7 @@ pub fn run() {
             network::call::call_status,
             network::wallpapers::wallpaper_search,
             network::direct_fetch::net_fetch_direct,
+            network::soundcloud_fetch::soundcloud_fetch_text,
             network::soundcloud_bypass::soundcloud_bypass_start,
             network::soundcloud_bypass::soundcloud_bypass_stop,
             network::soundcloud_bypass::soundcloud_bypass_status,

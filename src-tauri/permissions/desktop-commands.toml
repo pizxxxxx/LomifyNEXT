@@ -71,6 +71,7 @@ commands.allow = [
   "call_status",
   "wallpaper_search",
   "net_fetch_direct",
+  "soundcloud_fetch_text",
   "soundcloud_bypass_start",
   "soundcloud_bypass_stop",
   "soundcloud_bypass_status",

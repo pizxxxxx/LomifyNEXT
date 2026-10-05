@@ -419,7 +419,7 @@ fn paths(app: &AppHandle) -> Result<(PathBuf, PathBuf, PathBuf), String> {
 fn read_status(path: &Path) -> BypassStatus {
     let mut status: BypassStatus = std::fs::read(path)
         .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .and_then(|bytes| parse_status(&bytes))
         .unwrap_or_else(BypassStatus::idle);
     let max_age = match status.state.as_str() {
         // «Ожидаю подтверждения Windows» пишет само приложение и больше не трогает, пока
@@ -461,6 +461,12 @@ fn read_status(path: &Path) -> BypassStatus {
     status
 }
 
+fn parse_status(bytes: &[u8]) -> Option<BypassStatus> {
+    // Windows PowerShell 5.1 writes a UTF-8 BOM with Text.Encoding.UTF8.
+    // serde_json rejects it, otherwise every script state would look like idle.
+    serde_json::from_slice(bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes)).ok()
+}
+
 fn write_status(path: &Path, status: &BypassStatus) -> Result<(), String> {
     let bytes = serde_json::to_vec(status).map_err(|error| error.to_string())?;
     std::fs::write(path, bytes).map_err(|error| error.to_string())
@@ -469,6 +475,19 @@ fn write_status(path: &Path, status: &BypassStatus) -> Result<(), String> {
 #[cfg(windows)]
 fn ps_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
+}
+
+/// Windows PowerShell providers cannot resolve Tauri's extended-length path prefix.
+#[cfg(windows)]
+fn plain_path(path: &Path) -> String {
+    let text = path.to_string_lossy().to_string();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        text
+    }
 }
 
 #[cfg(windows)]
@@ -681,20 +700,20 @@ pub async fn soundcloud_bypass_start(
 
     let script = root.join("soundcloud-bypass.ps1");
     let child_command = CHILD_TEMPLATE
-        .replace("@SCRIPT@", &ps_literal(&script.to_string_lossy()))
+        .replace("@SCRIPT@", &ps_literal(&plain_path(&script)))
         .replace("@HASH@", &ps_literal(&bundled_script_hash()))
-        .replace("@STATUS@", &ps_literal(&status_path.to_string_lossy()))
-        .replace("@LOG@", &ps_literal(&log_path.to_string_lossy()))
-        .replace("@ROOT@", &ps_literal(&root.to_string_lossy()))
-        .replace("@STOP@", &ps_literal(&stop_path.to_string_lossy()))
-        .replace("@INPUT@", &ps_literal(&input_path.to_string_lossy()))
+        .replace("@STATUS@", &ps_literal(&plain_path(&status_path)))
+        .replace("@LOG@", &ps_literal(&plain_path(&log_path)))
+        .replace("@ROOT@", &ps_literal(&plain_path(&root)))
+        .replace("@STOP@", &ps_literal(&plain_path(&stop_path)))
+        .replace("@INPUT@", &ps_literal(&plain_path(&input_path)))
         .replace("@MODE@", &ps_literal(mode))
         .replace("@PICK@", &ps_literal(pick.as_deref().unwrap_or("")))
         .replace("@PID@", &std::process::id().to_string());
     let launcher_command = LAUNCHER_TEMPLATE
         .replace("@ENC@", &ps_literal(&encode_powershell(&child_command)))
-        .replace("@STATUS@", &ps_literal(&status_path.to_string_lossy()))
-        .replace("@LOG@", &ps_literal(&log_path.to_string_lossy()))
+        .replace("@STATUS@", &ps_literal(&plain_path(&status_path)))
+        .replace("@LOG@", &ps_literal(&plain_path(&log_path)))
         .replace("@MODE@", &ps_literal(mode))
         .replace("@PID@", &std::process::id().to_string());
     let encoded_launcher = encode_powershell(&launcher_command);
@@ -746,7 +765,7 @@ pub async fn soundcloud_bypass_start(
             return;
         }
         let log = std::fs::read_to_string(&log_path).unwrap_or_default();
-        let log = log.trim();
+        let log = log.trim_start_matches('\u{feff}').trim();
         let message = if !started {
             "Windows не дала прав администратора, без них обход не запустить. Нажмите «Подобрать и включить» ещё раз, а если появится окно Windows с вопросом - выберите «Да»."
                 .to_string()
@@ -783,7 +802,32 @@ pub async fn soundcloud_bypass_start(
 
 #[cfg(test)]
 mod tests {
-    use super::soundcloud_url;
+    use super::{soundcloud_url, parse_status};
+
+    #[test]
+    fn powershell_status_with_bom_preserves_failure_and_report() {
+        let payload = br#"{"state":"failed","message":"launch failed","strategy":"","index":0,"total":0,"report":"reason"}"#;
+        for bytes in [payload.to_vec(), [b"\xef\xbb\xbf".as_slice(), payload].concat()] {
+            let status = parse_status(&bytes).unwrap();
+            assert_eq!(status.state, "failed");
+            assert_eq!(status.report, "reason");
+        }
+        assert!(parse_status(b"{unfinished").is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_paths_handle_drive_unc_and_plain_paths() {
+        use super::plain_path;
+        use std::path::Path;
+        for (input, expected) in [
+            (r"\\?\C:\Program Files\LomifyNEXT", r"C:\Program Files\LomifyNEXT"),
+            (r"\\?\UNC\server\share\LomifyNEXT", r"\\server\share\LomifyNEXT"),
+            (r"C:\LomifyNEXT", r"C:\LomifyNEXT"),
+        ] {
+            assert_eq!(plain_path(Path::new(input)), expected);
+        }
+    }
 
     #[test]
     fn probe_urls_stay_on_soundcloud_https_hosts() {
