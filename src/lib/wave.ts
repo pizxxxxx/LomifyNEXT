@@ -253,9 +253,9 @@ async function startLocalWave(seedTrack: any, options: { signal?: AbortSignal },
 function abortable<T>(job: Promise<T>, signal: AbortSignal): Promise<T> {
   return new Promise((resolve, reject) => {
     const abort = () => reject(new DOMException('Cancelled', 'AbortError'));
-    if (signal.aborted) { abort(); return; }
     signal.addEventListener('abort', abort, { once: true });
     job.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+    if (signal.aborted) abort();
   });
 }
 
@@ -367,6 +367,7 @@ export async function startWave(
   seedTrack?: { id?: string | number; title: string; artist?: string; source: string } | null,
   options: { signal?: AbortSignal } = {}
 ): Promise<boolean> {
+  if (options.signal?.aborted) return false;
   if (!secretsAreReady()) {
     const generation = ++waveRequestGeneration;
     const initial = get(currentTrack);

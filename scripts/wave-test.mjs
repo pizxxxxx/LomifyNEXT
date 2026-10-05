@@ -146,6 +146,17 @@ test('cancelled fresh launches leave manually selected playback untouched', asyn
   assert.equal(get(stores.currentTrack).id, '42');
 });
 
+test('an already cancelled launch makes no network request and leaves the queue intact', async () => {
+  const { wave, stores, requests } = await setup([], [], [[track(1)]]);
+  stores.settings.update(state => ({ ...state, waveFreshTaste: true }));
+  stores.currentTrack.set(track(42)); stores.queue.set([track(43)]);
+  const controller = new AbortController(); controller.abort();
+  assert.equal(await wave.startWave(null, { signal: controller.signal }), false);
+  assert.equal(requests.length, 0);
+  assert.equal(get(stores.currentTrack).id, '42');
+  assert.equal(get(stores.queue)[0].id, '43');
+});
+
 test('returning to personal wave clears the seed and uses the personal station', async () => {
   const { wave, requests } = await setup([batch([1, 2]), batch([4, 5])]);
   await wave.startWave(track(99));
