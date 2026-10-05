@@ -42,6 +42,8 @@ export function whenSecretsReady(): Promise<void> {
   if (bootstrap) return bootstrap;
   bootstrap = (async () => {
     if (typeof localStorage === 'undefined') return;
+    try { requireDesktop(); await invoke('secret_migrate_legacy'); }
+    catch { startupErrors.push('Перенос старых файлов аккаунта не завершён. Неудалённые копии сохранены.'); }
     const fallback = new Map<SecretKey, string>();
     const failedKeys = new Set<SecretKey>();
     for (const record of LEGACY_RECORDS) {
@@ -121,4 +123,11 @@ export async function deleteSecrets(keys: SecretKey[]): Promise<void> {
 
 export async function deleteAllSecrets(): Promise<void> {
   await deleteSecrets([...new Set(LEGACY_RECORDS.flatMap((record) => record.fields.map((field) => field.key)))]);
+  await clearLegacySecrets();
+}
+
+export async function clearLegacySecrets(): Promise<void> {
+  await whenSecretsReady();
+  requireDesktop();
+  await invoke('secret_clear_legacy');
 }

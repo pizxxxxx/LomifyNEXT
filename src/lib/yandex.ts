@@ -714,7 +714,7 @@ export interface YandexAccount {
 
 /**
  * Проверка токена и одновременно «кто вошёл». Другого способа убедиться, что строка
- * действительно рабочая, нет — так же поступает `ym_import_start` в Rust, беря отсюда uid.
+ * действительно рабочая, нет. uid используется для импорта и синхронизации библиотеки.
  */
 export async function yandexAccountStatus(rawToken: string): Promise<YandexAccount> {
   const token = normalizeYandexToken(rawToken);

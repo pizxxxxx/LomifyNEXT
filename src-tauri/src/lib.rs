@@ -1,7 +1,6 @@
 mod app;
 mod rockium;
 mod audio;
-mod auth;
 mod secrets;
 mod discord;
 mod import;
@@ -201,7 +200,6 @@ pub fn run() {
             let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
 
             let http_client = reqwest::Client::builder().build().unwrap();
-            let auth_http_client = http_client.clone();
 
             network::proxy::STATE
                 .set(network::proxy::State {
@@ -269,10 +267,6 @@ pub fn run() {
             app.manage(app::popover::TrayState::default());
             app::tray::setup_tray(app).expect("failed to setup tray");
 
-            let auth_state =
-                auth::SessionStore::init(data_dir.clone(), auth_http_client, rt_handle.clone());
-            app.manage(auth_state);
-
             let call_state = network::call::CallState::init(data_dir.clone(), rt_handle);
             network::call::manage_state(app.handle(), call_state.clone());
             network::call::maybe_autostart(app.handle(), call_state);
@@ -311,6 +305,8 @@ pub fn run() {
             secrets::secret_save,
             secrets::secret_get,
             secrets::secret_delete,
+            secrets::secret_migrate_legacy,
+            secrets::secret_clear_legacy,
             rockium::rockium_publish,
             rockium::rockium_configure,
             app::updater::check_and_download_update,
@@ -351,8 +347,6 @@ pub fn run() {
             audio::audio_preview_play,
             audio::audio_preview_stop,
             audio::save_track_to_path,
-             import::ym_import_start,
-             import::ym_import_stop,
              import::spotify_oauth_start,
             track_cache::track_ensure_cached,
             track_cache::track_export,
@@ -379,10 +373,6 @@ pub fn run() {
             network::call::call_set_enabled,
             network::call::call_is_enabled,
             network::call::call_status,
-            auth::auth_status,
-            auth::auth_set_session,
-            auth::auth_logout,
-            auth::auth_set_premium,
             network::wallpapers::wallpaper_search,
             network::direct_fetch::net_fetch_direct,
             network::soundcloud_bypass::soundcloud_bypass_start,

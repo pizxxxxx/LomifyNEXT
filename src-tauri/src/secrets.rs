@@ -1,4 +1,6 @@
 use std::sync::Mutex;
+use std::path::Path;
+use tauri::Manager;
 use tauri_plugin_keyring_store::{KeyringExt, KeyringStore};
 
 const KEYS: &[&str] = &[
@@ -71,6 +73,61 @@ pub async fn secret_delete(app: tauri::AppHandle, window: tauri::WebviewWindow, 
     with_vault(app, move |vault| {
         vault.remove(&key)?;
         if vault.read(&key)?.is_some() { return Err("Удаление секрета не подтверждено".into()); }
+        Ok(())
+    }).await
+}
+
+const LEGACY_FILES: &[(&str, &str)] = &[
+    ("auth_session.json", "legacy_auth_session"),
+    ("sc-auth.json", "legacy_sc_session"),
+];
+
+pub(crate) fn migrate_legacy_file(vault: &impl SecretVault, path: &Path, key: &str) -> Result<(), String> {
+    if !path.exists() { return Ok(()); }
+    let bytes = std::fs::read(path).map_err(|_| "Не удалось прочитать старый файл аккаунта".to_string())?;
+    let data: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|_| "Старый файл аккаунта повреждён. Копия сохранена".to_string())?;
+    let candidate = data.get("token").or_else(|| data.get("state")?.get("sessionId"));
+    match candidate {
+        Some(serde_json::Value::String(token)) => {
+            if !token.is_empty() && token != "null" && token != "undefined" { save_verified(vault, key, token)?; }
+        },
+        Some(serde_json::Value::Null) => {},
+        _ => return Err("Старый файл аккаунта не распознан. Копия сохранена".into()),
+    }
+    std::fs::remove_file(path).map_err(|_| "Секрет сохранён, но старый файл удалить не удалось".to_string())
+}
+
+#[tauri::command]
+pub async fn secret_migrate_legacy(app: tauri::AppHandle, window: tauri::WebviewWindow) -> Result<(), String> {
+    check_key(&window, "yandex_music_token")?;
+    let dir = app.path().app_data_dir().map_err(|_| "Не удалось найти папку аккаунта".to_string())?;
+    with_vault(app, move |vault| {
+        // Process each source independently, so one unreadable file cannot hide another.
+        let mut failed = false;
+        for (file, key) in LEGACY_FILES {
+            if migrate_legacy_file(vault, &dir.join(file), key).is_err() { failed = true; }
+        }
+        if failed { Err("Перенос старых файлов аккаунта не завершён. Неудалённые копии сохранены".into()) }
+        else { Ok(()) }
+    }).await
+}
+
+#[tauri::command]
+pub async fn secret_clear_legacy(app: tauri::AppHandle, window: tauri::WebviewWindow) -> Result<(), String> {
+    check_key(&window, "yandex_music_token")?;
+    let dir = app.path().app_data_dir().map_err(|_| "Не удалось найти папку аккаунта".to_string())?;
+    with_vault(app, move |vault| {
+        for (_, key) in LEGACY_FILES {
+            vault.remove(key)?;
+            if vault.read(key)?.is_some() { return Err("Удаление старого секрета не подтверждено".into()); }
+        }
+        for (file, _) in LEGACY_FILES {
+            match std::fs::remove_file(dir.join(file)) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err("Не удалось удалить старый файл аккаунта".into()),
+                _ => {},
+            }
+        }
         Ok(())
     }).await
 }

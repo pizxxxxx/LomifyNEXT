@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { saveSecret, deleteSecret, deleteAllSecrets } from '$lib/secretStorage';
+  import { saveSecret, deleteSecret, deleteAllSecrets, clearLegacySecrets } from '$lib/secretStorage';
   import PlaylistSyncSettings from './PlaylistSyncSettings.svelte';
   import { playlistSyncStatus, syncPlaylists } from '$lib/playlistSync';
   import { settings, waveDisplayName, automaticPerformanceMode, playlists, listenStats, notify, dislikedTracks, currentView, activeLibraryTab, rebootCurrentTrack } from '$lib/stores';
@@ -811,6 +811,12 @@
     // молча падал в SoundCloud, и было бы непонятно, почему.
     if ($settings.searchSource === 'yandex') $settings.searchSource = 'soundcloud';
     notify('Яндекс Музыка отключена.', 'info');
+  }
+
+  async function unlinkSoundCloud() {
+    try { await clearLegacySecrets(); }
+    catch { notify('Не удалось удалить старые данные SoundCloud. Повтори отключение.', 'error'); return; }
+    $settings.scUser = null;
   }
 
   /**
@@ -1839,7 +1845,7 @@
                   <button type="button" class="is-secondary" on:click={refreshSCPlaylists} disabled={scLoading}>
                     Обновить плейлисты
                   </button>
-                  <button type="button" class="is-danger" on:click={() => $settings.scUser = null}>Отвязать</button>
+                  <button type="button" class="is-danger" on:click={unlinkSoundCloud}>Отвязать</button>
                 </div>
               </div>
               <PlaylistSyncSettings provider="soundcloud" />

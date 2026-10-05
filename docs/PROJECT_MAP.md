@@ -64,9 +64,9 @@ Svelte routes/components
 | Settings UI or persistence | `src/lib/components/Settings.svelte`, `src/lib/stores.ts` |
 | HiDPI/interface scale | `src/routes/+layout.svelte`, `src/lib/components/Settings.svelte`, `src/lib/stores.ts`, `src-tauri/capabilities/default.json` |
 | Tray, popover, diagnostics | `src-tauri/src/app/` |
-| Authentication session | `src-tauri/src/auth/mod.rs` |
+| Account secrets and legacy migration | `src/lib/secretStorage.ts`, `src-tauri/src/secrets.rs` |
 | Discord Rich Presence | `src-tauri/src/discord/commands.rs` |
-| Yandex library import | `src-tauri/src/import/ym.rs` |
+| Yandex library import | `src/lib/playlistImport.ts`, `src/lib/yandex.ts` |
 | Spotify account/library import | `src/lib/spotify.ts`, `src/lib/musicImport.ts`, `src/lib/components/SpotifyImport.svelte`, `src-tauri/src/import/spotify.rs` |
 | Last.fm account, cloud reports, recommendations, scrobbling | `src/lib/lastfm.ts`, `src/lib/components/LastFmConnect.svelte`, `src/lib/components/Profile.svelte`, `src/lib/components/Player.svelte`, `src/lib/api.ts` |
 | Auto-updates and GitHub releases | `src/lib/updater.ts`, `src-tauri/src/app/updater.rs`, `src/routes/+layout.svelte`, `src/lib/components/Settings.svelte` |
@@ -274,9 +274,8 @@ in exchange it picks the right frame from the set and scales it correctly.
 | `audio/tick.rs` | Playback clock, end detection, reconnect behavior, `audio:tick`. |
 | `audio/timing.rs` | Lyrics and floating-comment timelines. |
 | `audio/media_controls.rs` | OS media-key/control integration. |
-| `auth/mod.rs` | Persisted application authentication session and auth commands/events. |
+| `secrets.rs` | Named OS credentials, verified writes/deletes and one-way migration of old auth files. Legacy generic auth IPC is closed because the frontend never called it. |
 | `discord/commands.rs` | Discord Rich Presence lifecycle. |
-| `import/ym.rs` | Yandex library import and progress/cancellation. |
 | `import/spotify.rs` | Short-lived fixed-port `127.0.0.1:43827` OAuth callback for Spotify PKCE; emits the authorization result without storing tokens. |
 | `network/call.rs` | Optional call-client state and persistence. |
 | `network/direct_fetch.rs` | Restricted direct native HTTP command. |
@@ -305,11 +304,11 @@ The authoritative registration list is in `src-tauri/src/lib.rs`.
 - Discord: `discord_connect`, `discord_disconnect`, `discord_set_activity`,
   `discord_clear_activity`.
 - Audio: commands prefixed with `audio_`, including `audio_playback_clock` for output time used by listening statistics, plus `save_track_to_path`.
-- Import: `ym_import_start`, `ym_import_stop`, `spotify_oauth_start`.
+- Import: `spotify_oauth_start`; Yandex import is implemented in frontend modules.
 - Track cache: commands prefixed with `track_`.
 - Image cache: `image_cache_size`, `image_cache_clear`, `image_cache_prune`.
 - Call client: commands prefixed with `call_`.
-- Auth: commands prefixed with `auth_`.
+- Account secrets: `secret_save`, `secret_get`, `secret_delete`, `secret_migrate_legacy`, `secret_clear_legacy`.
 - Wallpapers/direct network: `wallpaper_search`, `net_fetch_direct`.
 - SoundCloud bypass and connection check: `soundcloud_bypass_start` (optional `force`, optional
   `strategy` name for manual selection), `soundcloud_bypass_stop`, `soundcloud_bypass_status`
@@ -326,7 +325,7 @@ Important event families:
 - OS media controls: `media:play`, `media:pause`, `media:toggle`, `media:next`,
   `media:prev`, `media:seek`, `media:seek-relative`.
 - Timelines: `lyrics:active_line`, `comments:show`.
-- App/auth: `tray-action`, `auth:changed`.
+- App: `tray-action`.
 - Spotify import: `spotify:oauth-callback`.
 - Updates: `update:download-progress`.
 - Cache and import modules also emit progress/status events; inspect the emitting module
@@ -619,6 +618,12 @@ its secret fields have been verified. Yandex settings retain a memory-only token
 Spotify and Last.fm browser session/pending records contain public metadata only;
 their tokens, refresh tokens, session keys and personal shared secrets use keyring.
 Disconnect actions remove provider credentials before reporting success.
+
+The removed active `auth/mod.rs` and `import/ym.rs` had no frontend callers (including
+the `auth:changed` event). Their inactive nested copies remain outside the build.
+Old `auth_session.json` and `sc-auth.json` credentials are migrated independently into
+reserved keyring entries and each file is removed only after verified persistence.
+No legacy token is returned to frontend. Unlinking SoundCloud/reset removes these entries.
 
 ### Rockium local playback integration (2026-09-25)
 
