@@ -1,28 +1,6 @@
 <script lang="ts">
-  /**
-   * «Моя волна» на главной — радиостанция, собранная по трекам самого человека.
-   *
-   * Зачем отдельный блок, а не кнопка. Волна была: круглая кнопка в `HomeMasthead.svelte`.
-   * Только сам `HomeMasthead` нигде не подключался — ни один файл в `src/` его не
-   * импортировал, то есть кнопки на экране не было вовсе, и снаружи это выглядело как
-   * «волны нет». Мёртвый компонент удалён, а вход в волну переехал туда, где его видно с
-   * первого взгляда: в самый верх главной.
-   *
-   * Волна двух видов, и разница честная, а не косметическая:
-   *   • Яндекс Музыка — настоящая станция на стороне сервиса, привязанная к аккаунту токена.
-   *     Очередь бесконечная, пропуски и дослушивания уходят обратно на станцию (`lib/wave.ts`).
-   *   • Остальные случаи — станция из своего: лайки, прослушанное, история поиска и плейлисты.
-   *     У SoundCloud персональной станции не существует, и называть тренд «моей волной» было
-   *     бы неправдой, поэтому подпись под названием прямо говорит, из чего собран поток.
-   *
-   * Анимация идёт от настоящего звука: бэкенд шлёт 64 полосы спектра событием `audio:fft`
-   * (см. `audio/analyser.rs`, ~30 кадров в секунду; диапазон значений описан в `lib/fft.ts`).
-   * Пока ничего не играет, лента дышит сама от суммы синусоид — блок не должен выглядеть
-   * мёртвым до первого нажатия.
-   *
-   * Лента считается только когда на неё есть кому смотреть: не видно на экране или окно не на
-   * переднем плане — кадры не идут вовсе, фоновые пятна замирают. Рядом запущенная игра для
-   * плеера не повод молотить полотно шириной в полтора метра пикселей.
+  /** Wave controls share their session with the player through lib/wave.ts.
+   * The FFT canvas runs only while its view and the window are visible.
    */
   import { onDestroy, onMount, tick } from 'svelte';
   import { cubicOut } from 'svelte/easing';
@@ -32,6 +10,7 @@
     Loader2,
     Radio,
     RefreshCw,
+    History,
     SlidersHorizontal
   } from 'lucide-svelte';
   import { MorphIcon } from 'morphicons/svelte';
@@ -44,22 +23,17 @@
   import {
     currentTrack,
     isPlaying,
-    likedTracks,
-    listenStats,
     notify,
-    playlists,
-    queue,
-    searchHistory,
     settings,
     waveDisplayName
   } from '$lib/stores';
-  import { startWave, stopWave, waveActive, waveAvailable } from '$lib/wave';
+  import { startWave, waveActive, waveSeed, waveSource, waveTasteMode } from '$lib/wave';
   import { FFT_BINS, readFftInto } from '$lib/fft';
   import { coverUrlForTrack, downloadedCoverCache } from '$lib/offlineCovers';
+  import { glassRefraction } from '$lib/glassRefraction';
+  import WaveHistory from './WaveHistory.svelte';
   import {
     describeWaveFilters,
-    isNeuroTrack,
-    trackMatchesWaveGenre,
     waveGenreLabel,
     waveLanguageLabel,
     WAVE_GENRES,
@@ -69,14 +43,6 @@
   /** Приветствие и имя приходят с главной — там они и считаются по часам и по ОС. */
   export let greeting: string = '';
   export let username: string = '';
-
-  /**
-   * Лента главной. Станция «по своему» собирается из неё, а не новым запросом: лента уже
-   * персональная (`getTrendingTracks` строит её по лайкам, прослушанному, поиску и
-   * плейлистам) и уже в памяти, поэтому нажатие срабатывает мгновенно. Если ленты нет —
-   * например, она не загрузилась, — станция сходит за треками сама.
-   */
-  export let sourceTracks: any[] = [];
 
   /**
    * Открыт ли раздел, в котором лента живёт (главная).
@@ -98,6 +64,7 @@
    * the mode must not pretend that the user left Home or close an open tuning panel.
    */
   export let motionEnabled: boolean = true;
+  $: glassQuality = $settings.design === 'liquid-glass' && motionEnabled ? $settings.glassQuality || 'normal' : 'off';
 
   let busy = false;
   let tuneOpen = false;
@@ -106,22 +73,17 @@
   let tuneLeft = 16;
   let tuneTop = 16;
   let expanded = false;
+  let historyOpen = false;
+  let historyTrigger: HTMLButtonElement;
+  function closeHistory() { historyOpen = false; historyTrigger?.focus({ preventScroll: true }); }
   let slotEl: HTMLElement;
   let expandTrigger: HTMLButtonElement;
   let resizeRaf = 0;
 
-  /**
-   * Идентификаторы треков станции «по своему». Признак «станция играет» выводится из них, а
-   * не из отдельного флага: человек может включить что угодно из поиска или лайков, и флаг
-   * пришлось бы гасить руками из каждого такого места. Здесь же достаточно спросить, лежит
-   * ли играющий трек в станции.
-   */
-  let stationIds = new Set<string>();
-
-  $: yandexWave = waveAvailable($settings);
-  $: localActive = Boolean($currentTrack && stationIds.has(`${$currentTrack.id}`));
-  $: active = $waveActive || localActive;
-  $: sourceLabel = yandexWave ? 'Яндекс Музыка' : 'по вашей библиотеке';
+  $: yandexWave = $waveActive ? $waveSource === 'yandex' : $settings.searchSource === 'yandex';
+  $: active = $waveActive;
+  $: sourceLabel = yandexWave ? 'Яндекс Музыка' : 'SoundCloud';
+  $: tasteLabel = !$waveSeed && (active ? $waveTasteMode === 'fresh' : $settings.waveFreshTaste) ? 'По свежему вкусу' : '';
   $: cover = active ? coverUrlForTrack($currentTrack, $downloadedCoverCache) : '';
   $: waveFilterLabel = describeWaveFilters($settings);
   $: selectedGenre = waveGenreLabel($settings.waveGenre) || 'Любой жанр';
@@ -134,6 +96,7 @@
     ($settings.waveContent && $settings.waveContent !== 'all') || Boolean($settings.waveLanguage)
   );
   $: if (!onPage && tuneOpen) setTuneOpen(false);
+  $: if (!onPage) historyOpen = false;
   $: if (!onPage && expanded) void setExpanded(false);
 
   function positionTunePanel() {
@@ -291,111 +254,22 @@
   }
 
   function tunePop(node: HTMLElement, params: { duration?: number } = {}) {
-    const duration = params.duration ?? 220;
+    const glass = $settings.design === 'liquid-glass';
+    const moving = !glass || (motionEnabled && !matchMedia('(prefers-reduced-motion: reduce)').matches && document.body.dataset.inputMode !== 'keyboard');
+    const duration = glass && !moving ? 0 : params.duration ?? 220;
     return {
       duration,
       easing: cubicOut,
-      css: (t: number) => `opacity: ${t}; transform: translateY(${(1 - t) * -6}px) scale(${0.96 + 0.04 * t});`
+      css: (t: number) => `opacity: ${t}; transform: translateY(${moving ? (1 - t) * -6 : 0}px) scale(${moving ? 0.96 + 0.04 * t : 1});`
     };
   }
 
-  /** Только треки: `mixPlaylists` подмешивает в ленту плейлисты, у них вместо звука список. */
-  function onlyTracks(list: any[]): any[] {
-    return (list || []).filter((t) => t && !Array.isArray(t.tracks) && t.title);
-  }
-
-  async function startLocalStation(): Promise<boolean> {
-    let pool = onlyTracks(sourceTracks);
-
-    if (pool.length === 0) {
-      try {
-        const api = await import('$lib/api');
-        pool = onlyTracks(
-          await api.getTrendingTracks($likedTracks, $listenStats, $searchHistory, $playlists)
-        );
-      } catch (e) {
-        console.error('[волна] станция по своему не собралась', e);
-      }
-    }
-
-    // SoundCloud сообщает жанр, поэтому этот фильтр работает и у локальной волны. Наличие
-    // текста он надёжно не сообщает — это условие остаётся только для станции Яндекса.
-    pool = pool.filter((track) => trackMatchesWaveGenre(track, $settings));
-    if ($settings.waveAllowNeuro === false) {
-      pool = pool.filter((track) => !isNeuroTrack(track));
-    } else if ($settings.waveAllowNeuro === 'only') {
-      pool = pool.filter((track) => isNeuroTrack(track));
-    }
-    const unique = new Map<string, any>();
-    for (const track of pool) {
-      const key = track?.id
-        ? `${track.source ?? 'track'}:${track.id}`
-        : `${track?.title ?? ''}:${track?.artist ?? ''}`.toLocaleLowerCase('ru-RU');
-      if (key && !unique.has(key)) unique.set(key, track);
-    }
-    pool = [...unique.values()];
-
-    // Если после фильтрации треков не осталось, ищем подходящие треки в каталоге
-    if (pool.length === 0) {
-      try {
-        const api = await import('$lib/api');
-        if ($settings.waveAllowNeuro === 'only') {
-          const [r1, r2] = await Promise.all([
-            api.performSearch('suno ai').catch(() => []),
-            api.performSearch('нейромузыка').catch(() => [])
-          ]);
-          const neuro = [...r1, ...r2].filter((t) => isNeuroTrack(t) || t?.title);
-          pool = onlyTracks(neuro);
-        } else if ($settings.waveGenre) {
-          const { WAVE_GENRES } = await import('$lib/waveFilters');
-          const genreObj = WAVE_GENRES.find((g) => g.id === $settings.waveGenre);
-          const q = genreObj?.label || $settings.waveGenre;
-          const res = await api.performSearch(q).catch(() => []);
-          pool = onlyTracks(res).filter((t) => trackMatchesWaveGenre(t, $settings));
-        }
-      } catch (e) {
-        console.error('[волна] поиск треков по фильтру не удался', e);
-      }
-    }
-
-    // Пустой список здесь — не «нет музыки», а проглоченный отказ внутри api:
-    // `getTrendingTracks` гасит сетевые ошибки через `Promise.allSettled` и на мёртвой сети
-    // возвращает пустой массив, а не ошибку.
-    if (pool.length === 0) {
-      const filter = describeWaveFilters($settings);
-      notify(
-        filter
-          ? `Для «Моей тусни» не нашлось треков по условию «${filter}». Попробуй изменить фильтр.`
-          : 'Не удалось собрать «Мою тусню». Проверь подключение или послушай несколько треков, чтобы появились рекомендации.',
-        'error'
-      );
-      return false;
-    }
-
-    const shuffled = [...pool].sort(() => Math.random() - 0.5);
-    stationIds = new Set(shuffled.map((t) => `${t.id}`));
-    stopWave();
-    // Очередь ставим раньше трека: реакция плеера на `currentTrack` синхронная, и к моменту,
-    // когда он возьмётся за первый трек, остальное уже должно лежать на месте.
-    queue.set(shuffled.slice(1));
-    currentTrack.set(shuffled[0]);
-    isPlaying.set(true);
-    return true;
-  }
-
-  /** Собрать волну заново. У Яндекса это новая порция с учётом пропусков, у своего — новый порядок. */
+  /** Собрать волну заново. Оба источника запрашивают свежие рекомендации. */
   async function collect() {
     if (busy) return;
     busy = true;
     try {
-      if (yandexWave) {
-        // У волны Яндекса свои уведомления об отказе: она знает, что именно не сложилось —
-        // токен, сеть или пустая станция, — и общий текст был бы там неправдой.
-        stationIds = new Set();
-        await startWave();
-      } else {
-        await startLocalStation();
-      }
+      await startWave($waveSeed);
     } catch (e) {
       console.error('[волна] не собралась', e);
       notify('Не удалось обновить «Мою тусню». Проверь подключение к интернету.', 'error');
@@ -943,6 +817,7 @@
   class:is-live={active && $isPlaying}
   class:is-idle={!awake || !onScreen}
   class:is-expanded={expanded}
+  class:has-track-seed={Boolean($waveSeed)}
   bind:this={hostEl}
   aria-label={$waveDisplayName}
 >
@@ -966,13 +841,20 @@
         </div>
       {/if}
 
-      <h1 class="wave-hero-title">{$waveDisplayName}</h1>
+      <h1 class="wave-hero-title">{$waveSeed ? 'Моя волна' : $waveDisplayName}</h1>
+      {#if $waveSeed}
+        <p class="wave-hero-hint">Моя волна по треку: {$waveSeed.title}</p>
+        <button type="button" class="wave-chip" on:click={() => startWave()}>
+          Вернуться к обычной волне
+        </button>
+      {/if}
 
       <div class="wave-hero-meta">
         <span class="wave-chip">
           <Radio size={12} aria-hidden="true" />
           {sourceLabel}
         </span>
+        {#if tasteLabel}<span class="wave-chip">{tasteLabel}</span>{/if}
         {#if active}
           <span class="wave-chip wave-chip-live">
             <span class="wave-dot" aria-hidden="true"></span>
@@ -990,11 +872,13 @@
       <p class="wave-hero-hint">
         {#if active && $currentTrack}
           {$currentTrack.title} — {$currentTrack.artist}
+        {:else if tasteLabel}
+          Музыка по свежим лайкам и прослушиваниям, с открытиями и учётом пропусков.
         {:else if yandexWave}
           Бесконечная станция Яндекс Музыки: подстраивается под то, что вы слушаете и
           пропускаете.
         {:else}
-          Бесконечный поток по вашим трекам — лайки, прослушанное, поиск и плейлисты.
+          Поток SoundCloud по вашим лайкам и недавним прослушиваниям, с учётом пропусков.
         {/if}
       </p>
 
@@ -1008,6 +892,9 @@
     </div>
 
     <div class="wave-hero-actions">
+      {#if $settings.design === 'liquid-glass'}
+        <button type="button" class="wave-history-trigger wave-tune-trigger" bind:this={historyTrigger} on:click={() => { historyOpen = !historyOpen; if (tuneOpen) setTuneOpen(false); }} aria-expanded={historyOpen} aria-label="История моей волны"><History size={16}/><span>История</span></button>
+      {/if}
       <button
         type="button"
         class="wave-expand"
@@ -1084,13 +971,18 @@
 </section>
 </div>
 
+{#if historyOpen && onPage && $settings.design === 'liquid-glass'}<WaveHistory onclose={closeHistory}/>{/if}
+
 {#if tuneOpen}
   <div
     bind:this={tunePanel}
     use:portalToBody
     transition:tunePop
     class="wave-tune-pop"
-    style="left: {tuneLeft}px; top: {tuneTop}px"
+    class:lg-optical={$settings.design === 'liquid-glass'}
+    use:glassRefraction={glassQuality}
+    style:left="{tuneLeft}px"
+    style:top="{tuneTop}px"
     role="dialog"
     aria-modal="false"
     aria-labelledby="wave-tune-title"
@@ -1107,6 +999,16 @@
       {#if activeFilterCount > 0}
         <button type="button" class="wave-tune-clear" on:click={clearWaveFilters}>Сбросить</button>
       {/if}
+    </div>
+
+    <div class="wave-tune-section">
+      <div class="wave-tune-label">Подбор музыки</div>
+      <div class="seg-control" style="--seg-count: 2; --seg-index: {$settings.waveFreshTaste ? 0 : 1}" role="radiogroup" aria-label="Режим персональной волны">
+        <span class="seg-pill" aria-hidden="true"></span>
+        <button type="button" role="radio" class="seg-item" class:is-active={$settings.waveFreshTaste} aria-checked={Boolean($settings.waveFreshTaste)} on:click={() => settings.update(state => ({ ...state, waveFreshTaste: true }))}>Свежий вкус</button>
+        <button type="button" role="radio" class="seg-item" class:is-active={!$settings.waveFreshTaste} aria-checked={!$settings.waveFreshTaste} on:click={() => settings.update(state => ({ ...state, waveFreshTaste: false }))}>{yandexWave ? 'Волна Яндекса' : 'Обычная волна'}</button>
+      </div>
+      <p class="wave-tune-hint">{#if $settings.waveFreshTaste}Основа - лайки за неделю и прослушивания за две. Старый вкус и открытия дополняют выбор.{:else if yandexWave}Персональная станция Яндекса учитывает прослушивания и пропуски. Язык и режим «Без слов» применяются в сервисе.{:else}Обычная волна использует рекомендации SoundCloud и похожие треки.{/if} Применится при следующем запуске персональной волны.</p>
     </div>
 
     <div class="wave-tune-section">
@@ -1303,6 +1205,11 @@
       border-radius 380ms cubic-bezier(0.23, 1, 0.32, 1),
       box-shadow 380ms cubic-bezier(0.23, 1, 0.32, 1),
       border-color var(--duration-slow, 700ms) var(--ease-smooth-out, ease);
+  }
+
+  /* Track details need room above the greeting in the compact card. */
+  .wave-hero.has-track-seed:not(.is-expanded) {
+    height: auto;
   }
 
   .wave-hero.is-expanded {
@@ -1828,7 +1735,9 @@
     flex-direction: column;
     gap: 12px;
     padding: 14px;
-    overflow: hidden;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
     color: #fff;
     background:
       linear-gradient(180deg, color-mix(in srgb, var(--color-primary) 5%, transparent), transparent 45%),
@@ -1916,6 +1825,8 @@
     letter-spacing: 0.1em;
     text-transform: uppercase;
   }
+
+  .wave-tune-hint { margin: 0; color: #a5abb3; font-size: 11px; line-height: 1.5; }
 
   .wave-tune-pop :global(.seg-control) {
     width: 100%;

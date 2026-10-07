@@ -10,19 +10,22 @@
    * же стекло, что у настроек в полноэкранном режиме.
    */
   import { createEventDispatcher, onDestroy } from 'svelte';
-  import { Plus, ListMusic } from 'lucide-svelte';
+  import { Plus, ListMusic, Star } from 'lucide-svelte';
   import { Plus as PlusIcon, Check as CheckIcon } from 'lucide';
   import { MorphIcon } from 'morphicons/svelte';
   import { cubicOut } from 'svelte/easing';
-  import { playlists, notify } from '$lib/stores';
+  import { playlists, notify, settings, effectivePerformanceMode } from '$lib/stores';
+  import { glassRefraction } from '$lib/glassRefraction';
 
   export let track: any;
   /** Вверх — для нижних строк и плеера, вниз — для списков. */
   export let placement: 'top' | 'bottom' = 'bottom';
   export let align: 'left' | 'right' = 'right';
   export let iconSize = 18;
+  export let star = false;
   /** Классы кнопки-открывашки: у каждого списка своя логика показа по наведению. */
   export let buttonClass = '';
+  export let label = '';
   /**
    * Куда прижать подсказку над кнопкой. По умолчанию она центрируется по кнопке; у края
    * контейнера с `overflow: hidden` подпись шире кнопки и её надо прижать к своему краю,
@@ -180,7 +183,8 @@
     on:pointerdown|stopPropagation
     on:click={toggle}
   >
-    <Plus size={iconSize} />
+    {#if star}<Star size={iconSize} />{:else}<Plus size={iconSize} />{/if}
+    {#if label}<span>{label}</span>{/if}
   </button>
 
   {#if open}
@@ -189,6 +193,8 @@
     <div
       transition:popFade
       class="pl-menu-pop is-{computedPlacement} is-{computedAlign}"
+      class:lg-optical={$settings.design === 'liquid-glass'}
+      use:glassRefraction={$settings.design === 'liquid-glass' && !$effectivePerformanceMode ? $settings.glassQuality || 'normal' : 'off'}
       role="menu"
       tabindex="-1"
       on:click|stopPropagation

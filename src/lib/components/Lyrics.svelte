@@ -27,6 +27,10 @@
     duration?: number;
   }
 
+  function isGlassPause(line: LyricLine | undefined): boolean {
+    return !!line && (!!line.pause || /^[\s♪♫♬♩]+$/u.test(line.mainText || line.text));
+  }
+
   function extractAdlibs(text: string): { mainText: string; adlibs: AdlibItem[] } {
     if (!text || text === PAUSE_MARKER) return { mainText: text, adlibs: [] };
     const adlibs: AdlibItem[] = [];
@@ -82,6 +86,8 @@
   }
 
   const lineWindowsCache = new Map<number, CharWindow[]>();
+  const lineTimingCache = new Map<number, { text: string; duration: number; singing: number }>();
+  const charProgressCache = new WeakMap<HTMLElement, string>();
 
   let lyrics = '';
   let isLoading = false;
@@ -111,6 +117,18 @@
 
   let lastProgressVal = 0;
   let lastProgressTs = 0;
+
+  function getLineTiming(i: number) {
+    const cached = lineTimingCache.get(i);
+    if (cached) return cached;
+    const line = displayLines[i];
+    const text = getEffectiveLineText(line);
+    const duration = Math.max(.4, (displayLines[i + 1]?.time ?? line.time + 2.6) - line.time);
+    const singing = line.pause ? (line.duration ?? duration) : Math.min(duration, Math.max(.5, calculateSungDuration(text, duration)));
+    const timing = { text, duration, singing };
+    lineTimingCache.set(i, timing);
+    return timing;
+  }
 
   function clamp01(v: number) {
     return v < 0 ? 0 : v > 1 ? 1 : v;
@@ -476,6 +494,8 @@
 
   async function loadLyrics() {
     if (!$currentTrack) return;
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = 0;
     isLoading = true;
     lyrics = '';
     displayLines = [];
@@ -483,6 +503,7 @@
     adlibRefs = [];
     clearBackdropAdlibs();
     lineWindowsCache.clear();
+    lineTimingCache.clear();
     activeIndex = -1;
     
     const text = await getLyrics($currentTrack.title, $currentTrack.artist, $currentTrack);
@@ -523,14 +544,19 @@
   }
 
   function applyLineStates(idx: number, force = false) {
+    let visibleIndex = idx;
+    if ($settings.design === 'liquid-glass') {
+      while (visibleIndex >= 0 && isGlassPause(displayLines[visibleIndex])) visibleIndex--;
+    }
     for (let i = 0; i < lineRefs.length; i++) {
       let state;
-      if (i === idx) state = 'active';
-      else if (i === idx - 1) state = 'past-near';
-      else if (i === idx + 1) state = 'next-near';
+      if (i === visibleIndex) state = 'active';
+      else if (i === visibleIndex - 1) state = 'past-near';
+      else if (i === visibleIndex + 1) state = 'next-near';
       else if (idx >= 0 && i < idx) state = 'past';
       else state = 'next';
       setLineState(i, state, force);
+      if (i === visibleIndex && visibleIndex !== idx) writeLineProgress(i, 1);
     }
   }
 
@@ -585,23 +611,21 @@
     
     // Only update line progress if it changed significantly
     const prevValue = parseFloat(el.dataset.progress || '-1');
-    if (Math.abs(prevValue - value) > 0.004 || value === 0 || value === 1) {
+    if (Math.abs(prevValue - value) > 0.004 || ((value === 0 || value === 1) && prevValue !== value)) {
       el.dataset.progress = value.toString();
       el.style.setProperty('--lyric-progress', `${(value * 100).toFixed(2)}%`);
       el.style.setProperty('--lyric-progress-value', value.toFixed(4));
     }
 
     const line = displayLines[i];
-    const lineText = getEffectiveLineText(line);
+    const timing = getLineTiming(i);
+    const lineText = timing.text;
 
     // Dynamic adlib timing and velocity-dependent appearance
     const adlibs = getLineAdlibs(line);
     if (adlibs.length > 0) {
-      const nextLine = displayLines[i + 1];
-      const dur = Math.max(0.4, (nextLine?.time ?? line.time + 2.6) - line.time);
-      const singingDur = line.pause
-        ? (line.duration ?? dur)
-        : Math.min(dur, Math.max(0.5, calculateSungDuration(lineText, dur)));
+      const dur = timing.duration;
+      const singingDur = timing.singing;
       const currentElapsed = elapsedSec !== undefined ? elapsedSec : (value * singingDur);
       // Смещение появления эдлибов на ~750 мс позже, чтобы они точно совпадали с вокалом
       const ADLIB_OFFSET_SEC = 0.75;
@@ -671,7 +695,8 @@
         const eased = local * local * (3 - 2 * local);
         const easedStr = eased.toFixed(3);
 
-        if (chars[c].dataset.progress !== easedStr) {
+        if (charProgressCache.get(chars[c]) !== easedStr) {
+          charProgressCache.set(chars[c], easedStr);
           chars[c].dataset.progress = easedStr;
           chars[c].style.setProperty('--char-progress', easedStr);
         }
@@ -689,29 +714,31 @@
 
   function setupRaf() {
     if (rafId) cancelAnimationFrame(rafId);
-    if (!hasTimedLyrics) {
+    if (!hasTimedLyrics || !letterSync || !get(isPlaying) || document.visibilityState === 'hidden') {
       rafId = 0;
       return;
     }
     let lastFrameTs = 0;
+    let lastPaintTs = 0;
 
     const tickFrame = (ts: number) => {
-      if (document.visibilityState === 'hidden') {
+      rafId = 0;
+      if (document.visibilityState === 'hidden' || !get(isPlaying)) {
         rafId = 0;
         return;
       }
-      rafId = requestAnimationFrame(tickFrame);
-      const frameMs = lastFrameTs === 0 ? 1000 / 60 : Math.min(100, Math.max(1, ts - lastFrameTs));
-      lastFrameTs = ts;
-      if (!get(isPlaying)) {
-        lastProgressTs = ts;
+      // A 144/240/320 Hz display does not need that many text-shadow repaints.
+      // Keep the karaoke at 60 Hz; CSS interpolates the character transitions.
+      if (lastPaintTs && ts - lastPaintTs < 1000 / 60) {
+        rafId = requestAnimationFrame(tickFrame);
         return;
       }
-
+      lastPaintTs = lastPaintTs ? ts - (ts - lastPaintTs) % (1000 / 60) : ts;
+      const frameMs = lastFrameTs === 0 ? 1000 / 60 : Math.min(100, Math.max(1, ts - lastFrameTs));
+      lastFrameTs = ts;
       const idx = activeIndex;
       if (idx < 0 || idx >= displayLines.length) return;
       const cur = displayLines[idx];
-      const next = displayLines[idx + 1];
 
       // Субпиксельная экстраполяция текущего времени трека между 100-мс тиками бэкенда:
       let currentAudioPos = lastProgressVal;
@@ -724,11 +751,7 @@
       const offsetSecs = lyricsOffsetSecs;
       const adjustedProgress = Math.max(0, currentAudioPos - offsetSecs);
       
-      const dur = Math.max(0.4, (next?.time ?? cur.time + 2.6) - cur.time);
-      const lineText = getEffectiveLineText(cur);
-      const singingDur = cur.pause
-        ? (cur.duration ?? dur)
-        : Math.min(dur, Math.max(0.5, calculateSungDuration(lineText, dur)));
+      const singingDur = getLineTiming(idx).singing;
       const target = clamp01((adjustedProgress - cur.time) / singingDur);
 
       const prev = lineProgress;
@@ -743,6 +766,8 @@
 
       lineProgress = smoothed;
       writeLineProgress(idx, smoothed, Math.max(0, adjustedProgress - cur.time));
+      if (target < 1 || smoothed < .999) rafId = requestAnimationFrame(tickFrame);
+      else { lineProgress = 1; writeLineProgress(idx, 1, Math.max(0, adjustedProgress - cur.time)); }
     };
     rafId = requestAnimationFrame(tickFrame);
   }
@@ -757,6 +782,7 @@
     pauseBarsRef = [];
     clearBackdropAdlibs();
     lineWindowsCache.clear();
+    lineTimingCache.clear();
     await tick();
     syncActiveLine(get(progress), true, 'auto');
     if (hasTimedLyrics) setupRaf();
@@ -776,7 +802,13 @@
    */
   function scrollToActive(behavior: ScrollBehavior) {
     if (!containerRef) return;
-    const el = lineRefs[activeIndex];
+    // Hidden pause markers have offsetTop=0. Keep the last sung line centred until
+    // the next real line, including when seeking directly into an instrumental gap.
+    let anchor = activeIndex;
+    if ($settings.design === 'liquid-glass') {
+      while (anchor >= 0 && isGlassPause(displayLines[anchor])) anchor--;
+    }
+    const el = lineRefs[anchor];
     if (!el) return;
     containerRef.scrollTo({
       top: el.offsetTop - containerRef.clientHeight / 2 + el.clientHeight / 2,
@@ -799,6 +831,19 @@
       lastProgressVal = Number(position) || 0;
       lastProgressTs = performance.now();
       syncActiveLine(lastProgressVal);
+      // IPC ticks suffice for adlibs, line mode and a completed vocal phrase.
+      // Restart the frame loop only for an unfinished character fill.
+      if (!rafId && activeIndex >= 0 && activeIndex < displayLines.length) {
+        const line = displayLines[activeIndex];
+        const elapsed = Math.max(0, lastProgressVal - lyricsOffsetSecs - line.time);
+        lineProgress = clamp01(elapsed / getLineTiming(activeIndex).singing);
+        writeLineProgress(activeIndex, lineProgress, elapsed);
+        if (lineProgress < 1) setupRaf();
+      }
+    });
+    const unsubscribePlaying = isPlaying.subscribe(playing => {
+      if (playing) setupRaf();
+      else { if (rafId) cancelAnimationFrame(rafId); rafId = 0; }
     });
 
     const onVisibility = () => {
@@ -810,6 +855,7 @@
 
     return () => {
       unsubscribeProgress();
+      unsubscribePlaying();
       document.removeEventListener('visibilitychange', onVisibility);
       motionQuery.removeEventListener('change', syncMotionPreference);
     };
@@ -945,7 +991,7 @@
   $: plainBlocks = toPlainBlocks(lyrics, adlibsEnabled);
 </script>
 
-<div class="lyrics-view-wrapper relative w-full h-full flex-1 min-h-full flex flex-col overflow-visible select-none">
+<div class="lyrics-view-wrapper relative w-full h-full flex-1 min-h-full flex flex-col overflow-visible select-none" class:lyrics-empty-state={!isLoading && !displayLines.length}>
   <!-- svelte-ignore a11y-no-static-element-interactions -->
   <div
     class="h-full w-full flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-hide px-12 py-16 relative z-[1] {!$isPlaying ? 'lyrics-paused' : ''}"
@@ -984,6 +1030,7 @@
               <div
                 bind:this={lineRefs[i]}
                 class="lyric-line"
+                class:lyric-pause={$settings.design === 'liquid-glass' && isGlassPause(line)}
                 class:has-adlibs={getLineAdlibs(line).length > 0}
                 on:click={() => handleSeek(line.time)}
               >
@@ -1080,11 +1127,11 @@
       {/each}
     </div>
   {:else}
-    <div class="h-full flex flex-col items-center justify-center gap-1.5">
+    <div class="lyrics-empty h-full flex flex-col items-center justify-center gap-1.5">
       <div class="display-title">{lyrics || 'Текста нет'}</div>
       <div class="empty-hint !mt-0 text-center">Для этого трека никто ещё не выложил слова.</div>
     </div>
   {/if}
-  <div class="h-[40vh]"></div>
+  <div class="lyrics-end-space h-[40vh]"></div>
   </div>
 </div>

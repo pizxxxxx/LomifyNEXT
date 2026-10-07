@@ -1,15 +1,20 @@
 <script lang="ts">
   import PlaylistSyncControl from './PlaylistSyncControl.svelte';
-  import { onMount, tick } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
+  import { glassLibraryRequest, setGlassQueueContext } from '$lib/liquidGlass';
+  import LiquidGlassMediaHeader from './LiquidGlassMediaHeader.svelte';
+  import LiquidGlassTrackList from './LiquidGlassTrackList.svelte';
+  import { pageAtmosphere } from '$lib/stores';
   import { fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
-  import { Play, FolderOpen, Heart, ThumbsDown, User, Music, Trash2, ListMusic, Plus, ExternalLink, Check, Download, FolderDown, Info, Radio, X, Loader2, ArrowLeft, Pencil, Link } from 'lucide-svelte';
+  import { Play, FolderOpen, Heart, ThumbsDown, User, Music, Trash2, ListMusic, Plus, ExternalLink, Check, Download, FolderDown, Info, Radio, X, Loader2, ArrowLeft, Pencil, Link, Search as SearchIcon } from 'lucide-svelte';
   import { exportTrackToFile, exportingUrns } from '$lib/exportAudio';
   import { LayoutGrid as LayoutGridIcon, List as ListIcon, Pause as PauseIcon, Play as PlayIcon } from 'lucide';
   import { MorphIcon } from 'morphicons/svelte';
   import ArtistTag from './ArtistTag.svelte';
   import PlaylistMenu from './PlaylistMenu.svelte';
   import TrackStatus from './TrackStatus.svelte';
+  import TrackWaveButton from './TrackWaveButton.svelte';
   import PlaylistTrailer from './PlaylistTrailer.svelte';
   import PlaylistOrderControls from './PlaylistOrderControls.svelte';
   import PlaylistCoverEditor from './PlaylistCoverEditor.svelte';
@@ -26,6 +31,7 @@
   import { getAudioUrl } from '$lib/api';
   import { setTrackLiked, isTrackLiked } from '$lib/likes';
   import { toggleTrackDislike, clearAllDislikes } from '$lib/dislikes';
+  import { dislikeSyncPending, yandexDislikeId } from '$lib/dislikeSync';
   import { invoke } from '@tauri-apps/api/core';
   import { withCount } from '$lib/utils/plural';
   import { coverUrlAtSize, coverUrlForTrack, downloadedCoverCache } from '$lib/offlineCovers';
@@ -82,6 +88,14 @@
     }
     playTrackList(playlist.tracks[0], playlist.tracks);
   }
+  function shufflePlayback(list: any[]) {
+    const shuffled = [...list];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const index = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[index]] = [shuffled[index], shuffled[i]];
+    }
+    if (shuffled.length) playTrackList(shuffled[0], shuffled);
+  }
 
   let localTracks: any[] = [];
   let cachedUrns = new Set<string>();
@@ -100,6 +114,18 @@
   $: openedPlaylist = expandedPlaylist
     ? $playlists.find(playlist => playlist.id === expandedPlaylist) ?? null
     : null;
+  onMount(() => glassLibraryRequest.subscribe(request => {
+    if (!request) return;
+    glassLibraryRequest.set(null);
+    void tick().then(() => {
+      setTab('playlists');
+      if (request.playlistId) openPlaylistDetail(request.playlistId);
+      if (request.create) openCreatePlaylistDialog();
+    });
+  }));
+  $: pageAtmosphere.set($settings.design === 'liquid-glass' && openedPlaylist
+    ? { url: playlistCoverUrl(openedPlaylist, $downloadedCoverCache), derived: true } : null);
+  onDestroy(() => pageAtmosphere.set(null));
 
   $: tileActionIconSize = $settings.exportEnabled ? 14 : 15;
   $: tileActionTrashIconSize = $settings.exportEnabled ? 13 : 14;
@@ -109,6 +135,7 @@
   let likedView: LikedView = 'list';
 
   function toggleLikedView() {
+    rowBudget = ROWS_FIRST_PAINT;
     likedView = likedView === 'list' ? 'grid' : 'list';
     activeTrackMenu = null;
     try {
@@ -124,7 +151,7 @@
    * появляется только при приближении к низу уже отрисованной части.
    */
   const ROWS_FIRST_PAINT = 36;
-  const ROWS_STEP = 72;
+  const ROWS_STEP = 24;
   let rowBudget = ROWS_FIRST_PAINT;
 
   /** Оба всплывающих слоя строки принадлежат одному состоянию: это не даёт информации и
@@ -157,6 +184,7 @@
   }
 
   function onTrackMenuKeydown(event: KeyboardEvent) {
+    if (event.defaultPrevented || $currentView !== 'library') return;
     if (event.key !== 'Escape') return;
     if (renamingPlaylistId !== null) {
       closeRenamePlaylistDialog();
@@ -187,14 +215,17 @@
   /** Сколько строк вообще нужно активной вкладке — предел, до которого растёт бюджет. */
   $: rowsNeeded =
     activeTab === 'liked' ? $likedTracks.length
-    : activeTab === 'disliked' ? $dislikedTracks.length
+    : activeTab === 'disliked' ? hiddenMatches.length
     : activeTab === 'local' ? localTracks.length
     : activeTab === 'artists' ? groupedArtists.length
     : openedPlaylist ? filteredPlaylistTracks.length
     : $playlists.length;
 
   $: visibleLiked = $likedTracks.slice(0, rowBudget);
-  $: visibleDisliked = $dislikedTracks.slice(0, rowBudget);
+  let hiddenQuery = '';
+  $: hiddenMatches = $dislikedTracks.filter(track => `${track.title} ${track.artist}`.toLocaleLowerCase('ru').includes(hiddenQuery.trim().toLocaleLowerCase('ru')));
+  $: visibleDisliked = hiddenMatches.slice(0, rowBudget);
+  $: pendingDislikes = $dislikeSyncPending.filter(item => item.uid === $settings.yandexUser?.uid);
   $: visibleLocal = localTracks.slice(0, rowBudget);
   let artistSort: 'liked' | 'name' | 'recent' = 'liked';
   const artistSortOptions = [
@@ -223,18 +254,22 @@
       return {};
     }
 
+    let frame = 0;
     const observer = new IntersectionObserver((entries) => {
       const match = entries.find((entry) => entry.isIntersecting);
       if (!match) return;
       // Если человек листает быстро и уже приблизился к нижней границе,
       // берем увеличенную порцию, чтобы снизу не мелькала пустота.
       const isUrgent = match.boundingClientRect.top < (typeof window !== 'undefined' ? window.innerHeight * 1.3 : 1200);
-      const step = isUrgent ? ROWS_STEP * 2 : ROWS_STEP;
-      rowBudget = Math.min(rowsNeeded, rowBudget + step);
-    }, { rootMargin: '1800px 0px' });
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        rowBudget = Math.min(rowsNeeded, rowBudget + (isUrgent ? ROWS_STEP * 2 : ROWS_STEP));
+      });
+    }, { rootMargin: '500px 0px' });
 
     observer.observe(node);
-    return { destroy: () => observer.disconnect() };
+    return { destroy: () => { observer.disconnect(); if (frame) cancelAnimationFrame(frame); } };
   }
 
   function startPlaylistPreview(e: Event, pl: any) {
@@ -255,7 +290,8 @@
     activeTrackMenu = null;
     if (typeof requestAnimationFrame !== 'undefined') {
       requestAnimationFrame(() => {
-        document.querySelector<HTMLElement>('.library-playlist-detail')?.scrollIntoView({ block: 'start' });
+        if ($settings.design === 'liquid-glass') document.querySelector<HTMLElement>('main')?.scrollTo({ top: 0 });
+        else document.querySelector<HTMLElement>('.library-playlist-detail')?.scrollIntoView({ block: 'start' });
       });
     }
   }
@@ -544,6 +580,7 @@
   function playTrackList(track: any, list: any[], position?: number) {
     if (!track) return;
     stopWave();
+    setGlassQueueContext(openedPlaylist?.title || 'Медиатека', openedPlaylist ? playlistCoverUrl(openedPlaylist, $downloadedCoverCache) : track.coverUrl, list);
     if (track.isBanned) {
       notify('Этот источник недавно не отвечал. Пробую запустить трек ещё раз.', 'info');
     }
@@ -766,7 +803,7 @@
   }
 </script>
 
-<div class="w-full max-w-6xl mx-auto flex flex-col">
+<div class="library-root w-full max-w-6xl mx-auto flex flex-col" class:lg-playlist-open={$settings.design === 'liquid-glass' && !!openedPlaylist}>
   <div class="flex items-center justify-between mb-8">
     <h1 class="page-title">Медиатека</h1>
   </div>
@@ -872,6 +909,8 @@
           <p class="display-title">Здесь будет твоя музыка</p>
           <p class="empty-hint">Всё, что лежит на компьютере — папкой целиком или по одному файлу. Кнопка «Выбрать файлы» сверху.</p>
         </div>
+      {:else if $settings.design === 'liquid-glass'}
+        <LiquidGlassTrackList tracks={localTracks} artwork={true} onplay={track => playTrackList(track, localTracks)} onremove={track => void deleteTrack(new Event('click'), track.id)} onexport={$settings.exportEnabled ? track => void exportTrackToFile(track) : undefined} />
       {:else}
         <div class="flex flex-col gap-3 p-2">
           {#each visibleLocal as track, i}
@@ -965,13 +1004,15 @@
             </button>
           </div>
         </div>
-        {#if likedView === 'list'}
+        {#if likedView === 'list' && $settings.design === 'liquid-glass'}
+          <LiquidGlassTrackList tracks={$likedTracks} artwork={true} onplay={track => playTrackList(track, $likedTracks)} isdownloaded={track => isTrackCached(track, cachedUrns)} ondownload={track => void downloadTrack(null, track)} onremove={track => void removeDownloadedTrack(new Event('click'), track)} onexport={$settings.exportEnabled ? track => void exportTrackToFile(track) : undefined} />
+        {:else if likedView === 'list'}
         <!-- svelte-ignore a11y-no-static-element-interactions -->
         <div
           class="track-row-list"
           class:has-open-track-menu={activeTrackMenu !== null}
         >
-          {#each visibleLiked as track, i}
+          {#each visibleLiked as track, i (`${track.source}:${track.id ?? `${track.title}\u0000${track.artist}`}`)}
             {@const isActive = $currentTrack?.title === track.title && $currentTrack?.artist === track.artist}
             {@const cached = isTrackCached(track, cachedUrns)}
             <!-- svelte-ignore a11y-click-events-have-key-events -->
@@ -1050,6 +1091,8 @@
                   </button>
                 {/if}
 
+                <TrackWaveButton {track} buttonClass="track-row-action" />
+
                 <!-- Информация и плейлисты управляются одним состоянием. Поэтому открытие
                      одного меню всегда закрывает соседнее и меню другой строки. -->
                 <div class="track-row-menu-slot" data-track-menu-owner={i}>
@@ -1120,7 +1163,7 @@
             class="library-track-grid"
             class:has-open-track-menu={activeTrackMenu !== null}
           >
-            {#each visibleLiked as track, i}
+            {#each visibleLiked as track, i (`${track.source}:${track.id ?? `${track.title}\u0000${track.artist}`}`)}
               {@const isActive = $currentTrack?.title === track.title && $currentTrack?.artist === track.artist}
               {@const cached = isTrackCached(track, cachedUrns)}
               <!-- svelte-ignore a11y-click-events-have-key-events -->
@@ -1131,32 +1174,33 @@
                 class:has-open-menu={activeTrackMenu?.row === i}
                 on:click={(e) => toggleTrackPlayback(e, track, $likedTracks)}
               >
-                <div class="tile-art spec-art" class:is-active={isActive}>
-                  <div class="library-tile-art-clip">
+                <div class="tile-card-surface" aria-hidden="true"></div>
+                <div class="tile-art" class:is-active={isActive}>
+                  <div class="cover-tilt-surface spec-art art-glow">
                     {#if track.coverUrl}
                       <img src={coverUrlForTrack(track, $downloadedCoverCache)} alt="" class="tile-cover-image" loading="lazy" decoding="async" />
                     {:else}
                       <div class="library-tile-art-empty"><Music size={34} /></div>
                     {/if}
-
-                    <div class="tile-cover-overlay">
-                      <button
-                        type="button"
-                        class="tile-play-button {track.isBanned ? 'is-muted' : ''}"
-                        aria-label={isActive && $isPlaying ? `Поставить «${track.title}» на паузу` : `Воспроизвести «${track.title}»`}
-                        on:click={(e) => toggleTrackPlayback(e, track, $likedTracks)}
-                      >
-                        <MorphIcon
-                          icon={isActive && $isPlaying ? PauseIcon : PlayIcon}
-                          size={20}
-                          strokeWidth={2.35}
-                          fill="currentColor"
-                          class="play-pause-morph"
-                          spring="snappy"
-                          reducedMotion="user"
-                        />
-                      </button>
-                    </div>
+                    <div class="tile-cover-shade"></div>
+                  </div>
+                  <div class="tile-cover-overlay">
+                    <button
+                      type="button"
+                      class="tile-play-button {track.isBanned ? 'is-muted' : ''}"
+                      aria-label={isActive && $isPlaying ? `Поставить «${track.title}» на паузу` : `Воспроизвести «${track.title}»`}
+                      on:click={(e) => toggleTrackPlayback(e, track, $likedTracks)}
+                    >
+                      <MorphIcon
+                        icon={isActive && $isPlaying ? PauseIcon : PlayIcon}
+                        size={20}
+                        strokeWidth={2.35}
+                        fill="currentColor"
+                        class="play-pause-morph"
+                        spring="snappy"
+                        reducedMotion="user"
+                      />
+                    </button>
                   </div>
 
                   {#if cached}
@@ -1227,6 +1271,8 @@
                       </button>
                     {/if}
 
+                    <TrackWaveButton {track} buttonClass="library-tile-action" iconSize={tileActionIconSize} />
+
                     <button
                       type="button"
                       class="library-tile-action ui-tip"
@@ -1264,12 +1310,16 @@
                 </div>
 
                 <div class="tile-meta library-tile-meta">
-                  <h3 class="tile-title" class:is-active={isActive} title={track.title}>{track.title}</h3>
-                  <div class="library-tile-caption">
-                    <span class="tile-sub"><ArtistTag artist={track.artist} artists={track.artists} /></span>
-                    <span class="library-tile-source" class:is-yandex={track.source === 'yandex'}>
-                      {track.source === 'yandex' ? 'Я.Музыка' : 'SoundCloud'}
-                    </span>
+                  <div class="tile-label-frame">
+                    <div class="tile-label-surface">
+                      <h3 class="tile-title" class:is-active={isActive} title={track.title}>{track.title}</h3>
+                      <div class="library-tile-caption">
+                        <span class="tile-sub"><ArtistTag artist={track.artist} artists={track.artists} /></span>
+                        <span class="library-tile-source" class:is-yandex={track.source === 'yandex'}>
+                          {track.source === 'yandex' ? 'Я.Музыка' : 'SoundCloud'}
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -1360,6 +1410,12 @@
             Все плейлисты
           </button>
 
+          {#if $settings.design === 'liquid-glass'}
+            <LiquidGlassMediaHeader title={openedPlaylist.title} id="library-playlist-detail-title" tracks={openedPlaylist.tracks || []} artist={openedPlaylist.tracks?.[0]?.artist || ''} avatar={openedPlaylist.tracks?.[0]?.artistAvatarUrl || ''} genre={openedPlaylist.tracks?.[0]?.genre || ''} playing={isPlayingThis} onplay={() => togglePlaylistPlayback(openedPlaylist)} onshuffle={() => shufflePlayback(openedPlaylist.tracks || [])}>
+              {#snippet artwork()}<PlaylistCoverEditor playlist={openedPlaylist} />{/snippet}
+              {#snippet actions()}<button on:click={(event) => openRenamePlaylistDialog(event, openedPlaylist)}><Pencil size={15} />Переименовать</button><button on:click={() => downloadAllTracks(openedPlaylist.tracks || [])}><Download size={15} />Скачать треки</button><PlaylistSyncControl playlist={openedPlaylist} />{/snippet}
+            </LiquidGlassMediaHeader>
+          {:else}
           <div class="library-playlist-detail-hero">
             {#key openedPlaylist.id}
               <PlaylistCoverEditor playlist={openedPlaylist} />
@@ -1429,8 +1485,9 @@
               </div>
             </div>
           </div>
+          {/if}
 
-          <PlaylistSyncControl playlist={openedPlaylist} />
+          {#if $settings.design !== 'liquid-glass'}<PlaylistSyncControl playlist={openedPlaylist} />{/if}
           <div class="library-playlist-detail-section-head">
             <div>
               <span>Содержание</span>
@@ -1462,6 +1519,8 @@
               <strong>Ничего не найдено</strong>
               <p>Попробуй другое название или имя исполнителя. Крестик в строке поиска вернёт все треки.</p>
             </div>
+          {:else if $settings.design === 'liquid-glass'}
+            <LiquidGlassTrackList tracks={filteredPlaylistTracks.map(entry => entry.track)} indices={filteredPlaylistTracks.map(entry => entry.index)} onplay={track => playTrackList(track, openedPlaylist.tracks)} />
           {:else}
             <div class="library-playlist-track-list">
               {#each visiblePlaylistTracks as { track, index }}
@@ -1491,6 +1550,7 @@
                     <span><ArtistTag artist={track.artist} artists={track.artists} /></span>
                   </div>
                   <div class="library-playlist-track-actions">
+                    <TrackWaveButton {track} iconSize={16} />
                     {#if isTrackCached(track, cachedUrns)}
                       <button
                         type="button"
@@ -1639,6 +1699,11 @@
         </section>
       {/if}
     {:else if activeTab === 'disliked'}
+      <div class="hidden-tracks-header">
+        <h2 class="section-title">Скрытые треки</h2>
+        <p class="empty-hint">Здесь можно прослушать скрытые треки и вернуть их в рекомендации. Отметки треков Яндекса передаются в подключённый аккаунт Яндекс Музыки.</p>
+        {#if pendingDislikes.length}<p class="hidden-sync-pending" role="status">Ожидают отправки: {pendingDislikes.length}. Отметки сохранятся и отправятся после подключения.</p>{/if}
+      </div>
       {#if $dislikedTracks.length === 0}
         <div class="w-full py-20 px-10 flex flex-col items-start plate mt-4">
           <ThumbsDown size={26} class="mb-5 text-white/20" />
@@ -1647,14 +1712,15 @@
         </div>
       {:else}
         <div class="library-liked-toolbar">
+          <label class="hidden-tracks-search"><SearchIcon size={16} /><input aria-label="Поиск скрытых треков" placeholder="Название или исполнитель" bind:value={hiddenQuery} on:input={() => rowBudget = ROWS_FIRST_PAINT} /></label>
           <div class="text-sm text-neutral-400">{withCount($dislikedTracks.length, 'скрытый трек', 'скрытых трека', 'скрытых треков')}</div>
           <div class="library-liked-tools">
             <button
               class="glass-button hover:bg-red-500/20 hover:text-red-400 text-neutral-400 transition-all px-4 py-2 rounded-xl font-medium flex items-center gap-2 text-sm shadow-md"
-              on:click={handleClearAllDislikes}
-              title="Очистить список скрытых треков"
+              data-press-late on:click={handleClearAllDislikes}
+              title="Вернуть все скрытые треки в рекомендации"
             >
-              <Trash2 size={16} /> Очистить список
+              <Trash2 size={16} /> Вернуть все
             </button>
           </div>
         </div>
@@ -1691,12 +1757,13 @@
                   <span class="track-row-title">{track.title}</span>
                 </div>
                 <span class="track-row-artist"><ArtistTag artist={track.artist} artists={track.artists} /></span>
+                <span class="hidden-track-status">{yandexDislikeId(track) ? pendingDislikes.some(item => item.id === yandexDislikeId(track)) ? 'Отметка ждёт отправки в Яндекс' : 'Яндекс Музыка' : 'Скрыт в Lomify'}</span>
               </div>
               <div class="track-row-actions">
                 <button
                   type="button"
                   class="track-row-action text-red-500 hover:text-red-400"
-                  on:click|stopPropagation={(e) => restoreDislikedTrack(e, track)}
+                  data-press-late on:click|stopPropagation={(e) => restoreDislikedTrack(e, track)}
                   aria-label="Вернуть в рекомендации"
                   title="Вернуть в рекомендации"
                 >
@@ -1706,7 +1773,7 @@
                 <button
                   type="button"
                   class="track-row-action hover:text-primary"
-                  on:click|stopPropagation={(e) => likeDislikedTrack(e, track)}
+                  data-press-late on:click|stopPropagation={(e) => likeDislikedTrack(e, track)}
                   aria-label="Добавить в любимые"
                   title="Добавить в любимые"
                 >
@@ -1747,6 +1814,7 @@
             </div>
           {/each}
         </div>
+        {#if hiddenMatches.length === 0}<p class="empty-hint">Нет скрытых треков по этому запросу.</p>{/if}
       {/if}
     {/if}
     {#if rowBudget < rowsNeeded}
@@ -1931,3 +1999,12 @@
     </div>
   </div>
 {/if}
+
+<style>
+  .hidden-tracks-header { margin-bottom: 18px; }
+  .hidden-tracks-header .empty-hint { max-width: 70ch; }
+  .hidden-sync-pending { margin-top: 10px; font-size: 12px; color: var(--color-primary); }
+  .hidden-tracks-search { display: flex; align-items: center; gap: 8px; border: 1px solid rgb(255 255 255 / 12%); border-radius: 12px; padding: 9px 12px; max-width: 360px; flex: 1; color: #9996a2; }
+  .hidden-tracks-search input { min-width: 0; width: 100%; color: white; background: none; border: 0; outline: none; font-size: 12px; }
+  .hidden-track-status { display: block; font-size: 10px; color: #9996a2; }
+</style>

@@ -6,8 +6,8 @@
     const code = urlParams.get('code');
     
     if (code) {
-      // Save code to localStorage so the main app window can read it
-      localStorage.setItem('spotify_auth_code', code);
+      // Desktop authorization uses the native loopback event; this legacy page
+      // must never persist a one-time authorization code.
       // Close the popup/tab
       setTimeout(() => {
         window.close();

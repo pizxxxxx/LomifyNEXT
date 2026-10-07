@@ -1,58 +1,59 @@
 /**
- * «Моя волна» — бесконечный персональный поток Яндекс Музыки.
- *
- * Отличие от кнопки, которая была на главной раньше: та собирала лежащее в тренде SoundCloud
- * один раз и складывала в очередь — то есть обычный плейлист, который кончается и ни на что не
- * реагирует. Волна ведёт себя как в приложении Яндекса: очередь не кончается (порция
- * докладывается заранее, ещё до того как играющее закончится), а пропуски и дослушивания
- * уходят обратно на станцию, и следующая порция собирается уже с их учётом.
- *
- * Почему это отдельный модуль, а не код в плеере или в шапке главной. Состояние сеанса —
- * идентификатор порции, хвост для продолжения, признак «волна играет» — нужно сразу троим:
- * кнопке (запустить), плееру (доложить порцию и отметить исход трека) и любому месту, которое
- * захочет показать, что играет волна. Держать его в компоненте нельзя: шапка главной
- * размонтируется, стоит уйти с главной, и вместе с ней исчез бы сеанс.
- *
- * Состояние живёт только в памяти и намеренно не переживает перезапуск: порция и её `batchId`
- * — это открытый сеанс на стороне станции, и восстанавливать его из localStorage значило бы
- * присылать отметки в порцию, о которой станция уже забыла.
+ * Shared, memory-only Wave session for both music services.
+ * Yandex owns its station and receives playback feedback. SoundCloud builds a local
+ * stream from fresh taste recommendations and related tracks, then follows completed
+ * tracks and excludes repeatedly skipped artists. Generation guards discard old requests.
  */
 
-import { writable, get } from 'svelte/store';
-import { settings, queue, currentTrack, isPlaying, notify, dislikedTracks } from './stores';
+import { writable, derived, get } from 'svelte/store';
+import { settings, queue, currentTrack, isPlaying, notify, dislikedTracks, waveDisplayName, likedTracks, listenStats, searchHistory, playlists } from './stores';
 import { isTrackDisliked } from './dislikes';
-import { yandexWaveBatch, yandexWaveFeedback } from './yandex';
+import { yandexWaveBatch, yandexWaveFeedback, prepareYandexWaveFilters } from './yandex';
+import { enrichWaveCandidates } from './waveMetadata';
+import { whenSecretsReady, secretsAreReady } from './secretStorage';
+import { getFreshWaveTracks } from './freshWave';
 import {
   describeWaveFilters,
   hasWaveFilters,
   trackMatchesWaveFilters,
+  trackMatchesWaveGenre,
   isNeuroTrack
 } from './waveFilters';
 
 /** Играет ли сейчас волна. Плеер смотрит на это, чтобы докладывать порции. */
 export const waveActive = writable(false);
+export const waveSource = writable<'soundcloud' | 'yandex' | null>(null);
+export const waveTasteMode = writable<'fresh' | 'service'>('service');
+export interface WaveSeed {
+  id: string;
+  title: string;
+  artist?: string;
+  source: 'yandex' | 'soundcloud';
+}
+export const waveSeed = writable<WaveSeed | null>(null);
+export const waveLabel = derived([waveSeed, waveDisplayName], ([$seed, $name]) =>
+  $seed ? `Моя волна по треку: ${$seed.title}` : $name
+);
 let waveRequestGeneration = 0;
+let waveProvider: 'yandex' | 'soundcloud' = 'yandex';
+let freshPersonal = false;
+let localController: AbortController | null = null;
+const localWave = () => freshPersonal || waveProvider === 'soundcloud';
+let soundCloudSession = '';
+let soundCloudAnchor: any = null;
+const soundCloudSeen = new Set<string>();
+const soundCloudSkippedArtists = new Map<string, number>();
+const scKey = (track: any) => `${track?.source}:${track?.id}`;
+const scArtist = (track: any) => `${track?.artist || ''}`.toLocaleLowerCase('ru').trim();
 
 /** Текущая станция ротора Яндекс Музыки (user:onyourwave или genre:...). */
 let activeStationId = 'user:onyourwave';
 
-function stationForState(state: any): string {
-  if (state.waveGenre) {
-    const g = `${state.waveGenre}`.toLowerCase();
-    const l = `${state.waveLanguage || ''}`.toLowerCase();
-    if (l === 'ru') {
-      if (g === 'rock') return 'genre:rusrock';
-      if (g === 'rap') return 'genre:rusrap';
-      if (g === 'pop') return 'genre:ruspop';
-      if (g === 'rnb') return 'genre:rusrnb';
-    } else if (l === 'en' || l === 'other') {
-      if (g === 'rock') return 'genre:foreignrock';
-      if (g === 'rap') return 'genre:foreignrap';
-      if (g === 'pop') return 'genre:foreignpop';
-    }
-    return `genre:${g}`;
-  }
-  return 'user:onyourwave';
+const filterSignature = (state: any) => JSON.stringify([state.waveGenre, state.waveLanguage, state.waveContent, state.waveAllowNeuro, state.waveFreshTaste, state.searchSource]);
+
+function withoutDislikes(tracks: any[]): any[] {
+  const blocked = get(dislikedTracks);
+  return tracks.filter(track => !isTrackDisliked(blocked, track));
 }
 
 const NEURO_SEARCH_QUERIES = [
@@ -129,7 +130,16 @@ function token(): string {
   return get(settings).yandexToken || '';
 }
 
-/** Доступна ли волна: она персональная, и без аккаунта Яндекса её просто нет. */
+// Feedback and continuation belong to the account that opened the station.
+// Never reuse its batch under a newly connected account.
+let waveAccount = token();
+settings.subscribe(state => {
+  const account = state.yandexToken || '';
+  if (account !== waveAccount && get(waveActive) && waveProvider === 'yandex') stopWave();
+  waveAccount = account;
+});
+
+/** Доступна ли серверная станция Яндекса для выбранного источника. */
 export function waveAvailable(state = get(settings)): boolean {
   return state.searchSource === 'yandex' && Boolean(state.yandexToken);
 }
@@ -142,6 +152,102 @@ export function waveAvailable(state = get(settings)): boolean {
  */
 function mark(track: any, sourceBatchId = batchId, station = activeStationId): any {
   return { ...track, waveBatchId: sourceBatchId, waveStation: station };
+}
+
+function soundCloudBatch(tracks: any[], seen: ReadonlySet<string>, skipped: ReadonlyMap<string, number>): any[] {
+  const state = get(settings), blocked = get(dislikedTracks);
+  const unique = new Set<string>(), artists = new Map<string, number>();
+  const eligible = tracks.filter(track => track?.id && track.source === 'soundcloud' && !track.isBanned
+    && !isTrackDisliked(blocked, track) && !seen.has(scKey(track))
+    && trackMatchesWaveGenre(track, state)
+    && (state.waveAllowNeuro !== false || !isNeuroTrack(track))
+    && (state.waveAllowNeuro !== 'only' || isNeuroTrack(track))
+    && (skipped.get(scArtist(track)) || 0) < 2);
+  const output: any[] = [];
+  for (const allowAdjacent of [false, true]) for (const track of eligible) {
+    const identity = scKey(track), artist = scArtist(track);
+    if (output.length >= 20) break;
+    if (unique.has(identity) || (artists.get(artist) || 0) >= 4
+      || (!allowAdjacent && scArtist(output.at(-1)) === artist)) continue;
+    output.push(track); unique.add(identity); artists.set(artist, (artists.get(artist) || 0) + 1);
+  }
+  return output;
+}
+
+async function requestSoundCloudBatch(seed: WaveSeed | null, anchor: any, seen = soundCloudSeen, skipped = soundCloudSkippedArtists): Promise<any[]> {
+  const api = await import('./api');
+  const relatedTo = anchor?.source === 'soundcloud' ? anchor.id : seed?.id;
+  const related = relatedTo ? await api.fetchRelatedTracks(relatedTo, 60) : [];
+  let tracks = soundCloudBatch(related, seen, skipped);
+  if (tracks.length < 10 && !seed) {
+    const personal = await api.getTrendingTracks(get(likedTracks), get(listenStats), get(searchHistory), get(playlists), { source: 'soundcloud' });
+    tracks = soundCloudBatch([...related, ...personal], seen, skipped);
+  }
+  return tracks;
+}
+
+function markSoundCloudBatch(tracks: any[]): any[] {
+  return tracks.map(track => {
+    soundCloudSeen.add(scKey(track));
+    return { ...track, waveBatchId: soundCloudSession, waveStation: freshPersonal ? `fresh:${waveProvider}` : 'soundcloud' };
+  });
+}
+
+async function startLocalWave(seedTrack: any, options: { signal?: AbortSignal }, fresh = false, source: 'soundcloud' | 'yandex' = 'soundcloud'): Promise<boolean> {
+  const generation = ++waveRequestGeneration;
+  localController?.abort();
+  const controller = new AbortController();
+  localController = controller;
+  const abort = () => controller.abort();
+  options.signal?.addEventListener('abort', abort, { once: true });
+  if (options.signal?.aborted) controller.abort();
+  const initial = get(currentTrack);
+  const initialFilters = filterSignature(get(settings));
+  const account = token();
+  pendingBatch = null;
+  const cancelled = () => controller.signal.aborted || generation !== waveRequestGeneration || get(currentTrack) !== initial || filterSignature(get(settings)) !== initialFilters || (source === 'yandex' && token() !== account);
+  const seed: WaveSeed | null = seedTrack ? {
+    id: `${seedTrack.id ?? ''}`, title: seedTrack.title, artist: seedTrack.artist, source: 'soundcloud'
+  } : null;
+  if (seed && !/^\d+$/.test(seed.id)) { notify('Для волны выберите трек SoundCloud.', 'error'); return false; }
+  let tracks: any[];
+  const timeout = setTimeout(abort, 25000);
+  try { tracks = fresh
+    ? await abortable(getFreshWaveTracks(source, new Set(), new Map(), undefined, controller.signal), controller.signal)
+    : await abortable(requestSoundCloudBatch(seed, seed, new Set(), new Map()), controller.signal); }
+  catch (error) {
+    if (generation === waveRequestGeneration && !options.signal?.aborted && get(currentTrack) === initial) notify('Не удалось собрать волну. Проверьте соединение и повторите.', 'error');
+    return false;
+  } finally { clearTimeout(timeout); options.signal?.removeEventListener('abort', abort); }
+  if (cancelled()) return false;
+  tracks = withoutDislikes(tracks);
+  if (!tracks.length) { notify('Для волны не нашлось подходящих треков. Попробуйте другой трек или ослабьте фильтры.', 'info'); return false; }
+  waveProvider = source;
+  freshPersonal = fresh;
+  waveTasteMode.set(fresh ? 'fresh' : 'service');
+  waveSource.set(source);
+  soundCloudSession = `${fresh ? 'fresh' : 'soundcloud'}:${generation}`;
+  soundCloudSeen.clear(); soundCloudSkippedArtists.clear();
+  soundCloudAnchor = seed;
+  waveSeed.set(seed);
+  sessionOccurrences.clear();
+  startedId = '';
+  tracks = markSoundCloudBatch(tracks);
+  queue.set(tracks.slice(1));
+  watchCurrentTrack();
+  waveActive.set(true);
+  currentTrack.set(tracks[0]);
+  isPlaying.set(true);
+  return true;
+}
+
+function abortable<T>(job: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(new DOMException('Cancelled', 'AbortError'));
+    signal.addEventListener('abort', abort, { once: true });
+    job.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+    if (signal.aborted) abort();
+  });
 }
 
 function occurrenceCount(track: any): number {
@@ -159,6 +265,7 @@ interface FilteredWaveBatch {
   batchId: string;
   tailId: string;
   tracks: any[];
+  station: string;
 }
 
 /**
@@ -169,7 +276,12 @@ interface FilteredWaveBatch {
 async function filteredWaveBatch(
   rawToken: string,
   prevTrackId: string | number | null | undefined,
-  targetCount: number
+  targetCount: number,
+  seed: WaveSeed | null,
+  cancelled = () => false,
+  occurrences: ReadonlyMap<string, number> = sessionOccurrences,
+  signal?: AbortSignal,
+  prepared?: { station: string; serverLanguage: string }
 ): Promise<FilteredWaveBatch> {
   const filterState = get(settings);
   const filtered = hasWaveFilters(filterState);
@@ -180,19 +292,23 @@ async function filteredWaveBatch(
   let latestBatchId = '';
   let cursor = `${prevTrackId ?? ''}`.trim();
 
-  const targetStation = stationForState(filterState);
-  activeStationId = targetStation;
+  let evidence = prepared || await prepareYandexWaveFilters(rawToken, filterState, seed ? `track:${seed.id}` : undefined, signal);
+  let targetStation = evidence.station;
+  const metadataBudget = { remaining: 24 };
 
-  const scanBatches = filtered || sessionOccurrences.size > 0 || hasDislikes ? FILTER_SCAN_BATCHES : 1;
+  const scanBatches = filtered || occurrences.size > 0 || hasDislikes ? FILTER_SCAN_BATCHES : 1;
   for (let attempt = 0; attempt < scanBatches; attempt++) {
+    if (cancelled()) throw new DOMException('Cancelled', 'AbortError');
     let batch: any;
     try {
-      batch = await yandexWaveBatch(rawToken, cursor || undefined, targetStation);
+      batch = await yandexWaveBatch(rawToken, cursor || undefined, targetStation, signal);
     } catch (e) {
-      if (targetStation !== 'user:onyourwave') {
+      if (cancelled()) throw e;
+      if (!seed && targetStation !== 'user:onyourwave') {
         // Fallback к обычной волне если специфическая станция не ответила
-        batch = await yandexWaveBatch(rawToken, cursor || undefined, 'user:onyourwave');
-        activeStationId = 'user:onyourwave';
+        evidence = await prepareYandexWaveFilters(rawToken, filterState, 'user:onyourwave', signal);
+        targetStation = evidence.station;
+        batch = await yandexWaveBatch(rawToken, undefined, targetStation, signal);
       } else {
         throw e;
       }
@@ -201,14 +317,15 @@ async function filteredWaveBatch(
     if (batch.tracks.length === 0) break;
 
     const nextCursor = `${batch.tracks[batch.tracks.length - 1]?.id ?? ''}`.trim();
-    for (const track of batch.tracks) {
+    const candidates = filtered ? await enrichWaveCandidates(rawToken, batch.tracks, filterState, evidence, metadataBudget, signal) : batch.tracks;
+    for (const track of candidates) {
       const id = `${track?.id ?? ''}`;
       if (
         !id ||
         seen.has(id) ||
-        occurrenceCount(track) >= MAX_TRACK_OCCURRENCES ||
+        (occurrences.get(id) ?? 0) >= MAX_TRACK_OCCURRENCES ||
         isTrackDisliked(currentDisliked, track) ||
-        !trackMatchesWaveFilters(track, filterState)
+        !trackMatchesWaveFilters(track, filterState, evidence)
       ) continue;
       seen.add(id);
       tracks.push(mark(track, batch.batchId || latestBatchId, targetStation));
@@ -221,19 +338,19 @@ async function filteredWaveBatch(
 
   // Если выбран режим "только нейро" и из ротора не набралось достаточно треков,
   // дополняем проверенными нейротреками напрямую из каталога Яндекса
-  if (filterState.waveAllowNeuro === 'only' && tracks.length < targetCount) {
+  if (!seed && filterState.waveAllowNeuro === 'only' && tracks.length < targetCount) {
     const needed = targetCount - tracks.length + 5;
     const neuroTracks = await fetchNeuroTracksFromYandex(rawToken, needed);
     for (const track of neuroTracks) {
       const id = `${track?.id ?? ''}`;
-      if (!id || seen.has(id) || occurrenceCount(track) >= MAX_TRACK_OCCURRENCES) continue;
+      if (!id || seen.has(id) || (occurrences.get(id) ?? 0) >= MAX_TRACK_OCCURRENCES || isTrackDisliked(currentDisliked, track) || !trackMatchesWaveFilters(track, filterState)) continue;
       seen.add(id);
       tracks.push(mark(track, latestBatchId || 'neuro-batch', 'neuro-search'));
       if (tracks.length >= targetCount) break;
     }
   }
 
-  return { batchId: latestBatchId, tailId: cursor, tracks };
+  return { batchId: latestBatchId, tailId: cursor, tracks, station: targetStation };
 }
 
 /**
@@ -242,33 +359,76 @@ async function filteredWaveBatch(
  * Повторный запуск во время игры — это осознанный жест «собери заново»: станция отдаёт новую
  * порцию с учётом всего, что человек успел пропустить и дослушать.
  */
-export async function startWave(): Promise<boolean> {
+export async function startWave(
+  seedTrack?: { id?: string | number; title: string; artist?: string; source: string } | null,
+  options: { signal?: AbortSignal } = {}
+): Promise<boolean> {
+  if (options.signal?.aborted) return false;
+  if (!secretsAreReady()) {
+    const generation = ++waveRequestGeneration;
+    const initial = get(currentTrack);
+    await whenSecretsReady();
+    if (generation !== waveRequestGeneration || options.signal?.aborted || get(currentTrack) !== initial) return false;
+  }
+  if (!seedTrack && get(settings).waveFreshTaste === true) {
+    const source = get(settings).searchSource === 'yandex' ? 'yandex' : 'soundcloud';
+    if (source === 'yandex' && !token()) { notify('Подключите Яндекс Музыку в настройках сервисов.', 'error'); return false; }
+    return startLocalWave(null, options, true, source);
+  }
+  if (seedTrack?.source === 'soundcloud' || (!seedTrack && !waveAvailable())) {
+    return startLocalWave(seedTrack, options);
+  }
   const requestGeneration = ++waveRequestGeneration;
+  pendingBatch = null;
   const t = token();
+  const initialTrack = get(currentTrack);
+  const initialFilters = filterSignature(get(settings));
   if (!t) {
-    notify('Волна работает от аккаунта Яндекс Музыки — вставьте токен в настройках', 'error');
+    notify('Подключите Яндекс Музыку в разделе «Настройки» - «Сервисы», затем включите волну снова.', 'error');
     return false;
   }
 
+  const seed: WaveSeed | null = seedTrack ? {
+    id: `${seedTrack.id ?? ''}`.split(':')[0], title: seedTrack.title, artist: seedTrack.artist, source: 'yandex'
+  } : null;
+  if (seedTrack && (seedTrack.source !== 'yandex' || !/^\d+$/.test(seed!.id))) {
+    notify('Для волны по треку выберите трек Яндекс Музыки.', 'error');
+    return false;
+  }
+  localController?.abort();
+  const controller = new AbortController();
+  localController = controller;
+  const abort = () => controller.abort();
+  options.signal?.addEventListener('abort', abort, { once: true });
+  const cancelled = () => controller.signal.aborted || options.signal?.aborted === true || requestGeneration !== waveRequestGeneration || token() !== t || get(currentTrack) !== initialTrack || filterSignature(get(settings)) !== initialFilters;
+
   // «Собрать заново» во время активной волны продолжает тот же сеанс и сохраняет лимит
   // повторов. Новый запуск после остановки начинает чистую историю.
-  if (!get(waveActive)) sessionOccurrences.clear();
+  const sameStation = waveProvider === 'yandex' && get(waveSeed)?.id === seed?.id;
+  const occurrences = get(waveActive) && sameStation ? sessionOccurrences : new Map<string, number>();
 
   let batch: FilteredWaveBatch;
+  let timedOut = false;
+  const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 25_000);
   try {
-    batch = await filteredWaveBatch(t, null, FILTER_TARGET_TRACKS);
+    batch = await abortable(filteredWaveBatch(t, null, FILTER_TARGET_TRACKS, seed, cancelled, occurrences, controller.signal), controller.signal);
   } catch (e) {
-    if (requestGeneration !== waveRequestGeneration) return false;
+    if (timedOut && requestGeneration === waveRequestGeneration && get(currentTrack) === initialTrack) notify('Волна долго отвечает. Попробуйте меньше фильтров или повторите запуск.', 'error');
+    if (cancelled()) return false;
     console.error('[волна] станция не ответила', e);
     const reason = e instanceof Error ? e.message.trim() : '';
-    notify(reason || 'Волна не собралась: Яндекс Музыка не ответила', 'error');
+    notify(seed ? `Не удалось включить волну по треку «${seed.title}». ${reason || 'Яндекс Музыка не ответила. Попробуйте снова.'}` : reason || 'Волна не собралась: Яндекс Музыка не ответила', 'error');
     return false;
+  } finally {
+    clearTimeout(timeout);
+    options.signal?.removeEventListener('abort', abort);
   }
 
   // A manual selection can happen while Yandex is preparing the first batch.
   // An old response must never replace the queue the listener just chose.
-  if (requestGeneration !== waveRequestGeneration) return false;
+  if (cancelled()) return false;
 
+  batch.tracks = withoutDislikes(batch.tracks);
   if (batch.tracks.length === 0) {
     const filter = describeWaveFilters(get(settings));
     notify(
@@ -281,6 +441,15 @@ export async function startWave(): Promise<boolean> {
   }
 
   batchId = batch.batchId;
+  waveProvider = 'yandex';
+  freshPersonal = false;
+  waveTasteMode.set('service');
+  waveSource.set('yandex');
+  soundCloudSeen.clear(); soundCloudSkippedArtists.clear(); soundCloudAnchor = null;
+  if (occurrences !== sessionOccurrences) sessionOccurrences.clear();
+  activeStationId = batch.station;
+  waveSeed.set(seed);
+  pendingBatch = null;
   const tracks = batch.tracks;
   rememberOccurrences(tracks);
   tailId = batch.tailId || `${tracks[tracks.length - 1].id}`;
@@ -306,8 +475,12 @@ export async function startWave(): Promise<boolean> {
 /** Остановить волну. Играющий трек не трогаем — останавливается только докладка порций. */
 export function stopWave(): void {
   waveRequestGeneration++;
-  if (!get(waveActive)) return;
+  localController?.abort(); localController = null;
+  freshPersonal = false;
+  waveTasteMode.set('service');
   waveActive.set(false);
+  waveSeed.set(null);
+  waveSource.set(null);
   batchId = '';
   tailId = '';
   startedId = '';
@@ -315,6 +488,8 @@ export function stopWave(): void {
   filterMissNotified = false;
   activeStationId = 'user:onyourwave';
   sessionOccurrences.clear();
+  soundCloudSeen.clear(); soundCloudSkippedArtists.clear(); soundCloudAnchor = null; soundCloudSession = '';
+  waveProvider = 'yandex';
 }
 
 /**
@@ -339,9 +514,16 @@ function watchCurrentTrack(): void {
       return;
     }
 
+    if (localWave() && track.waveBatchId !== soundCloudSession) {
+      stopWave();
+      return;
+    }
     const id = `${track.id}`;
     if (id === startedId) return; // повторный запуск того же трека: станции это не новость
     startedId = id;
+    if (localWave()) {
+      return;
+    }
     yandexWaveFeedback(token(), 'trackStarted', {
       batchId: track.waveBatchId,
       trackId: track.id,
@@ -363,6 +545,17 @@ export function waveTrackDone(
   outcome: 'finished' | 'skip' | 'dropped'
 ): void {
   if (!get(waveActive) || !track?.waveBatchId || outcome === 'dropped') return;
+  if (localWave()) {
+    if (track.waveBatchId !== soundCloudSession) return;
+    if (outcome === 'skip') {
+      const artist = scArtist(track);
+      soundCloudSkippedArtists.set(artist, (soundCloudSkippedArtists.get(artist) || 0) + 1);
+      queue.update(list => list.filter(item => (soundCloudSkippedArtists.get(scArtist(item)) || 0) < 2));
+    } else if (playedSeconds >= Math.min(40, (Number(track.duration) || 80000) / 2000)) {
+      soundCloudAnchor = track;
+    }
+    return;
+  }
   yandexWaveFeedback(token(), outcome === 'skip' ? 'skip' : 'trackFinished', {
     batchId: track.waveBatchId,
     trackId: track.id,
@@ -393,9 +586,29 @@ async function fetchBatch(): Promise<void> {
 
   pendingBatch = (async () => {
     try {
-      const batch = await filteredWaveBatch(token(), tailId, FILTER_TARGET_TRACKS);
+      const rawToken = token();
+      const initialFilters = filterSignature(get(settings));
+      const cancelled = () => !get(waveActive) || requestGeneration !== waveRequestGeneration || filterSignature(get(settings)) !== initialFilters || (waveProvider === 'yandex' && rawToken !== token());
+      if (localWave()) {
+        const controller = new AbortController();
+        localController = controller;
+        const timeout = setTimeout(() => controller.abort(), 25000);
+        let tracks: any[];
+        try { tracks = await abortable(freshPersonal
+          ? getFreshWaveTracks(waveProvider, soundCloudSeen, soundCloudSkippedArtists, soundCloudAnchor, controller.signal)
+          : requestSoundCloudBatch(get(waveSeed), soundCloudAnchor), controller.signal); }
+        finally { clearTimeout(timeout); }
+        if (!cancelled()) queue.update(list => [...list, ...markSoundCloudBatch(withoutDislikes(tracks))]);
+        return;
+      }
+      const controller = new AbortController();
+      localController = controller;
+      const timeout = setTimeout(() => controller.abort(), 25_000);
+      let batch: FilteredWaveBatch;
+      try { batch = await abortable(filteredWaveBatch(rawToken, tailId, FILTER_TARGET_TRACKS, get(waveSeed), cancelled, sessionOccurrences, controller.signal), controller.signal); }
+      finally { clearTimeout(timeout); }
       // Пока шёл запрос, волну могли остановить — тогда порция уже никому не нужна.
-      if (!get(waveActive) || requestGeneration !== waveRequestGeneration) return;
+      if (cancelled()) return;
       if (batch.batchId) batchId = batch.batchId;
       // Хвост двигаем и при пустом результате фильтра, иначе следующий запрос принёс бы
       // те же неподходящие порции по кругу.
@@ -407,7 +620,7 @@ async function fetchBatch(): Promise<void> {
       const playing = get(currentTrack);
       if (playing?.id) known.add(`${playing.id}`);
 
-      const fresh = batch.tracks.filter((t: any) => !known.has(`${t.id}`));
+      const fresh = withoutDislikes(batch.tracks).filter((t: any) => !known.has(`${t.id}`));
       if (fresh.length > 0) {
         filterMissNotified = false;
         rememberOccurrences(fresh);
@@ -420,7 +633,7 @@ async function fetchBatch(): Promise<void> {
       // Порция не пришла — волна не рвётся: плеер доиграет очередь и попросит ещё раз.
       console.warn('[волна] порция не пришла', e);
     } finally {
-      pendingBatch = null;
+      if (requestGeneration === waveRequestGeneration) pendingBatch = null;
     }
   })();
 

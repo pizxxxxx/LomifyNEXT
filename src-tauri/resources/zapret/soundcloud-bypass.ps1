@@ -145,7 +145,7 @@ function Measure-SoundCloud([int]$maxSeconds) {
     if (Test-StopRequested) { return @{ ok = $false; ms = 0; detail = 'проверка отменена' } }
     $started = Get-Date
     try {
-      $code = & curl.exe -4 -L -sS -o NUL --connect-timeout 2 --max-time $maxSeconds -w '%{http_code}' $targets[$i] 2>$null
+      $code = & curl.exe -L -sS -o NUL --connect-timeout 2 --max-time $maxSeconds -w '%{http_code}' $targets[$i] 2>$null
     } catch {
       return @{ ok = $false; ms = 0; detail = ($targetNames[$i] + ' не ответил') }
     }
@@ -158,7 +158,7 @@ function Measure-SoundCloud([int]$maxSeconds) {
     if (Test-StopRequested) { return @{ ok = $false; ms = 0; detail = 'проверка отменена' } }
     $started = Get-Date
     try {
-      $code = & curl.exe -4 --globoff -sS -r 0-4095 --max-filesize 131072 -o NUL --connect-timeout 2 --max-time ($maxSeconds + 2) -w '%{http_code}' $issue.probeUrl 2>$null
+      $code = & curl.exe --globoff -sS -r 0-4095 --max-filesize 131072 -o NUL --connect-timeout 2 --max-time ($maxSeconds + 2) -w '%{http_code}' $issue.probeUrl 2>$null
     } catch {
       return @{ ok = $false; ms = 0; detail = 'аудиопоток трека не пришёл' }
     }
@@ -192,26 +192,28 @@ function Stop-OwnProcess {
 }
 
 function Get-SoundCloudIps {
-  $hosts = @('soundcloud.com', 'api-v2.soundcloud.com', 'a-v2.sndcdn.com', 'style.sndcdn.com', 'cf-media.sndcdn.com', 'cf-hls-media.sndcdn.com', 'ec-media.sndcdn.com', 'i1.sndcdn.com')
+  $hosts = @('soundcloud.com', 'api.soundcloud.com', 'api-v2.soundcloud.com', 'a-v2.sndcdn.com', 'style.sndcdn.com', 'cf-media.sndcdn.com', 'cf-hls-media.sndcdn.com', 'ec-media.sndcdn.com', 'i1.sndcdn.com')
+  $issue = Get-PlaybackIssue
+  if ($issue -and $issue.probeUrl) { $hosts = @(([Uri]$issue.probeUrl).Host) + $hosts }
   $resolved = @($hosts | ForEach-Object {
-    Resolve-DnsName -Name $_ -Type A -ErrorAction SilentlyContinue |
-      Where-Object { $_.Type -eq 'A' } |
+    Resolve-DnsName -Name $_ -Type A_AAAA -ErrorAction SilentlyContinue |
+      Where-Object { $_.Type -eq 'A' -or $_.Type -eq 'AAAA' } |
       Select-Object -ExpandProperty IPAddress
-  } | Sort-Object -Unique)
+  } | Select-Object -Unique)
   $ips = @()
   foreach ($value in $resolved) {
     $address = $null
-    if ([Net.IPAddress]::TryParse($value, [ref]$address) -and $address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork) {
+    if ([Net.IPAddress]::TryParse($value, [ref]$address) -and $address.AddressFamily -in @([Net.Sockets.AddressFamily]::InterNetwork, [Net.Sockets.AddressFamily]::InterNetworkV6)) {
       $ips += $address.ToString()
     }
   }
-  return @($ips | Sort-Object -Unique | Select-Object -First 32)
+  return @($ips | Select-Object -Unique -First 64)
 }
 
 function Get-SoundCloudFilter([string[]]$ips) {
   if ($ips.Count -eq 0) { throw 'Не удалось получить IP SoundCloud для точного сетевого фильтра.' }
-  $outbound = '(' + (($ips | ForEach-Object { "ip.DstAddr==$_" }) -join '||') + ')'
-  $inbound = '(' + (($ips | ForEach-Object { "ip.SrcAddr==$_" }) -join '||') + ')'
+  $outbound = '(' + (($ips | ForEach-Object { $address = [Net.IPAddress]::Parse($_); $layer = if ($address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetworkV6) { 'ipv6' } else { 'ip' }; "$layer.DstAddr==$address" }) -join '||') + ')'
+  $inbound = '(' + (($ips | ForEach-Object { $address = [Net.IPAddress]::Parse($_); $layer = if ($address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetworkV6) { 'ipv6' } else { 'ip' }; "$layer.SrcAddr==$address" }) -join '||') + ')'
   return '!impostor&&!loopback&&tcp&&((outbound&&tcp.DstPort==443&&' + $outbound + ')||(inbound&&tcp.SrcPort==443&&' + $inbound + '))'
 }
 

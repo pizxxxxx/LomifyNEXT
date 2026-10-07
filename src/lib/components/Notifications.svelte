@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { notifications, dismissNotification } from '$lib/stores';
+  import { notifications, dismissNotification, settings } from '$lib/stores';
+  import LiquidGlassNotifications from './LiquidGlassNotifications.svelte';
   import { CheckCircle2, AlertCircle, Info } from 'lucide-svelte';
   import { fly } from 'svelte/transition';
   import { cubicOut, cubicIn } from 'svelte/easing';
@@ -30,6 +31,9 @@
   }
 </script>
 
+{#if $settings.design === 'liquid-glass'}
+  <LiquidGlassNotifications />
+{:else}
 <div class="fixed bottom-24 right-6 z-[110] flex flex-col gap-2 pointer-events-none">
   {#each $notifications as notification (notification.id)}
     <div
@@ -62,6 +66,7 @@
     </div>
   {/each}
 </div>
+{/if}
 
 <style>
   .notification-action {

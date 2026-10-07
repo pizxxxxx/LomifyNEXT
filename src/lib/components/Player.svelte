@@ -1,5 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { playbackShuffle, playbackRepeat, startSleepTimer } from '$lib/liquidGlass';
+  import LiquidGlassPlayer from './LiquidGlassPlayer.svelte';
+  onMount(startSleepTimer);
   import { startRockiumBridge } from '$lib/rockiumBridge';
   onMount(startRockiumBridge);
   import { Volume2, SkipBack, SkipForward, Shuffle, Repeat, Mic2, Radio, Heart, ThumbsDown, Share2, Download, Check, Trash2, Loader2 } from 'lucide-svelte';
@@ -11,9 +14,20 @@
     Play as PlayData
   } from 'lucide';
   import { currentTrack, isPlaying, progress, duration as durationStore, currentView, previousView, settings, waveDisplayName, equalizerBands, listenStats, queue, likedTracks, dislikedTracks, trackHistory, notify, playlists, globalVolume, lyricsStatus } from '$lib/stores';
+  import { recordWaveListen } from '$lib/waveHistory';
   import { buildTrackUrn } from '$lib/utils/trackUrn';
   import { getAudioUrl, getTrackInfo, getLyrics } from '$lib/api';
-  import { waveActive, waveRefill, waveTrackDone, stopWave } from '$lib/wave';
+  import { waveActive, waveRefill, waveTrackDone, stopWave, startWave, waveLabel } from '$lib/wave';
+  let startingTrackWave = false;
+  async function playTrackWave() {
+    if (startingTrackWave || !$currentTrack) return;
+    startingTrackWave = true;
+    try {
+      if (await startWave($currentTrack)) currentView.set('home');
+    } finally {
+      startingTrackWave = false;
+    }
+  }
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import type { UnlistenFn } from '@tauri-apps/api/event';
@@ -21,6 +35,7 @@
   import { get } from 'svelte/store';
   import ArtistTag from './ArtistTag.svelte';
   import PlaylistMenu from './PlaylistMenu.svelte';
+  import UncensoredButton from './UncensoredButton.svelte';
   import { dragValue } from '$lib/actions/dragValue';
   import { isTrackLiked, toggleTrackLike } from '$lib/likes';
   import { isTrackDisliked, toggleTrackDislike, sameTrack } from '$lib/dislikes';
@@ -35,13 +50,9 @@
   let currentTrackCounted = false;
   $: currentDisplayCover = coverUrlForTrack($currentTrack, $downloadedCoverCache);
 
-  /**
-   * Поделиться. Ссылка есть не только у SoundCloud: трек Яндекса приезжает с готовым
-   * `permalinkUrl` вида `music.yandex.ru/album/…/track/…` (см. `mapYandexTrack` в lib/yandex.ts),
-   * и прежняя проверка «источник обязан быть soundcloud» отказывала при наличии ссылки в самом
-   * объекте трека. Теперь решает не название сервиса, а факт: есть чем поделиться или нет.
-   * Настоящие «нечем» — только локальные файлы: у файла на диске адреса в сети не бывает.
-   */
+  // Share public track metadata through the browser landing page.
+  import { trackShareLink } from '$lib/shareLinksCore';
+  import { copyMusicLink } from '$lib/shareLinks';
   async function handleShare() {
     if (!$currentTrack) return;
 
@@ -51,39 +62,11 @@
        return;
     }
 
-    let url = $currentTrack.permalinkUrl;
-
-    // Догрузка постоянной ссылки — только у SoundCloud: у Яндекса адрес выводится из id
-    // трека и альбома, и отдельного запроса за ним не существует.
-    if (!url && $currentTrack.source === 'soundcloud' && $currentTrack.id) {
-       const info = await getTrackInfo($currentTrack.id);
-       if (info && info.permalink_url) {
-           url = info.permalink_url;
-           // save it back to current track
-           $currentTrack.permalinkUrl = url;
-       }
-    }
-
-    // Ссылки нет вовсе — отдаём поиск по тому сервису, откуда трек: искать трек Яндекса
-    // на SoundCloud бессмысленно, там его чаще всего нет.
-    if (!url) {
-       const q = encodeURIComponent(`${$currentTrack.artist} ${$currentTrack.title}`);
-       url =
-         $currentTrack.source === 'yandex'
-           ? `https://music.yandex.ru/search?text=${q}`
-           : `https://soundcloud.com/search?q=${q}`;
-    }
-
-    const text = `${url}\ni use Lomify btw`;
-    try {
-       await navigator.clipboard.writeText(text);
-       notify('Ссылка скопирована.', 'success');
-    } catch (e) {
-       console.error(e);
-       notify('Не удалось скопировать ссылку. Попробуй ещё раз.', 'error');
-    }
+    try { await copyMusicLink(trackShareLink($currentTrack)); }
+    catch { notify('У этого трека нет ссылки Lomify для отправки.', 'info'); }
   }
-  let repeatMode = 0; // 0: off, 1: all, 2: one
+
+  $: repeatMode = $playbackRepeat; // 0: off, 1: all, 2: one
   let statInterval: ReturnType<typeof setInterval>;
   let lastOutputMs = 0;
   let lastOutputSampleAt = 0;
@@ -118,6 +101,7 @@
           const threshold = duration < 60 ? duration * 0.8 : 60;
           if (currentTrackListenTime >= threshold) {
               currentTrackCounted = true;
+              if ($waveActive) recordWaveListen($currentTrack);
               listenStats.update(s => {
                 const historyObj = s.history || {};
                 const trackId = $currentTrack.title + '-' + $currentTrack.artist;
@@ -196,7 +180,7 @@
    */
   let loadGeneration = 0;
   let loadingGeneration: number | null = null;
-  let isShuffle = false;
+  $: isShuffle = $playbackShuffle;
 
   /**
    * Вход и выход из полноэкранного режима из плеера. Раньше это был инлайн-обработчик на
@@ -555,6 +539,11 @@
       // волна кончалась бы на последнем треке порции и уходила в обычный автоплей.
       await waveRefill();
       if (endingGeneration !== loadGeneration || !$waveActive) return;
+      if (get(queue).length === 0) {
+        isPlaying.set(false);
+        notify('Продолжение волны пока не пришло. Повторите запуск волны или проверьте соединение.', 'info');
+        return;
+      }
     }
 
     const rawQueue = get(queue);
@@ -588,7 +577,7 @@
       }
       currentTrack.set(nextTrack);
       isPlaying.set(true);
-    } else if ($currentTrack) {
+    } else if ($currentTrack && $settings.waveContinuation !== false) {
       import('$lib/api').then(async api => {
         const trending = await api.getRelatedTracks($currentTrack, $likedTracks, $listenStats, $playlists);
         if (endingGeneration !== loadGeneration) return;
@@ -1218,6 +1207,9 @@
 </script>
 
 <!-- svelte-ignore a11y-no-static-element-interactions -->
+{#if $settings.design === 'liquid-glass'}
+  <LiquidGlassPlayer elapsed={currentTime} total={duration} onseek={seekTo} onvolume={setVolumeFromRatio} onprev={playPrev} onnext={() => playNext()} onlike={toggleLike} onfullscreen={toggleFullscreenView} onshare={handleShare} />
+{:else}
 <div class="px-4 pb-4 bg-transparent pointer-events-none">
   <div
     class="pointer-events-auto h-[90px] flex items-center px-6 justify-between transition-colors {$currentView === 'fullscreen' ? 'bg-transparent border-t border-white/5' : ($settings.uiStyle === 'style1' ? 'bg-white/10 backdrop-blur-xl border border-white/20 shadow-2xl rounded-2xl' : 'bg-black/40 backdrop-blur-xl border border-white/10 shadow-2xl rounded-2xl')}"
@@ -1282,18 +1274,33 @@
             align="left"
             buttonClass="interactive-item text-neutral-400 hover:text-white py-2"
           />
+          {#if $currentTrack.source === 'yandex'}
+            {#key $currentTrack.id}<UncensoredButton track={$currentTrack} />{/key}
+          {/if}
           <!-- Признак волны. Стоит здесь, а не в ряду с перемешиванием и повтором: тот ряд
                отцентрован относительно окна, и кнопка, появляющаяся и исчезающая в нём,
                сдвигала бы главную кнопку плеера. Показывается только когда волна играет —
                выключать то, что не включено, незачем. -->
           {#if $waveActive}
             <button
-              aria-label={`Выключить станцию «${$waveDisplayName}»`}
+              aria-label={`Выключить станцию «${$waveLabel}»`}
               class="interactive-item text-primary"
-              title={`Играет «${$waveDisplayName}» - нажми, чтобы дальше играла только очередь`}
+              title={`Играет «${$waveLabel}» - нажми, чтобы дальше играла только очередь`}
               on:click={() => stopWave()}
             >
               <Radio size={18} />
+            </button>
+          {/if}
+          {#if $currentTrack.source === 'yandex' || $currentTrack.source === 'soundcloud'}
+            <button
+              type="button"
+              aria-label={`Моя волна по треку: ${$currentTrack.title}`}
+              title={startingTrackWave ? 'Собираю волну по треку...' : 'Моя волна по этому треку'}
+              class="interactive-item text-neutral-400 hover:text-primary transition-colors"
+              disabled={startingTrackWave}
+              on:click={playTrackWave}
+            >
+              {#if startingTrackWave}<Loader2 size={18} class="animate-spin" />{:else}<Radio size={18} />{/if}
             </button>
           {/if}
         </div>
@@ -1312,7 +1319,7 @@
         <button 
           aria-label="Shuffle" 
           class="transition {isShuffle ? 'text-primary' : 'text-neutral-400 hover:text-white'}"
-          on:click={() => isShuffle = !isShuffle}
+          on:click={() => $playbackShuffle = !$playbackShuffle}
         >
           <Shuffle size={18} />
         </button>
@@ -1349,7 +1356,7 @@
         <button 
           aria-label="Repeat" 
           class="interactive-item transition {repeatMode > 0 ? 'text-primary' : 'text-neutral-400 hover:text-white'} relative"
-          on:click={() => repeatMode = (repeatMode + 1) % 3}
+          on:click={() => $playbackRepeat = ($playbackRepeat + 1) % 3}
         >
           <Repeat size={18} />
           {#if repeatMode === 2}
@@ -1414,7 +1421,7 @@
         </button>
       {/if}
 
-      <button aria-label="Share" class="interactive-item hover:text-white transition-colors" on:click={handleShare} title="Поделиться">
+      <button data-press-late aria-label="Поделиться треком" class="interactive-item hover:text-white transition-colors" on:click={handleShare} title="Поделиться">
         <Share2 size={18} />
       </button>
       
@@ -1443,3 +1450,4 @@
     </div>
   </div>
 </div>
+{/if}

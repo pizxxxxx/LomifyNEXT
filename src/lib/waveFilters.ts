@@ -19,7 +19,7 @@ export const WAVE_GENRES = [
   { id: 'rnb', label: 'R&B и соул', hint: 'R&B, соул и нео-соул', aliases: ['rnb', 'r b', 'rus rnb', 'rhythm and blues', 'soul', 'соул', 'neo soul', 'neosoul', 'contemporary rnb'] },
   { id: 'lofi', label: 'Лоу-фай', hint: 'Спокойные биты и chillhop', aliases: ['lofi', 'lo fi', 'лоу фай', 'лоуфай', 'лофи', 'chillhop', 'chill out', 'chillout', 'downtempo', 'study beats'] },
   { id: 'jazz', label: 'Джаз', hint: 'Джаз и фьюжн', aliases: ['jazz', 'джаз', 'fusion', 'фьюжн', 'bebop', 'swing', 'smooth jazz', 'acid jazz'] },
-  { id: 'classical', label: 'Классика', hint: 'Классика, опера и неоклассика', aliases: ['classical', 'classic', 'классика', 'neoclassical', 'неоклассика', 'opera', 'опера', 'chamber music', 'orchestral', 'symphonic'] },
+  { id: 'classical', label: 'Классика', hint: 'Классика, опера и неоклассика', aliases: ['classical', 'классика', 'neoclassical', 'неоклассика', 'opera', 'опера', 'chamber music', 'orchestral', 'symphonic'] },
   { id: 'soundtrack', label: 'Саундтреки', hint: 'Музыка из кино, игр и аниме', aliases: ['soundtrack', 'саундтрек', 'film music', 'музыка кино', 'game music', 'игровая музыка', 'score', 'ost', 'anime', 'аниме', 'musical'] }
 ] as const;
 
@@ -29,6 +29,7 @@ export interface WaveFilterState {
   waveLanguage?: string;
   waveAllowNeuro?: boolean | 'only';
 }
+export interface WaveFilterEvidence { serverLanguage?: string; station?: string }
 
 function normalize(value: unknown): string {
   return `${value ?? ''}`
@@ -113,7 +114,7 @@ export function describeWaveFilters(state: WaveFilterState): string {
   return parts.join(', ');
 }
 
-export function trackMatchesWaveGenre(track: any, state: WaveFilterState): boolean {
+export function trackMatchesWaveGenre(track: any, state: WaveFilterState, evidence: WaveFilterEvidence = {}): boolean {
   const wanted = normalize(state.waveGenre);
   if (!wanted) return true;
 
@@ -129,13 +130,14 @@ export function trackMatchesWaveGenre(track: any, state: WaveFilterState): boole
   // использовать явный жанровый тег в названии/исполнителе, чем отбрасывать кандидата
   // без единой попытки. При наличии нормальных метаданных этот запасной путь не включается.
   if (actualGenres.length > 0) return false;
-  const fallbackText = normalize([track?.title, track?.artist].filter(Boolean).join(' '));
-  if (normalizedAliases.some((alias) => genreStringsMatch(fallbackText, alias))) return true;
+  if (track?.source === 'soundcloud') {
+    const fallbackText = normalize([track?.title, track?.artist].filter(Boolean).join(' '));
+    if (normalizedAliases.some((alias) => genreStringsMatch(fallbackText, alias))) return true;
+  }
 
-  // Rotor иногда присылает трек без жанров альбома. Неизвестное значение не является
-  // несовпадением: отбрасывать такие карточки означало получать пустую волну при живой
-  // станции. Явно присланный чужой жанр по-прежнему отсеивается строкой выше.
-  return track?.source === 'yandex';
+  // A genre station can provide evidence for missing metadata. A personal station cannot.
+  return track?.source === 'yandex' && evidence.station?.startsWith('genre:') === true
+    && normalizedAliases.some(alias => genreStringsMatch(normalize(evidence.station!.slice(6)), alias));
 }
 
 function normalizedTrackLanguage(track: any): string {
@@ -144,19 +146,14 @@ function normalizedTrackLanguage(track: any): string {
   if (raw === 'en' || raw.startsWith('eng') || raw.startsWith('англ')) return 'en';
   if (raw) return 'other';
 
-  // Запасной сигнал только при отсутствии метаданных: название не гарантирует язык слов,
-  // но для кириллических и латинских релизов это лучше, чем отбрасывать всю порцию вслепую.
-  const label = `${track?.title ?? ''} ${track?.artist ?? ''}`;
-  if (/[а-яё]/i.test(label)) return 'ru';
-  if (/[a-z]/i.test(label)) return 'en';
   return '';
 }
 
-function trackMatchesWaveLanguage(track: any, state: WaveFilterState): boolean {
+function trackMatchesWaveLanguage(track: any, state: WaveFilterState, evidence: WaveFilterEvidence): boolean {
   const wanted = normalize(state.waveLanguage);
   if (!wanted || state.waveContent === 'instrumental') return true;
   const actual = normalizedTrackLanguage(track);
-  if (!actual) return track?.source === 'yandex';
+  if (!actual) return wanted === 'ru' && evidence.serverLanguage === 'russian';
   return wanted === 'other' ? actual !== 'ru' && actual !== 'en' : actual === wanted;
 }
 
@@ -210,22 +207,33 @@ export function isNeuroTrack(track: any): boolean {
   return NEURO_PATTERNS.some((pattern) => pattern.test(combined));
 }
 
-export function trackMatchesWaveFilters(track: any, state: WaveFilterState): boolean {
+export function trackMatchesWaveFilters(track: any, state: WaveFilterState, evidence: WaveFilterEvidence = {}): boolean {
   // Отсекаем нейротреки (генеративную музыку, ИИ-каверы, Suno, Udio), если они отключены
   if (state.waveAllowNeuro === false && isNeuroTrack(track)) return false;
   // Оставляем только нейротреки, если выбран режим «только нейро»
   if (state.waveAllowNeuro === 'only' && !isNeuroTrack(track)) return false;
 
-  // undefined у Rotor означает, что конкретная порция не прислала lyricsInfo, а не то,
-  // что текста точно нет. Отбрасываем только явное false, иначе строгий фильтр съедал
-  // большую часть живой станции из-за неполных метаданных.
-  if (state.waveContent === 'lyrics' && track?.lyricsAvailable === false) return false;
+  if (state.waveContent === 'lyrics' && track?.lyricsAvailable !== true) return false;
   if (state.waveContent === 'instrumental') {
-    if (track?.lyricsAvailable === true) return false;
-    if (track?.lyricsAvailable !== false) {
-      const label = normalize(`${track?.title ?? ''} ${track?.version ?? ''}`);
-      if (!/(^| )(instrumental|инструментал|karaoke|караоке|minus|минус)( |$)/.test(label)) return false;
-    }
+    const label = normalize(`${track?.title ?? ''} ${track?.version ?? ''}`);
+    const explicit = /(^| )(instrumental|инструментал|karaoke|караоке|minus|минус)( |$)/.test(label);
+    // Missing lyrics in a database says nothing about the presence of vocals.
+    if (!explicit && (evidence.serverLanguage !== 'without-words' || track?.lyricsAvailable === true)) return false;
   }
-  return trackMatchesWaveLanguage(track, state) && trackMatchesWaveGenre(track, state);
+  return trackMatchesWaveLanguage(track, state, evidence) && trackMatchesWaveGenre(track, state, evidence);
+}
+
+/** Infer language from actual lyrics, never from a release title or an artist's name. */
+export function languageFromWaveLyrics(lyrics: string): string {
+  const text = lyrics.replace(/\[[^\]]*\]/g, ' ').toLocaleLowerCase('ru');
+  const russian = (text.match(/[а-яё]/g) || []).length;
+  const latin = (text.match(/[a-z]/g) || []).length;
+  const letters = (text.match(/\p{L}/gu) || []).length;
+  if (letters < 16) return '';
+  if (russian / letters >= .6) return 'ru';
+  const englishWords = new Set((text.match(/[a-z]+/g) || []).filter(word => ['the','you','your','and','with','of','my','me','love','in','for','to','not','on','be','we','is','was','are','want','can','from','that','this','it','i'].includes(word)));
+  if (latin / letters >= .8 && englishWords.size >= 3) return 'en';
+  if ((letters - russian - latin) / letters >= .3) return 'other';
+  const foreignWords = new Set((text.match(/[a-z]+/g) || []).filter(word => ['que','de','el','la','je','tu','le','der','und','die','das','por','para','los','con','les','dans','une','sono'].includes(word)));
+  return foreignWords.size >= 3 ? 'other' : '';
 }

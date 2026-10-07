@@ -1,4 +1,6 @@
 import { derived, readable, writable, get } from 'svelte/store';
+import { redactText } from './logRedaction';
+import { cachedSecret, publicSettings, secretStartupErrors, settingsSecretsRemoved, whenSecretsReady, SECRETS_READY_EVENT } from './secretStorage';
 import { dedupePlaylists, loadPlaylistSnapshot, savePlaylistSnapshot } from '$lib/playlistStorage';
 
 // Global app state
@@ -12,6 +14,8 @@ export const currentTrack = writable<{
   isLocal?: boolean;
   duration?: number;
   permalinkUrl?: string;
+  /** Explicitly selected edition, kept on this provider during stream resolution. */
+  playbackSource?: 'soundcloud';
   /** Яндекс сообщил, что у трека есть синхронный или обычный текст. */
   lyricsAvailable?: boolean;
   /** Язык слов, когда источник его сообщил: `ru`, `en` или другой ISO-код. */
@@ -104,7 +108,13 @@ const defaultSettings = {
   // Глобальный дизайн: 'classic' — исходное оформление, 'aurora' — контрастная
   // альтернатива (см. src/design-aurora.css). Живёт отдельно от uiStyle, который
   // отвечает только за плотность стекла, чтобы обе настройки не перебивали друг друга.
-  design: 'classic', // 'classic' | 'aurora'
+  design: 'classic' as 'classic' | 'aurora' | 'liquid-glass',
+  liquidGlassSeen: false,
+  glassPanelWidth: null as number | null,
+  glassPlaylistsCollapsed: false,
+  glassQuality: 'normal' as 'high' | 'normal' | 'off',
+  waveContinuation: true,
+  followedArtists: [] as { name: string; source: string }[],
 
   // ── Движение интерфейса ────────────────────────────────────────────────────
   // Каждый эффект выключается отдельно, а не одним «выключить анимации»: они стоят
@@ -218,7 +228,6 @@ const defaultSettings = {
   customProfileName: '', // Кастомное имя пользователя
   profileBannerUrl: '', // Свой баннер профиля (ссылка). Пусто — берём баннер SoundCloud
   scUser: null as { id: number, username: string, avatarUrl: string, permalink: string, bannerUrl?: string } | null,
-  leftAlignTracks: false, // Выравнивание треков по левому краю
   // Полосы спектра на весь экран в полноэкранном режиме. Выключаются отдельно от эффектов
   // интерфейса выше: те — оформление, а это единственное, что там рисуется каждый кадр по
   // событию `audio:fft`, шестьдесят раз в секунду поверх всего окна. Когда полноэкранный
@@ -255,6 +264,7 @@ const defaultSettings = {
   waveGenre: '',
   /** Разрешены ли нейротреки в «Моей тусне»: true - вкл, false - выкл, 'only' - только нейро. */
   waveAllowNeuro: true as boolean | 'only',
+  waveFreshTaste: false,
   /**
    * Режим производительности: снимает всё, что стоит кадров, а не только размытие панелей.
    * Живое `backdrop-filter` везде, крупные декоративные размытия (атмосферная подложка,
@@ -376,8 +386,8 @@ function scheduleListenStatsPersist(value: typeof defaultStats) {
 }
 
 // Navigation state
-export const currentView = writable<'home' | 'search' | 'library' | 'settings' | 'lyrics' | 'equalizer' | 'fullscreen' | 'profile' | 'artist'>('home');
-export const previousView = writable<'home' | 'search' | 'library' | 'settings' | 'lyrics' | 'equalizer' | 'fullscreen' | 'profile' | 'artist'>('home');
+export const currentView = writable<'home' | 'wave' | 'search' | 'library' | 'settings' | 'lyrics' | 'equalizer' | 'fullscreen' | 'profile' | 'artist' | 'daily-mix'>('home');
+export const previousView = writable<'home' | 'wave' | 'search' | 'library' | 'settings' | 'lyrics' | 'equalizer' | 'fullscreen' | 'profile' | 'artist' | 'daily-mix'>('home');
 export type LibraryTab = 'liked' | 'playlists' | 'artists' | 'local' | 'disliked';
 const VALID_LIBRARY_TABS: LibraryTab[] = ['liked', 'playlists', 'artists', 'local', 'disliked'];
 
@@ -410,6 +420,7 @@ export const lyricsStatus = writable<LyricsStatus>('unknown');
 export const lyricsReloadTrigger = writable<number>(0);
 
 export interface NavState {
+  dailyMix?: import('./dailyMixActions').DailyMixSelection | null;
   view: string;
   artist: string;
   search: string;
@@ -560,6 +571,7 @@ export function dismissNotification(id: number) {
 }
 
 export function notify(message: string, type: 'success'|'info'|'error' = 'info', action?: NotificationAction) {
+  message = redactText(message);
   const id = Date.now() + Math.random();
   notifications.update(n => [...n, { id, message, type, action }]);
   // Плашка без кнопки живёт три секунды - этого хватает, чтобы её прочитать. Плашку с
@@ -616,7 +628,8 @@ export function initStore() {
         const savedSettings = JSON.parse(stored);
         settings.set({
           ...defaultSettings,
-          ...savedSettings,
+          ...publicSettings(savedSettings),
+          yandexToken: '',
           ...(savedSettings?.fullscreenYandexVideoFillDefaultApplied === true
             ? {}
             : { fullscreenYandexVideoFill: true })
@@ -626,8 +639,19 @@ export function initStore() {
       }
     }
     settings.subscribe(val => {
-      localStorage.setItem('lomifynext_settings', JSON.stringify(val));
+      if (settingsSecretsRemoved()) {
+        localStorage.setItem('lomifynext_settings', JSON.stringify(publicSettings(val)));
+      }
     });
+    let secretsApplied = false;
+    const applySecrets = () => {
+      if (secretsApplied) return;
+      secretsApplied = true;
+      settings.update((value) => ({ ...value, yandexToken: cachedSecret('yandex_music_token') }));
+      for (const message of new Set(secretStartupErrors())) notify(message, 'error');
+    };
+    window.addEventListener(SECRETS_READY_EVENT, applySecrets, { once: true });
+    void whenSecretsReady().then(applySecrets);
 
     const storedStats = localStorage.getItem('lomifynext_stats');
     if (storedStats) {

@@ -2,10 +2,14 @@
   import { onMount, onDestroy } from 'svelte';
   import { fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
-  import { Loader2, User, Disc, X, ListMusic, ChevronLeft, ChevronDown, Music2 } from 'lucide-svelte';
+  import { Loader2, User, UserPlus, Check, Disc, X, ListMusic, ChevronLeft, ChevronDown, Music2 } from 'lucide-svelte';
   import { Play as PlayData, Pause as PauseData, LayoutGrid as LayoutGridData, List as ListData } from 'lucide';
   import { MorphIcon } from 'morphicons/svelte';
   import { currentArtist, currentTrack, isPlaying, queue, settings, effectivePerformanceMode, globalVolume, notify } from '$lib/stores';
+  import { pageAtmosphere } from '$lib/stores';
+  import { setGlassQueueContext } from '$lib/liquidGlass';
+  import LiquidGlassMediaHeader from './LiquidGlassMediaHeader.svelte';
+  import LiquidGlassTrackList from './LiquidGlassTrackList.svelte';
   import { stopWave, waveActive } from '$lib/wave';
   import { getArtistTracks, getAudioUrl, getArtistAlbums, getArtistProfile, getAlbumTracks, trackByArtist, type ArtistSource } from '$lib/api';
   import ArtistTrackList from './ArtistTrackList.svelte';
@@ -16,6 +20,7 @@
   let tracks: any[] = [];
   let trackSort: ArtistTrackSort = 'popular';
   $: sortedTracks = sortArtistTracks(tracks, trackSort, artistSource);
+  $: glassTopTracks = sortArtistTracks(tracks, 'popular', artistSource);
   let artistDescription = '';
   let artistLocation = '';
   let aboutOpen = false;
@@ -52,6 +57,18 @@
   let trackAvatarUrl = '';
   $: artistAvatarUrl = profileAvatarUrl || trackAvatarUrl;
   let artistBannerUrl = '';
+  let artistVerified = false;
+  $: artistFollowed = $settings.followedArtists.some(item => item.name === $currentArtist && item.source === artistSource);
+  function toggleGlassFollow() {
+    settings.update(value => ({ ...value, followedArtists: artistFollowed
+      ? value.followedArtists.filter(item => item.name !== $currentArtist || item.source !== artistSource)
+      : [...value.followedArtists, { name: $currentArtist, source: artistSource }] }));
+    window.dispatchEvent(new Event('lomify:artist-follow'));
+    if (!artistFollowed) notify('Подписка сохранена в Lomify. Новые релизы появятся на главной.', 'success');
+  }
+  $: glassAlbum = albums.find(album => album.id === expandedAlbum);
+  $: pageAtmosphere.set($settings.design === 'liquid-glass'
+    ? { url: glassAlbum?.coverUrl || glassAlbum?.tracks?.[0]?.coverUrl || artistBannerUrl || artistAvatarUrl, derived: !artistBannerUrl || !!glassAlbum } : null);
   let artistFollowers = 0;
   // Слушателей за месяц отдаёт Яндекс Музыка (`stats.lastMonthListeners`). У SoundCloud
   // такого числа нет, там есть подписчики — поэтому два поля, а не одно: подписать одно
@@ -155,6 +172,7 @@
   });
 
   onDestroy(() => {
+    pageAtmosphere.set(null);
     if (previewAudio) {
       previewAudio.pause();
       previewAudio.src = '';
@@ -221,6 +239,7 @@
     profileAvatarUrl = '';
     trackAvatarUrl = '';
     artistBannerUrl = '';
+    artistVerified = false;
     artistFollowers = 0;
     artistListeners = 0;
     artistLikes = 0;
@@ -234,6 +253,7 @@
     getArtistProfile(artistName, source).then(profile => {
       if (generation !== loadGeneration || !profile) return;
       artistBannerUrl = profile.bannerUrl;
+      artistVerified = profile.isExactMatch && !!profile.verified;
       if (profile.isExactMatch) {
         artistDescription = profile.description?.trim() || '';
         artistLocation = [profile.city, profile.country].filter(Boolean).join(', ');
@@ -361,6 +381,7 @@
   function playTrack(track: any, list: any[] = sortedTracks) {
     if (!track) return;
     stopWave();
+    setGlassQueueContext(glassAlbum?.title || $currentArtist, glassAlbum?.coverUrl || artistAvatarUrl, list);
     if (track.isBanned) {
       notify('Этот источник недавно не отвечал. Пробую запустить трек ещё раз.', 'info');
     }
@@ -371,6 +392,15 @@
     }
     currentTrack.set(track);
     isPlaying.set(true);
+  }
+
+  function shuffleGlassAlbum(list: any[]) {
+    const shuffled = [...list];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const index = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[index]] = [shuffled[index], shuffled[i]];
+    }
+    if (shuffled.length) playTrack(shuffled[0], shuffled);
   }
 
   async function playAlbum(album: any) {
@@ -463,12 +493,12 @@
   }
 </script>
 
-<div class="artist-page">
+<div class="artist-page" class:lg-album-open={$settings.design === 'liquid-glass' && !!expandedAlbum}>
   <header class="artist-hero artist-profile-hero">
-    {#if artistBannerUrl}
+    {#if artistBannerUrl || ($settings.design === 'liquid-glass' && artistAvatarUrl)}
       <!-- A dimmed artist photo keeps text readable without a colored gradient. -->
       <img
-        src={artistBannerUrl}
+        src={artistBannerUrl || artistAvatarUrl}
         alt=""
         aria-hidden="true"
         class="artist-hero-media"
@@ -590,6 +620,14 @@
           />
           <span>{isArtistPlaying ? 'Пауза' : 'Слушать'}</span>
         </button>
+        {#if $settings.design === 'liquid-glass'}
+          <button type="button" class="lg-artist-follow" aria-pressed={artistFollowed} aria-label={artistFollowed ? 'Отписаться от артиста' : 'Подписаться на артиста'} on:click={toggleGlassFollow}>
+            <span class="lg-follow-content" aria-hidden="true">
+              <span class="lg-follow-icon"><span class="lg-follow-off"><UserPlus size={14} /></span><span class="lg-follow-on"><Check size={14} /></span></span>
+              <span class="lg-follow-label"><span class="lg-follow-off">Подписаться</span><span class="lg-follow-on">Подписан</span></span>
+            </span>
+          </button>
+        {/if}
       </div>
     </div>
     <!-- Описание раскрывается последней строкой шапки во всю её ширину: читать биографию
@@ -724,7 +762,7 @@
     </div>
 
     {#if activeTab === 'albums' && !expandedAlbum}
-      <div class="artist-pane mb-10 w-full" in:fly={{ x: 34 * navDir, duration: 340, easing: cubicOut }}>
+      <div class="artist-pane mb-10 w-full" in:fly={{ x: 34 * navDir, duration: $settings.design === 'liquid-glass' ? 0 : 340, easing: cubicOut }}>
         <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
           {#each albums as album}
             {@const isPlayingThisAlbum = isAlbumPlaying(album, $currentTrack, $isPlaying)}
@@ -736,20 +774,22 @@
             >
               <!-- `spec-art` — глянцевая поверхность: по ней ходит отражение света, положение
                    которого считается из наклона (`$lib/utils/tilt`). Бегущей полосы здесь нет
-                   намеренно — один блик на поверхность. Свой `-translate-y-1` снят: карточка
-                   уже поднимается целиком через `interactive-item`. -->
-              <div class="w-full aspect-square min-w-[3rem] min-h-[3rem] rounded-xl overflow-hidden shadow-lg relative bg-neutral-800 mb-3 border border-white/5 transition-colors duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] spec-art art-glow">
-                <!-- Обложка берётся с самого релиза. Раньше её искали в `tracks[0]`, но у
-                     яндексовых релизов до раскрытия треков нет вовсе — и все карточки стояли
-                     пустыми квадратами с иконкой. -->
-                {#if album.coverUrl || album.tracks?.[0]?.coverUrl}
-                  <img src={album.coverUrl || album.tracks[0].coverUrl} alt="Cover" loading="lazy" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
-                {:else}
-                  <div class="w-full h-full flex items-center justify-center text-neutral-500">
-                    <ListMusic size={32} />
-                  </div>
-                {/if}
-                <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                   намеренно - один блик на поверхность. Подъем и наклон применяются
+                   к декоративной поверхности, кнопки остаются в неподвижной рамке. -->
+              <div class="cover-tilt-frame w-full aspect-square min-w-[3rem] min-h-[3rem] rounded-xl relative mb-3">
+                <div class="cover-tilt-surface spec-art art-glow shadow-lg bg-neutral-800 border border-white/5">
+                  <!-- Обложка берётся с самого релиза. Раньше её искали в `tracks[0]`, но у
+                       яндексовых релизов до раскрытия треков нет вовсе — и все карточки стояли
+                       пустыми квадратами с иконкой. -->
+                  {#if album.coverUrl || album.tracks?.[0]?.coverUrl}
+                    <img src={album.coverUrl || album.tracks[0].coverUrl} alt="Cover" loading="lazy" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
+                  {:else}
+                    <div class="w-full h-full flex items-center justify-center text-neutral-500">
+                      <ListMusic size={32} />
+                    </div>
+                  {/if}
+                </div>
+                <div class="absolute inset-0 rounded-xl bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                   <button
                     class="bg-primary hover:bg-primary/80 text-black rounded-full p-3 shadow-xl transform translate-y-4 group-hover:translate-y-0 transition-all duration-300"
                     class:is-playing={isPlayingThisAlbum}
@@ -792,12 +832,15 @@
       {@const al = albums.find(a => a.id === expandedAlbum)}
       {#if al}
         {@const isPlayingThisAlbum = isAlbumPlaying(al, $currentTrack, $isPlaying)}
-        <div class="artist-pane album-detail mb-10 w-full" in:fly={{ x: 34 * navDir, duration: 340, easing: cubicOut }}>
+        <div class="artist-pane album-detail mb-10 w-full" in:fly={{ x: 34 * navDir, duration: $settings.design === 'liquid-glass' ? 0 : 340, easing: cubicOut }}>
           <button type="button" class="album-back" on:click={closeAlbum}>
             <ChevronLeft size={17} />
             Все релизы
           </button>
 
+          {#if $settings.design === 'liquid-glass'}
+            <LiquidGlassMediaHeader title={al.title} cover={al.coverUrl || al.tracks?.[0]?.coverUrl} artist={$currentArtist} avatar={artistAvatarUrl} verified={artistVerified} genre={al.genre || al.tracks?.[0]?.genre || ''} year={al.year} tracks={al.tracks || []} playing={isPlayingThisAlbum} onplay={() => toggleAlbumPlayback(al)} onshuffle={() => shuffleGlassAlbum(al.tracks || [])} />
+          {:else}
           <div class="album-detail-head">
             <div class="album-detail-art">
               {#if al.coverUrl || al.tracks?.[0]?.coverUrl}
@@ -833,6 +876,7 @@
               </button>
             </div>
           </div>
+          {/if}
 
           {#if loadingAlbum === al.id && !al.tracks?.length}
             <div class="flex items-center justify-center py-10 text-primary">
@@ -842,7 +886,7 @@
             <p class="empty-hint">Не удалось загрузить треки. Попробуй открыть релиз ещё раз.</p>
           {:else}
             {#key al.id}
-              <ArtistTrackList tracks={al.tracks} source={artistSource} onplay={playTrack} onpreview={handleMouseEnter} onpreviewend={handleMouseLeave} />
+              {#if $settings.design === 'liquid-glass'}<LiquidGlassTrackList tracks={al.tracks} onplay={playTrack} />{:else}<ArtistTrackList tracks={al.tracks} source={artistSource} onplay={playTrack} onpreview={handleMouseEnter} onpreviewend={handleMouseLeave} />{/if}
             {/key}
           {/if}
         </div>
@@ -851,8 +895,9 @@
 
     {#if activeTab === 'tracks'}
       <div class="artist-pane">
+        {#if $settings.design === 'liquid-glass'}<h2 class="section-title">Топ треки</h2><LiquidGlassTrackList tracks={glassTopTracks} top={true} onplay={playTrack} />{/if}
         {#key `${$currentArtist}:${artistSource}:${trackSort}`}
-          <ArtistTrackList tracks={sortedTracks} source={artistSource} view={trackView} onplay={playTrack} onpreview={handleMouseEnter} onpreviewend={handleMouseLeave} />
+          {#if $settings.design === 'liquid-glass'}<h2 class="section-title mt-8">Все треки</h2><LiquidGlassTrackList tracks={sortedTracks} artwork={true} onplay={playTrack} />{:else}<ArtistTrackList tracks={sortedTracks} source={artistSource} view={trackView} onplay={playTrack} onpreview={handleMouseEnter} onpreviewend={handleMouseLeave} />{/if}
         {/key}
       </div>
     {/if}

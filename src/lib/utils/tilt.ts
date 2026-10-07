@@ -15,8 +15,8 @@
  * на ховере (разбор в app.css). Уменьшить угол до безопасного нельзя: условие
  * «сдвиг < 1px» даёт θ ≤ D·P/h² ≈ 0.25° — наклон, которого не видно.
  *
- * Поэтому трансформируется слой обложки внутри карточки (`.tile-art` / `.art-glow`), а
- * хозяином ховера остаётся обёртка, геометрию которой мы не трогаем вообще. Это снимает
+ * Поэтому трансформируются `.cover-tilt-surface`, `.tile-card-surface` и подписи
+ * `.tile-label-surface`, а хозяином ховера остаётся неподвижная обёртка. Это снимает
  * проблему целиком, а не смягчает её: попадание курсора считается по боксу обёртки, и
  * ушедшая в глубину обложка просто открывает под курсором её же фон — `:hover` обёртки
  * (а с ним и тень, и specular, и все `group-hover:` утилиты в разметке) не дёргается.
@@ -74,9 +74,8 @@
  * создаются и уничтожаются), одна запись стилей за кадр и ровно на один элемент —
  * обёртку. Все величины уезжают в CSS-переменные, а они наследуются, поэтому слой обложки
  * читает их сам, без второй записи. Одинаковые округлённые значения повторно в DOM не
- * пишутся, поэтому блик остаётся плавным на 60 кадрах, но не инвалидирует стили в кадрах,
- * где округлённая позиция фактически не изменилась. `getBoundingClientRect` вызывается один
- * раз на вход в карточку, а не на каждое движение мыши.
+ * пишутся, поэтому блик остаётся плавным на 60 кадрах. Геометрия неподвижной обёртки
+ * читается на движении мыши до записи стилей, чтобы учитывать любую перевёрстку списка.
  *
  * Атрибут `data-tilt` ставится на время движения и снимается, когда пружина успокоилась.
  * Это не косметика: постоянный `transform` на всех обложках держал бы шесть десятков
@@ -156,13 +155,7 @@ const GLARE_FRAME_MS = 1000 / 60;
 const EPS_POS = 0.01;
 const EPS_VEL = 0.05;
 
-/**
- * Насколько курсор может уйти за бокс обёртки, прежде чем это считается устаревшей геометрией.
- * Курсор бывает вне бокса законно - на всплывающем меню внутри карточки, - поэтому порог
- * заметно больше погрешности округления, но меньше типичного зазора между карточками сетки.
- */
-const OUTSIDE_SLACK = 24;
-
+/** CSS-переменные, которые очищаются после завершения движения. */
 const VARS = [
   '--mouse-x',
   '--mouse-y',
@@ -174,6 +167,9 @@ const VARS = [
   '--tilt-rx',
   '--tilt-ry',
   '--tilt-lift',
+  '--tilt-cover-center-y',
+  '--tilt-label-origin-x',
+  '--tilt-label-origin-y',
 ] as const;
 
 type StyleVar = (typeof VARS)[number];
@@ -206,11 +202,6 @@ interface Card {
   ny: number;
   /** Курсор ещё на карточке. */
   held: boolean;
-  /**
-   * Бокс уже перечитан после того, как курсор оказался вне него. Нужен один раз за наведение:
-   * чтение `getBoundingClientRect` на каждое движение мыши — это принудительный layout.
-   */
-  verified: boolean;
   /** Уже записанные округлённые значения — одинаковое значение не инвалидирует стили. */
   painted: Partial<Record<StyleVar, string>>;
   /** Время последней перерисовки paint-зависимых градиентов. */
@@ -227,8 +218,6 @@ const live = new Map<HTMLElement, Card>();
 let current: Card | null = null;
 let frame = 0;
 let lastTime = 0;
-/** Скролл сдвинул карточку — закешированная геометрия больше не годится. */
-let stale = false;
 
 /** Что включено в настройках. Читается из стора, см. `trackTilt`. */
 let fxTilt = true;
@@ -368,10 +357,25 @@ function wake() {
 
 function measure(card: Card) {
   const rect = card.root.getBoundingClientRect();
+  const cover = card.root.querySelector<HTMLElement>(':scope > .tile-art, :scope > .cover-tilt-frame');
+  const coverRect = cover?.getBoundingClientRect();
+  const labelRect = card.root.querySelector<HTMLElement>('.tile-label-frame')?.getBoundingClientRect();
   card.left = rect.left;
   card.top = rect.top;
   card.width = rect.width || 1;
   card.height = rect.height || 1;
+  if (coverRect) {
+    // Match the backing's pivot to the stationary cover frame, so their edges
+    // move as one plane without transforming buttons or changing hit geometry.
+    writeVar(card, '--tilt-cover-center-y', `${(coverRect.top + coverRect.height / 2 - rect.top).toFixed(2)}px`);
+  }
+  if (labelRect) {
+    const pivot = coverRect ?? rect;
+    // Read the stationary label frame rather than the transformed text. This
+    // keeps its pivot aligned with the cover while the spring is moving.
+    writeVar(card, '--tilt-label-origin-x', `${(pivot.left + pivot.width / 2 - labelRect.left).toFixed(2)}px`);
+    writeVar(card, '--tilt-label-origin-y', `${(pivot.top + pivot.height / 2 - labelRect.top).toFixed(2)}px`);
+  }
 }
 
 function letGo(card: Card | null) {
@@ -401,7 +405,6 @@ function acquire(root: HTMLElement, x: number, y: number): Card {
     // Курсор вернулся на карточку, которая ещё едет домой: подхватываем её на ходу, из
     // текущего положения — перезапуск с нуля выглядел бы как рывок.
     existing.held = true;
-    existing.verified = false;
     measure(existing);
     return existing;
   }
@@ -420,7 +423,6 @@ function acquire(root: HTMLElement, x: number, y: number): Card {
     nx: 0,
     ny: 0,
     held: true,
-    verified: false,
     painted: {},
     glarePaintedAt: Number.NEGATIVE_INFINITY,
   };
@@ -452,30 +454,21 @@ function onMouseMove(e: MouseEvent) {
   if (root !== current?.root) {
     letGo(current);
     current = acquire(root, e.clientX, e.clientY);
-  } else if (stale) {
-    // Геометрию перечитываем в обработчике события, а не в кадре: чтение внутри
-    // requestAnimationFrame — это принудительный layout ровно там, где мы его и избегаем.
+  } else {
+    // The stationary wrapper can move after any relayout, without scroll or resize.
+    // Read before style writes, on pointer input only, so every position stays current.
     measure(current);
   }
-  stale = false;
 
   const card = current!;
   let lx = e.clientX - card.left;
   let ly = e.clientY - card.top;
 
-  // Закешированный бокс мог устареть не от прокрутки и не от смены размера окна: сетка лайков
-  // дописывает строки порциями, и карточка под курсором переезжает сама, без события, на
-  // которое подписан `invalidate`. Признак — курсор заметно вне бокса, хотя событие пришло
-  // именно от этой карточки. Тогда перечитываем бокс один раз за наведение: иначе наклон
-  // считается от чужого центра и карточка «дёргается» в сторону.
-  if (!card.verified) {
-    const outside = Math.max(-lx, lx - card.width, -ly, ly - card.height);
-    if (outside > OUTSIDE_SLACK) {
-      card.verified = true;
-      measure(card);
-      lx = e.clientX - card.left;
-      ly = e.clientY - card.top;
-    }
+  // Ignore events delivered to a card outside its current visible bounds.
+  if (lx < 0 || ly < 0 || lx > card.width || ly > card.height) {
+    letGo(card);
+    current = null;
+    return;
   }
 
   if (fxGlare) {
@@ -516,7 +509,7 @@ function onWindowLeaveIfExited(e: MouseEvent) {
 }
 
 function invalidate() {
-  stale = true;
+  releaseAll();
 }
 
 /** Returns a teardown function, so callers can register it from `onMount`. */

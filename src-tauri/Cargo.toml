@@ -1,6 +1,6 @@
 [package]
 name = "lomifynext-tauri"
-version = "9.5.1"
+version = "9.6.0"
 description = "LomifyNEXT"
 authors = ["dopaminegdev"]
 license = "GPL-3.0-or-later"
@@ -26,6 +26,7 @@ tauri-build = { version = "=2.6.2", features = [] }
 # Need it in a release build to chase a bug? `cargo tauri build --features devtools`.
 tauri = { version = "=2.11.2", features = ["protocol-asset", "tray-icon", "macos-private-api", "image-png"] }
 tauri-plugin-opener = "=2.5.4"
+tauri-plugin-keyring-store = { version = "=0.2.0", default-features = false }
 tauri-plugin-liquid-glass = "=0.1.6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -38,11 +39,13 @@ warp = "0.3"
 base64 = "0.22"
 sha2 = "0.10"
 hex = "0.4"
+md-5 = "=0.10.6"
 reqwest = { version = "0.12", features = ["rustls-tls", "stream", "json", "socks", "http2"], default-features = false }
 futures-util = "0.3"
 http = "1"
 urlencoding = "2"
-tauri-plugin-single-instance = "=2.4.2"
+tauri-plugin-single-instance = { version = "=2.4.2", features = ["deep-link"] }
+tauri-plugin-deep-link = "=2.4.10"
 rodio = { version = "0.22.2", features = ["mp3", "symphonia-aac", "symphonia-isomp4", "symphonia-ogg"] }
 cpal = "0.17"
 biquad = "0.5"

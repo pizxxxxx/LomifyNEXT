@@ -3,8 +3,13 @@
   import { cubicOut } from 'svelte/easing';
   import { Play, Loader2, ChevronLeft, ChevronRight, WifiOff } from 'lucide-svelte';
   import Sidebar from '$lib/components/Sidebar.svelte';
+  import LiquidGlassBackdrop from '$lib/components/LiquidGlassBackdrop.svelte';
+  import LiquidGlassSidebar from '$lib/components/LiquidGlassSidebar.svelte';
+  import LiquidGlassToolbar from '$lib/components/LiquidGlassToolbar.svelte';
+  import LiquidGlassQueue from '$lib/components/LiquidGlassQueue.svelte';
   import Player from '$lib/components/Player.svelte';
   import Settings from '$lib/components/Settings.svelte';
+  import LiquidGlassSettingsDialog from '$lib/components/LiquidGlassSettingsDialog.svelte';
   import Search from '$lib/components/Search.svelte';
   import Lyrics from '$lib/components/Lyrics.svelte';
   import BackdropAdlibStage from '$lib/components/BackdropAdlibStage.svelte';
@@ -15,6 +20,12 @@
   import ArtistPage from '$lib/components/ArtistPage.svelte';
   import Notifications from '$lib/components/Notifications.svelte';
   import WaveHero from '$lib/components/WaveHero.svelte';
+  import DailyMixes from '$lib/components/DailyMixes.svelte';
+  import DailyMixPage from '$lib/components/DailyMixPage.svelte';
+  import { activeDailyMix, type DailyMixSelection } from '$lib/dailyMixActions';
+  import { transitionDailyMix, cancelDailyMixMotion } from '$lib/utils/dailyMixMotion';
+  import { layoutPosition } from '$lib/actions/layoutPosition';
+  import { dailyReleaseArtists, localMixDay } from '$lib/dailyMixesCore';
   import GlyphWake from '$lib/components/GlyphWake.svelte';
   import { currentView, previousView, currentTrack, isPlaying, queue, likedTracks, listenStats, searchHistory, playlists, navHistory, navFuture, isHistoryNavigation, currentArtist, searchQuery as searchQueryStore, settings, effectivePerformanceMode, notify, pageAtmosphere } from '$lib/stores';
   import { getTrendingTracks } from '$lib/api';
@@ -27,6 +38,8 @@
   let osUsername = 'User';
   let trendingTracks: any[] = [];
   let newReleases: any[] = [];
+  let recommendationsDay = '';
+  let releasesDay = '';
   let similarArtists: {name: string, coverUrl: string}[] = [];
   let isLoadingHome = true;
   let isLoadingMore = false;
@@ -44,7 +57,12 @@
   $: visibleTrendingTracks = trendingTracks.slice(0, Math.min(visibleHomeCount, HOME_RENDER_LIMIT));
   $: canLoadMoreTracks = visibleTrendingTracks.length < HOME_RENDER_LIMIT;
 
-  $: displayView = $currentView === 'fullscreen' ? ($previousView || 'home') : $currentView;
+  $: glassSettings = $currentView === 'settings' && $settings.design === 'liquid-glass';
+  let settingsReturnView: typeof $currentView = 'home';
+  $: displayView = glassSettings ? settingsReturnView : $currentView === 'fullscreen' ? ($previousView || 'home') : $currentView;
+  $: if ($settings.design !== 'liquid-glass' && $currentView === 'wave') currentView.set('home');
+  $: waveView = $settings.design === 'liquid-glass' ? 'wave' : 'home';
+  $: waveVisible = $currentView === waveView || (glassSettings && displayView === waveView);
   $: if ($currentView !== 'fullscreen') fullscreenOverlaySettled = false;
   $: currentDisplayCover = coverUrlForTrack($currentTrack, $downloadedCoverCache);
 
@@ -73,6 +91,10 @@
 
   function trackSignature(track: any) {
     return `${track?.title || ''}\u0000${track?.artist || ''}`.toLocaleLowerCase('ru-RU');
+  }
+
+  function feedContext() {
+    return `${$settings.searchSource}:${$settings.searchSource === 'yandex' ? $settings.yandexUser?.uid || '' : $settings.scUser?.id || ''}`;
   }
 
   async function loadMoreTracks() {
@@ -109,23 +131,26 @@
    * спиннер гарантированно выключается — при любом исходе, включая брошенный запрос.
    */
   async function loadFeed() {
+    const context = feedContext();
     isLoadingHome = true;
     homeError = null;
     try {
       const tracks = await withTimeout(getTrendingTracks($likedTracks, $listenStats, $searchHistory, $playlists));
+      if (context !== feedContext()) return;
       // Свои плейлисты — сильный сигнал вкуса, а не содержимое главной. В API их треки уже
       // исключены из результата; эта проверка дополнительно не пропустит контейнер-плейлист.
-      trendingTracks = tracks.filter((t) => !Array.isArray(t?.tracks));
+      const received = tracks.filter((t) => !Array.isArray(t?.tracks));
+      if (received.length) { trendingTracks = received; recommendationsDay = localMixDay(); }
       visibleHomeCount = HOME_INITIAL_TRACKS;
       // `getTrendingTracks` внутри гасит отказы через Promise.allSettled и на мёртвой
       // сети возвращает пустой массив, а не ошибку. Формально это успех, по факту —
       // тихий провал: без этой проверки пользователь получил бы пустую страницу без
       // единого объяснения, почему на ней ничего нет.
-      if (trendingTracks.length === 0) {
+      if (received.length === 0) {
         // Называем тот сервис, из которого лента и собиралась: совет про VPN к Музыке
         // неприменим, а у неё свой типичный отказ — просроченный токен.
-        homeError = $settings.searchSource === 'yandex' && $settings.yandexToken
-          ? 'Рекомендации не пришли. Возможно, токен Яндекс.Музыки устарел — переподключи аккаунт в настройках.'
+        homeError = $settings.searchSource === 'yandex'
+          ? ($settings.yandexToken ? 'Яндекс Музыка не прислала рекомендации. Проверь соединение или переподключи аккаунт в настройках.' : 'Подключи Яндекс Музыку в настройках, чтобы получить рекомендации.')
           : 'Рекомендации не пришли. Возможно, SoundCloud недоступен без VPN.';
       }
     } catch (err) {
@@ -184,12 +209,30 @@
     }
   }
 
+  let releasesGeneration = 0;
+  onMount(() => {
+    const refresh = () => { void loadNewReleases(); };
+    window.addEventListener('lomify:artist-follow', refresh);
+    return () => window.removeEventListener('lomify:artist-follow', refresh);
+  });
   async function loadNewReleases() {
+    const generation = ++releasesGeneration;
+    const context = feedContext();
     try {
-      newReleases = await withTimeout(import('$lib/api').then(m => m.getNewReleases($likedTracks)));
+      const source = $settings.searchSource === 'yandex' ? 'yandex' : 'soundcloud';
+      const followed = $settings.followedArtists.filter(artist => artist.source === source).map(artist => artist.name).slice(-3);
+      const artistNames = [...new Set([...followed, ...dailyReleaseArtists($likedTracks, $listenStats.history, source)])].slice(0, 6);
+      const tracks = await withTimeout(import('$lib/api').then(m => m.getNewReleases($likedTracks, { artistNames, limit: 30 })));
+      if (generation !== releasesGeneration) return;
+      if (context !== feedContext()) return;
+      if (tracks.length) { newReleases = tracks; releasesDay = localMixDay(); }
     } catch (e) {
       console.error("Failed to fetch new releases", e);
     }
+  }
+
+  async function refreshDailySources() {
+    await Promise.allSettled([loadFeedAuto(), loadNewReleases()]);
   }
 
   async function loadDesktopInfo() {
@@ -236,9 +279,10 @@
     // `loadFeed` выше уже идёт.
     let feedSource: string | null = null;
     const unsubscribeSettings = settings.subscribe((s) => {
-      const key = `${s.searchSource}:${s.yandexToken ? 'auth' : 'anon'}`;
+      const key = `${s.searchSource}:${s.searchSource === 'yandex' ? s.yandexUser?.uid || '' : s.scUser?.id || ''}:${s.yandexToken ? 'auth' : 'anon'}`;
       if (feedSource === null || feedSource === key) { feedSource = key; return; }
       feedSource = key;
+      trendingTracks = []; newReleases = []; recommendationsDay = ''; releasesDay = '';
       loadFeedAuto();
       loadNewReleases();
     });
@@ -298,6 +342,7 @@
         $isHistoryNavigation = true;
         $currentArtist = e.state.artist || '';
         $searchQueryStore = e.state.search || '';
+        $activeDailyMix = e.state.dailyMix || null;
         $currentView = e.state.view;
       } else {
         goBack();
@@ -306,7 +351,7 @@
 
     if (typeof window !== 'undefined' && window.history && !window.history.state) {
       try {
-        window.history.replaceState({ view: $currentView, artist: $currentArtist, search: $searchQueryStore }, '');
+        window.history.replaceState({ view: $currentView, artist: $currentArtist, search: $searchQueryStore, dailyMix: $activeDailyMix }, '');
       } catch {}
     }
 
@@ -350,12 +395,13 @@
   //      own, so Back would drop you straight into fullscreen mode.
   //   2. every keystroke in search — typing mutates the current window, it doesn't
   //      open a new one, so Back walked back through the query letter by letter.
-  function windowKey(s: { view: string; artist: string }) {
-    return s.view === 'artist' ? `artist:${s.artist}` : s.view;
+  function windowKey(s: import('$lib/stores').NavState) {
+    return s.view === 'artist' ? `artist:${s.artist}` : s.view === 'daily-mix' ? `daily-mix:${s.dailyMix?.id || ''}` : s.view;
   }
 
   $: {
-    const currentState = { view: $currentView, artist: $currentArtist, search: $searchQueryStore };
+    const currentState = { view: $currentView, artist: $currentArtist, search: $searchQueryStore, dailyMix: $activeDailyMix };
+    if (currentState.view === 'settings' && lastState.view !== 'settings') settingsReturnView = lastState.view as typeof $currentView;
     if (currentState.view !== 'fullscreen') {
       if (windowKey(currentState) !== windowKey(lastState) && !$isHistoryNavigation) {
         navHistory.update(h => [...h, lastState]);
@@ -387,6 +433,7 @@
       if (prev) {
         $currentArtist = prev.artist;
         $searchQueryStore = prev.search;
+        $activeDailyMix = prev.dailyMix || null;
         $currentView = prev.view as any;
       }
     }
@@ -405,11 +452,37 @@
       if (next) {
         $currentArtist = next.artist;
         $searchQueryStore = next.search;
+        $activeDailyMix = next.dailyMix || null;
         $currentView = next.view as any;
       }
     }
   }
-   let previousRoute = '';
+  function openDailyMix(selection: DailyMixSelection) {
+    $activeDailyMix = selection;
+    $currentView = 'daily-mix';
+  }
+  let motionView = 'home';
+  let motionKey = 'home';
+  $: routeMotionKey = displayView === 'daily-mix' ? `daily-mix:${$activeDailyMix?.id || ''}` : displayView;
+  let motionMixId = '';
+  let homeScroll = 0;
+  $: if (mainEl && routeMotionKey !== motionKey) {
+    const old = motionView;
+    const id = old === 'daily-mix' && displayView === 'daily-mix' && motionMixId !== $activeDailyMix?.id ? '' : displayView === 'daily-mix' ? $activeDailyMix?.id || '' : motionMixId;
+    if (old === 'home') homeScroll = mainEl.scrollTop;
+    motionView = displayView;
+    motionKey = routeMotionKey;
+    motionMixId = displayView === 'daily-mix' ? $activeDailyMix?.id || '' : '';
+    if (old === 'daily-mix' || displayView === 'daily-mix') {
+      const destination = displayView;
+      void transitionDailyMix(id, () => {
+        if (!mainEl || destination !== displayView) return;
+        mainEl.scrollTo({ top: destination === 'home' ? homeScroll : 0, behavior: 'instant' });
+        syncAtmosShift();
+        if (destination === 'daily-mix') document.getElementById('daily-mix-heading')?.focus({ preventScroll: true });
+      }, $effectivePerformanceMode);
+    } else { cancelDailyMixMotion(); }
+  }
 
   /**
    * Прокрутка атмосферной подложки страницы.
@@ -440,6 +513,7 @@
 
   onDestroy(() => {
     if (atmosRaf) cancelAnimationFrame(atmosRaf);
+    cancelDailyMixMotion();
   });
 
   // `<main>` один на все разделы, и переключение раздела его прокрутку не сбрасывает —
@@ -465,14 +539,13 @@
   }
 </script>
 
-<!-- `tracks-left` only re-anchors the track grids themselves (see `.track-collection`
-     in app.css) — headings, buttons and the rest of the chrome stay put. -->
-<div class="h-screen w-screen flex flex-col bg-[var(--color-dark)] text-white font-sans overflow-hidden relative transition-colors duration-[1500ms]" class:tracks-left={$settings.leftAlignTracks}>
+<div class="app-shell h-screen w-screen flex flex-col bg-[var(--color-dark)] text-white font-sans overflow-hidden relative transition-colors duration-[1500ms]">
   
   <!-- Main Area -->
   <div class="flex-1 flex overflow-hidden relative">
     
     <!-- Background -->
+    {#if $settings.design !== 'liquid-glass'}
     <div class="absolute inset-0 pointer-events-none bg-[var(--color-dark)] overflow-hidden transition-colors duration-[1500ms]">
       <!-- During the fullscreen intro this remains behind the translucent overlay, preserving
            the existing visual hand-off. Once the opaque overlay has settled, its own backdrop
@@ -511,15 +584,17 @@
         scrollOffset={mainScrollTop}
       />
     </div>
+    {/if}
 
     <!-- Backdrop adlibs layer for normal lyrics view: covers full viewport width behind content -->
     {#if $currentView === 'lyrics'}
       <BackdropAdlibStage isFullscreen={false} />
     {/if}
 
-    <div class="flex w-full relative">
+    <div class="app-columns flex w-full relative">
+      {#if $settings.design === 'liquid-glass'}<LiquidGlassBackdrop />{/if}
       {#if displayView !== 'fullscreen'}
-        <Sidebar />
+        {#if $settings.design === 'liquid-glass'}<LiquidGlassSidebar />{:else}<Sidebar />{/if}
       {/if}
 
       <!-- Main Content -->
@@ -530,6 +605,9 @@
       >
     
     {#if $currentView !== 'fullscreen'}
+      {#if $settings.design === 'liquid-glass'}
+        <LiquidGlassToolbar back={goBack} forward={goForward} />
+      {:else}
       <div class="app-history-nav fixed top-6 z-50 flex items-center gap-3">
         <button 
           class="w-10 h-10 rounded-full bg-black/40 hover:bg-black/60 backdrop-blur-md flex items-center justify-center text-white/80 hover:text-white transition-all disabled:opacity-30 disabled:cursor-not-allowed"
@@ -548,6 +626,7 @@
           <ChevronRight size={24} />
         </button>
       </div>
+      {/if}
     {/if}
 
     <!-- «Моя волна» стоит ВЫШЕ развилки загрузки, а не внутри ветки с лентой, и это
@@ -574,13 +653,13 @@
          оверлеем, который её полностью закрывает. -->
     <div
       class="wave-hero-host w-full max-w-[1480px] mx-auto relative z-10 mb-10"
-      class:wave-hero-parked={$currentView !== 'home'}
+      class:wave-hero-parked={!waveVisible}
+      class:lg-wave-host={$settings.design === 'liquid-glass'}
     >
       <WaveHero
-        {greeting}
-        username={osUsername}
-        sourceTracks={trendingTracks}
-        onPage={$currentView === 'home'}
+        greeting={$settings.design === 'liquid-glass' ? 'Моя волна' : greeting}
+        username={$settings.design === 'liquid-glass' ? '' : osUsername}
+        onPage={$currentView === waveView}
         motionEnabled={!$effectivePerformanceMode}
       />
     </div>
@@ -588,6 +667,16 @@
     {#if displayView === 'artist'}
       <ArtistPage />
     {:else if displayView === 'home'}
+      {#if $settings.design === 'liquid-glass'}
+        <header class="lg-home-heading">
+          <p>{greeting}{osUsername && osUsername !== 'User' ? `, ${osUsername}` : ''}</p>
+          <h1>Главная</h1>
+          <span>Подборки, новые релизы и музыка для тебя</span>
+        </header>
+      {/if}
+      <div class="daily-mixes-position w-full max-w-[1480px] mx-auto relative z-10 mb-12 pt-2" use:layoutPosition={$settings.design === 'liquid-glass' && !$effectivePerformanceMode}>
+        <DailyMixes recommendations={trendingTracks} {recommendationsDay} releases={newReleases} {releasesDay} onrefresh={refreshDailySources} onopen={openDailyMix} />
+      </div>
       {#if isLoadingHome}
         <div class="home-feed-loading w-full flex flex-col items-center gap-4 py-20 text-primary">
           <Loader2 class="animate-spin" size={40} />
@@ -611,7 +700,7 @@
           </button>
         </div>
       {:else}
-        <div class="w-full max-w-[1480px] mx-auto flex flex-col gap-10 relative z-10 pt-2" style="isolation: isolate;">
+        <div class="home-shelves-position w-full max-w-[1480px] mx-auto flex flex-col gap-10 relative z-10 pt-2" style="isolation: isolate;" use:layoutPosition={$settings.design === 'liquid-glass' && !$effectivePerformanceMode}>
           <div class="space-y-16">
             {#if newReleases.length > 0}
               {#await import('$lib/components/ArchiveStation.svelte') then ArchiveStation}
@@ -621,7 +710,7 @@
 
             {#await import('$lib/components/ArchiveStation.svelte') then ArchiveStation}
               {#if visibleTrendingTracks.length > 0}
-                <svelte:component this={ArchiveStation.default} title="Главная" tracks={visibleTrendingTracks} />
+                <svelte:component this={ArchiveStation.default} title={$settings.design === 'liquid-glass' ? 'Для тебя' : 'Главная'} tracks={visibleTrendingTracks} />
               {/if}
 
               <div class="w-full flex justify-center gap-4 mt-6 mb-4">
@@ -664,6 +753,10 @@
           </div>
         </div>
       {/if}
+    {:else if displayView === 'wave'}
+      <p class="lg-wave-note">Запусти волну или настрой подбор музыки. Любимые и скрытые треки помогают ей лучше понимать твой вкус.</p>
+    {:else if displayView === 'daily-mix' && $activeDailyMix}
+      {#key $activeDailyMix.id}<DailyMixPage selection={$activeDailyMix} onback={goBack} />{/key}
     {:else if displayView === 'search'}
       <Search />
     {:else if displayView === 'lyrics'}
@@ -688,6 +781,7 @@
       </div>
     {/if}
     </main>
+    {#if $settings.design === 'liquid-glass' && $currentView !== 'fullscreen'}<LiquidGlassQueue />{/if}
     </div>
 
     <!-- Fullscreen Overlay at Root level inside the Main Area container, positioned fixed inset-0 -->
@@ -702,9 +796,10 @@
     {/if}
 
     <!-- Moved Notifications and Player here so they are inside the overflow-hidden container! -->
+    {#if glassSettings}<LiquidGlassSettingsDialog onclose={() => currentView.set(settingsReturnView)} />{/if}
     <Notifications />
 
-    <div class="absolute bottom-0 left-0 w-full {$currentView === 'fullscreen' ? 'z-[105]' : 'z-50'}">
+    <div class="app-player-dock absolute bottom-0 left-0 w-full {$currentView === 'fullscreen' ? 'z-[105]' : 'z-50'}">
       <Player />
     </div>
   </div>

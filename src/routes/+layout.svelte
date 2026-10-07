@@ -1,9 +1,12 @@
 <script lang="ts">
+  import { whenSecretsReady } from '$lib/secretStorage';
   import { startPlaylistSync } from '$lib/playlistSync';
+  import { startDislikeSync } from '$lib/dislikeSync';
   import '../app.css';
   import { settings, initStore, currentTrack, isPlaying, effectivePerformanceMode } from '$lib/stores';
   import { get } from 'svelte/store';
   import Titlebar from '$lib/components/Titlebar.svelte';
+  import { glassSidebarOpen, glassQueueOpen, glassPanelDragWidth } from '$lib/liquidGlass';
   import UpdateNotification from '$lib/components/UpdateNotification.svelte';
   import { onMount } from 'svelte';
   import { Check, X, ChevronDown, ChevronUp, Sparkles } from 'lucide-svelte';
@@ -22,6 +25,12 @@
   import { lockDevTools } from '$lib/utils/devLock';
   import { trackSheen } from '$lib/utils/sheen';
   import { trackTilt } from '$lib/utils/tilt';
+  import { trackPointerActions } from '$lib/utils/hitGuard';
+  import { trackInputModality } from '$lib/utils/focusInput';
+  onMount(trackInputModality);
+  onMount(trackPointerActions);
+  import { startMusicLinks } from '$lib/shareLinks';
+  onMount(startMusicLinks);
   import { trackPress } from '$lib/utils/press';
   import {
     coverUrlForTrack,
@@ -193,7 +202,8 @@
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName?.toLowerCase();
       const isEditable = tag === 'input' || tag === 'textarea' || tag === 'select' || target?.isContentEditable;
-      if (isEditable) return;
+      const isInteractive = target?.closest('button, a[href], summary, [role="button"], [role="switch"], dialog[open]');
+      if (isEditable || isInteractive) return;
 
       e.preventDefault();
       if ($currentTrack) {
@@ -219,7 +229,15 @@
 
   onMount(() => {
     initStore();
-    const releasePlaylistSync = startPlaylistSync();
+    let startupDisposed = false;
+    let releasePlaylistSync: (() => void) | null = null;
+    let releaseDislikeSync: (() => void) | null = null;
+    void whenSecretsReady().then(() => {
+      if (!startupDisposed) {
+        releasePlaylistSync = startPlaylistSync();
+        releaseDislikeSync = startDislikeSync();
+      }
+    });
     const initialSettings = get(settings);
     if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
       import('@tauri-apps/api/core').then(({ invoke }) => {
@@ -311,7 +329,7 @@
       likesSyncTask = setTimeout(() => {
         // `silent` — запуск не по просьбе человека: отказы уходят в консоль, а не
         // уведомлением поверх интерфейса. Об изменениях сверка скажет сама.
-        syncAllLikesAtStartup();
+        void whenSecretsReady().then(() => { if (!startupDisposed) syncAllLikesAtStartup(); });
       }, 500);
 
       // Обход диска не конкурирует с первым кадром, загрузкой главной и сверкой лайков.
@@ -411,7 +429,9 @@
     }
 
     return () => {
-      releasePlaylistSync();
+      startupDisposed = true;
+      releasePlaylistSync?.();
+      releaseDislikeSync?.();
       downloadedCoversDisposed = true;
       releaseDownloadedCovers?.();
       releaseDevLock();
@@ -456,7 +476,13 @@
       setBodyFlag('data-global-theme', $settings.globalThemeEffect ? 'true' : 'false');
       // Глобальный дизайн — отдельная ось от uiStyle/theme: он переопределяет сами
       // материалы и типографику (src/design-aurora.css), а не только оттенок.
-      setBodyFlag('data-design', $settings.design === 'aurora' ? 'aurora' : 'classic');
+      setBodyFlag('data-design', ['aurora', 'liquid-glass'].includes($settings.design) ? $settings.design : 'classic');
+      setBodyFlag('data-glass-quality', $effectivePerformanceMode ? 'off' : $settings.glassQuality || 'normal');
+      setBodyFlag('data-glass-sidebar', $glassSidebarOpen ? 'open' : 'closed');
+      setBodyFlag('data-glass-queue', $glassQueueOpen ? 'open' : 'closed');
+      const panelWidth = $glassPanelDragWidth ?? $settings.glassPanelWidth;
+      if (Number.isFinite(panelWidth) && panelWidth !== null) document.body.style.setProperty('--lg-panel-width', `${panelWidth}px`);
+      else document.body.style.removeProperty('--lg-panel-width');
 
       // Режим производительности. Снимает самые дорогие эффекты (живое размытие фона под
       // панелями) без потери визуального строя: вместо стекла — плотная тёмная заливка.
@@ -490,7 +516,7 @@
   // `@property --color-primary` in app.css is what makes the change ease rather
   // than snap; the accent is registered as a real <color>.
   $: currentDisplayCover = coverUrlForTrack($currentTrack, $downloadedCoverCache);
-  $: applyCoverAccent(currentDisplayCover, $settings?.accentFromCover !== false);
+  $: applyCoverAccent(currentDisplayCover, $settings.design !== 'liquid-glass' && $settings?.accentFromCover !== false);
 
   let appliedAccentFor: string | null = null;
   async function applyCoverAccent(coverUrl: string | undefined, enabled: boolean) {

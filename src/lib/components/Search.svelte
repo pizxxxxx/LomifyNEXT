@@ -36,6 +36,10 @@
   import { goToArtist } from '$lib/utils/navigation';
   import MusicServiceIcon from './MusicServiceIcon.svelte';
   import { coverUrlAtSize } from '$lib/offlineCovers';
+  import LiquidGlassTrackList from './LiquidGlassTrackList.svelte';
+  import { glassRefraction } from '$lib/glassRefraction';
+  import { effectivePerformanceMode } from '$lib/stores';
+  import { normalizeSearchText, trackSearchScore } from '$lib/utils/searchText';
 
   type SearchView = 'all' | 'tracks' | 'artists' | 'playlists' | 'local';
   type SearchSourceKind = 'soundcloud' | 'yandex' | 'local';
@@ -63,6 +67,8 @@
   let searchNotice = '';
 
   const SEARCH_PAGE_SIZE = 20;
+  $: glass = $settings.design === 'liquid-glass';
+  $: glassQuality = glass && !$effectivePerformanceMode ? $settings.glassQuality || 'normal' : 'off';
 
   $: localResults = $searchResults.filter((track: any) => sourceKind(track) === 'local');
   $: artistMatches = collectArtistMatches($searchResults).slice(0, 6);
@@ -87,7 +93,7 @@
     }
   });
 
-  onDestroy(() => clearTimeout(timeout));
+  onDestroy(() => { clearTimeout(timeout); searchGeneration++; });
 
   function handleSearch(e: Event) {
     const val = (e.target as HTMLInputElement).value;
@@ -122,19 +128,16 @@
     timeout = setTimeout(async () => {
       // Capture the query this run belongs to: `$searchQuery` keeps changing while we await.
       const query = val;
-      const lowerQuery = query.toLowerCase();
       try {
         let filteredLocal: any[] = [];
         try {
           // Локальная медиатека отвечает первой и показывается, пока сеть ещё думает.
           const localTracks = await getTracks();
-          filteredLocal = localTracks.filter(t =>
-            t.title.toLowerCase().includes(lowerQuery) ||
-            t.artist.toLowerCase().includes(lowerQuery)
-          ).map(t => ({ ...t, source: 'Локальный', isLocal: true }));
+          filteredLocal = localTracks.filter(t => trackSearchScore(t, query) > 0)
+            .map(t => ({ ...t, source: 'Локальный', isLocal: true }));
         } catch (e) {
           console.warn('[Search] локальная медиатека недоступна', e);
-          searchNotice = 'Не получилось проверить файлы на компьютере — онлайн-поиск продолжается.';
+          if (generation === searchGeneration) searchNotice = 'Не получилось проверить файлы на компьютере - онлайн-поиск продолжается.';
         }
 
         // Local matches show up immediately — no reason to stare at a spinner while
@@ -166,9 +169,11 @@
             ? 'Онлайн-каталог сейчас не ответил. Показываю то, что удалось найти.'
             : 'Онлайн-каталог сейчас недоступен.';
         } else if (tracksOutcome.value.fallbackUsed) {
-          searchNotice = 'Яндекс Музыка не ответила — временно показаны результаты SoundCloud.';
+          searchNotice = 'Яндекс Музыка не ответила - временно показаны результаты SoundCloud.';
         } else if (playlistsOutcome.status === 'rejected') {
           searchNotice = 'Треки найдены, но плейлисты SoundCloud сейчас не загрузились.';
+        } else if (tracksOutcome.value.correctedQuery) {
+          searchNotice = `Нашёл также по запросу «${tracksOutcome.value.correctedQuery}».`;
         }
         isLoading = false;
 
@@ -248,10 +253,7 @@
   }
 
   function normalizeSearchValue(value: unknown) {
-    return `${value ?? ''}`
-      .toLocaleLowerCase('ru')
-      .replace(/[^\p{L}\p{N}]+/gu, ' ')
-      .trim();
+    return normalizeSearchText(value);
   }
 
   function resultKey(track: any) {
@@ -259,16 +261,7 @@
   }
 
   function resultScore(track: any, query: string, order: number) {
-    const needle = normalizeSearchValue(query);
-    const title = normalizeSearchValue(track?.title);
-    const artist = normalizeSearchValue(track?.artist);
-    let score = 0;
-    if (title === needle) score += 1000;
-    else if (title.startsWith(needle)) score += 520;
-    else if (title.includes(needle)) score += 260;
-    if (artist === needle) score += 720;
-    else if (artist.startsWith(needle)) score += 360;
-    else if (artist.includes(needle)) score += 180;
+    let score = trackSearchScore(track, query);
     if (sourceKind(track) === 'local') score += 12;
     return score - order * 0.01;
   }
@@ -445,7 +438,7 @@
   let showPlaylistMenuId: string | null = null;
 </script>
 
-<div class="search-page">
+<div class="search-page" class:lg-search={glass}>
   <header class="search-page-head">
     <div class="search-page-title">
       <span>Вся музыка в одном месте</span>
@@ -492,7 +485,7 @@
     </div>
   </header>
 
-  <div class="search-command">
+  <div class="search-command" class:lg-optical={glass} use:glassRefraction={glassQuality}>
     <SearchIcon size={23} aria-hidden="true" />
     <input
       type="search"
@@ -748,6 +741,9 @@
           <div><span>{resultView === 'local' ? 'Без подключения к сети' : 'По релевантности'}</span><h2>{resultView === 'local' ? 'На компьютере' : 'Треки'}</h2></div>
           <strong class="tnum">{tracksAfterTop.length}</strong>
         </div>
+        {#if glass}
+          <LiquidGlassTrackList tracks={visibleTrackResults} artwork onplay={playTrack} onexport={$settings.exportEnabled ? exportTrackToFile : undefined} />
+        {:else}
         <div class="track-row-list search-track-list" class:has-open-track-menu={showPlaylistMenuId !== null}>
           {#each visibleTrackResults as track, i (resultKey(track))}
             {@const isActive = $currentTrack?.title === track.title && $currentTrack?.artist === track.artist}
@@ -809,6 +805,7 @@
             </div>
           {/each}
         </div>
+        {/if}
         {#if visibleTrackResults.length < tracksAfterTop.length}
           <button type="button" class="search-show-more" on:click={() => visibleTrackLimit += SEARCH_PAGE_SIZE}>
             <ChevronDown size={16} /> Показать ещё {Math.min(SEARCH_PAGE_SIZE, tracksAfterTop.length - visibleTrackResults.length)}

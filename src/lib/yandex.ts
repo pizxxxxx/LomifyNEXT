@@ -36,7 +36,11 @@
  */
 
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
+import { whenSecretsReady } from './secretStorage';
+import { redactText, rememberSecret } from './logRedaction';
 import md5 from 'md5';
+import type { WaveFilterState } from './waveFilters';
+import { waveStationForFilters, waveStationSettings } from './waveStationCore';
 
 const API = 'https://api.music.yandex.net';
 
@@ -295,6 +299,8 @@ async function ymFetch(
   token: string,
   init: Record<string, any> = {}
 ): Promise<YmResponse> {
+  rememberSecret(normalizeYandexToken(token));
+  await whenSecretsReady();
   if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
     throw new Error(
       'Яндекс Музыка доступна только в приложении: браузер не даёт выставить заголовки ' +
@@ -378,7 +384,7 @@ function bodyShape(raw: string): string {
   if (!text) return 'тело ответа пустое';
   if (/captcha/i.test(text)) return 'в ответе страница с капчей';
   if (/^<(!doctype|html)/i.test(text)) return 'в ответе HTML-страница, а не JSON';
-  return `в ответе не JSON: ${text.slice(0, 60)}`;
+  return 'в ответе неизвестный формат';
 }
 
 /**
@@ -451,19 +457,15 @@ export async function ymJson(url: string, token: string, init?: Record<string, a
     const err = body?.error;
     const name = typeof err === 'string' ? err : err?.name ?? '';
     const message = typeof err === 'string' ? err : err?.message ?? '';
-    // В консоль — то, чего нет в тексте уведомления и без чего причину не найти: какой
-    // метод, каким набором заголовков и что именно ответил Яндекс. Сам токен не пишем
-    // никогда, только его длину: по ней видно обрезанную при копировании строку, а
-    // воспользоваться ею нельзя.
+    // Diagnostics keep request/status metadata only. Server bodies may echo credentials.
     console.warn('[yandex] отказ', {
       url,
       status: res.status,
       profile: lastProfile,
       transport: lastTransport,
-      tokenLength: token.length,
-      body: raw.slice(0, 300),
+      code: redactText(String(name)),
     });
-    throw Object.assign(new Error(describeYmError(res.status, name, message, raw)), { status: res.status, code: name });
+    throw Object.assign(new Error(redactText(describeYmError(res.status, name, message, raw))), { status: res.status, code: redactText(String(name)) });
   }
 
   if (body?.error) {
@@ -472,7 +474,7 @@ export async function ymJson(url: string, token: string, init?: Record<string, a
     const err = body.error;
     const name = typeof err === 'string' ? err : err?.name ?? '';
     const message = typeof err === 'string' ? err : err?.message ?? '';
-    throw Object.assign(new Error(describeYmError(200, name, message)), { status: 200, code: name });
+    throw Object.assign(new Error(redactText(describeYmError(200, name, message))), { status: 200, code: redactText(String(name)) });
   }
 
   return body?.result ?? null;
@@ -712,7 +714,7 @@ export interface YandexAccount {
 
 /**
  * Проверка токена и одновременно «кто вошёл». Другого способа убедиться, что строка
- * действительно рабочая, нет — так же поступает `ym_import_start` в Rust, беря отсюда uid.
+ * действительно рабочая, нет. uid используется для импорта и синхронизации библиотеки.
  */
 export async function yandexAccountStatus(rawToken: string): Promise<YandexAccount> {
   const token = normalizeYandexToken(rawToken);
@@ -805,13 +807,13 @@ export async function yandexAvatarUrl(rawToken: string): Promise<string> {
  * попросили. Первую страницу ждём, чтобы узнать `total` и размер страницы, остальные тянем
  * разом — иначе поиск стоил бы трёх последовательных обращений вместо двух.
  */
-export async function searchYandex(rawToken: string, query: string, limit = 50, page = 0) {
+export async function searchYandex(rawToken: string, query: string, limit = 50, page = 0, signal?: AbortSignal) {
   const token = normalizeYandexToken(rawToken);
   const text = query.trim();
   if (!token || !text) return [];
 
   const ask = (p: number) =>
-    ymJson(`${API}/search?text=${encodeURIComponent(text)}&type=track&page=${p}&nocorrect=false`, token);
+    ymJson(`${API}/search?text=${encodeURIComponent(text)}&type=track&page=${p}&nocorrect=false`, token, { signal });
 
   const first = await ask(page);
   const found: any[] = first?.tracks?.results ?? [];
@@ -838,10 +840,10 @@ export async function searchYandex(rawToken: string, query: string, limit = 50, 
 }
 
 /** Порт related.rs — на нём держится автоплей, когда очередь закончилась. */
-export async function getYandexSimilar(rawToken: string, trackId: string | number, limit = 15) {
+export async function getYandexSimilar(rawToken: string, trackId: string | number, limit = 15, signal?: AbortSignal) {
   const token = normalizeYandexToken(rawToken);
   if (!token || !trackId) return [];
-  const result = await ymJson(`${API}/tracks/${trackId}/similar`, token);
+  const result = await ymJson(`${API}/tracks/${trackId}/similar`, token, { signal });
   const similar = result?.similarTracks ?? [];
   return similar.map(mapYandexTrack).filter(Boolean).slice(0, limit);
 }
@@ -872,15 +874,15 @@ async function yandexLyricsSign(trackId: string, timestamp: number): Promise<str
   return btoa(binary);
 }
 
-async function fetchYandexLyricsAsset(url: string): Promise<string | null> {
+async function fetchYandexLyricsAsset(url: string, signal?: AbortSignal): Promise<string | null> {
   const headers = { Accept: 'text/plain, application/octet-stream;q=0.9, */*;q=0.8' };
   let res: YmResponse;
   try {
-    res = await sendVia(workingTransport, url, headers, {});
+    res = await sendVia(workingTransport, url, headers, { signal });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     if (workingTransport === 'direct' || !looksLikeProxyFailure(message)) throw e;
-    res = await sendVia('direct', url, headers, {});
+    res = await sendVia('direct', url, headers, { signal });
   }
   if (!res.ok) return null;
   const text = (await res.text()).replace(/^\uFEFF/, '').trim();
@@ -890,7 +892,8 @@ async function fetchYandexLyricsAsset(url: string): Promise<string | null> {
 /** Получить LRC (предпочтительно) или простой текст непосредственно из Яндекс Музыки. */
 export async function getYandexLyrics(
   rawToken: string,
-  rawTrackId: string | number
+  rawTrackId: string | number,
+  signal?: AbortSignal
 ): Promise<string | null> {
   const token = normalizeYandexToken(rawToken);
   const trackId = `${rawTrackId ?? ''}`.split(':')[0].trim();
@@ -901,23 +904,26 @@ export async function getYandexLyrics(
     const sign = await yandexLyricsSign(trackId, timestamp);
 
     for (const format of ['LRC', 'TEXT'] as const) {
+      signal?.throwIfAborted();
       const params = new URLSearchParams({
         format,
         timeStamp: `${timestamp}`,
         sign,
       });
       try {
-        const info = await ymJson(`${API}/tracks/${trackId}/lyrics?${params}`, token);
+        const info = await ymJson(`${API}/tracks/${trackId}/lyrics?${params}`, token, { signal });
         const downloadUrl = `${info?.downloadUrl ?? info?.download_url ?? ''}`.trim();
         if (!downloadUrl) continue;
-        const text = await fetchYandexLyricsAsset(downloadUrl);
+        const text = await fetchYandexLyricsAsset(downloadUrl, signal);
         if (text) return text;
       } catch {
+        signal?.throwIfAborted();
         // У трека может быть только один из форматов; второй пробуем без уведомления.
       }
     }
 
-    const supplement = await ymJson(`${API}/tracks/${trackId}/supplement`, token).catch(() => null);
+    const supplement = await ymJson(`${API}/tracks/${trackId}/supplement`, token, { signal }).catch(() => null);
+    signal?.throwIfAborted();
     const legacy = `${
       supplement?.lyrics?.fullLyrics ??
       supplement?.lyrics?.full_lyrics ??
@@ -926,6 +932,7 @@ export async function getYandexLyrics(
     }`.trim();
     return legacy || null;
   } catch (e) {
+    signal?.throwIfAborted();
     console.warn('[yandex] текст трека не получен', e);
     return null;
   }
@@ -950,6 +957,35 @@ export async function getYandexLyrics(
 
 /** Идентификатор станции «Моя волна». Персональная, привязана к аккаунту токена. */
 export const WAVE_STATION = 'user:onyourwave';
+
+let stationCatalog: { account: string; at: number; ids: Set<string> } | null = null;
+/** Resolve catalogue IDs and apply a supported server-side language before asking for tracks. */
+export async function prepareYandexWaveFilters(rawToken: string, state: WaveFilterState, seedStation?: string, signal?: AbortSignal): Promise<{ station: string; serverLanguage: string }> {
+  const token = normalizeYandexToken(rawToken);
+  let station = seedStation || WAVE_STATION;
+  if (!seedStation && state.waveGenre) {
+    if (!stationCatalog || stationCatalog.account !== token || Date.now() - stationCatalog.at > 600_000) {
+      const result = await ymJson(`${API}/rotor/stations/list`, token, { signal });
+      signal?.throwIfAborted();
+      const ids = new Set<string>((Array.isArray(result) ? result : []).flatMap(item => {
+        const id = item?.station?.id;
+        return id?.type && id?.tag ? [`${id.type}:${id.tag}`] : [];
+      }));
+      stationCatalog = { account: token, at: Date.now(), ids };
+    }
+    station = waveStationForFilters(state, stationCatalog.ids);
+  }
+  const result = await ymJson(`${API}/rotor/station/${encodeURIComponent(station)}/info`, token, { signal });
+  signal?.throwIfAborted();
+  const info = Array.isArray(result) ? result[0] : result;
+  if (!info?.station) throw new Error('Не удалось прочитать фильтры станции. Попробуйте включить волну ещё раз.');
+  const next = waveStationSettings(info, state);
+  if (info.settings2?.language !== next.language) {
+    const applied = await ymJson(`${API}/rotor/station/${encodeURIComponent(station)}/settings3`, token, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next), signal });
+    if (applied !== 'ok') throw new Error('Яндекс не применил фильтр волны. Повторите попытку.');
+  }
+  return { station, serverLanguage: next.language };
+}
 
 /**
  * Откуда включили — станция пишет это себе в статистику. Значение взято у веб-клиента,
@@ -979,7 +1015,8 @@ export interface YandexWaveBatch {
 export async function yandexWaveBatch(
   rawToken: string,
   prevTrackId?: string | number | null,
-  station = WAVE_STATION
+  station = WAVE_STATION,
+  signal?: AbortSignal
 ): Promise<YandexWaveBatch> {
   const token = normalizeYandexToken(rawToken);
   if (!token) throw new Error('Яндекс Музыка не подключена — вставьте токен в настройках.');
@@ -989,7 +1026,7 @@ export async function yandexWaveBatch(
   if (tail) params.set('queue', tail);
 
   const targetStation = station || WAVE_STATION;
-  const result = await ymJson(`${API}/rotor/station/${targetStation}/tracks?${params}`, token);
+  const result = await ymJson(`${API}/rotor/station/${encodeURIComponent(targetStation)}/tracks?${params}`, token, { signal });
 
   // Порция приходит как `sequence: [{ type, track, liked }]`; `mapYandexTrack` умеет
   // разворачивать такую обёртку сам (в лайках и плейлистах она такая же).
@@ -1397,6 +1434,10 @@ export async function getYandexLikes(
   const uid = await accountUid(token);
 
   const library = await ymJson(`${API}/users/${uid}/likes/tracks`, token);
+  const dates = new Map<string, number>((library?.library?.tracks ?? []).map((entry: any) => {
+    const at = typeof entry.timestamp === 'string' ? Date.parse(entry.timestamp) : Number(entry.timestamp);
+    return [String(entry.id), Number.isFinite(at) && at > 0 && at <= Date.now() ? at : 0];
+  }));
   const ids: string[] = (library?.library?.tracks ?? [])
     .map((t: any) => `${t?.id ?? ''}`.trim())
     .filter(Boolean);
@@ -1447,7 +1488,7 @@ export async function getYandexLikes(
   if (missingIds.length === 0) onProgress?.(ids.length, ids.length);
 
   return {
-    tracks: ids.map((id) => cache.get(id)).filter(Boolean),
+    tracks: ids.map((id) => { const track = cache.get(id); return track && dates.get(id) ? { ...track, likedAt: dates.get(id) } : track; }).filter(Boolean),
     complete: results.every((result) => result.ok),
   };
 }

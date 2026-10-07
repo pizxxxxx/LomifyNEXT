@@ -4,7 +4,7 @@
   import { saveWindowState, StateFlags } from '@tauri-apps/plugin-window-state';
   import { settings } from '$lib/stores';
 
-  $: controlsStyle = $settings.windowControlsStyle === 'macos' ? 'macos' : 'windows';
+  $: controlsStyle = $settings.design !== 'liquid-glass' && $settings.windowControlsStyle === 'macos' ? 'macos' : 'windows';
   
   function minimize() {
     getCurrentWindow().minimize();

@@ -1,8 +1,11 @@
 <script lang="ts">
+  import { saveSecret, deleteSecret, deleteAllSecrets, clearLegacySecrets } from '$lib/secretStorage';
   import PlaylistSyncSettings from './PlaylistSyncSettings.svelte';
   import { playlistSyncStatus, syncPlaylists } from '$lib/playlistSync';
   import { settings, waveDisplayName, automaticPerformanceMode, playlists, listenStats, notify, dislikedTracks, currentView, activeLibraryTab, rebootCurrentTrack } from '$lib/stores';
   import { clearAllDislikes } from '$lib/dislikes';
+  export let inDialog = false;
+  let sectionSearch = '';
   import {
     Download,
     FolderDown,
@@ -30,6 +33,7 @@
   import { enable, isEnabled, disable } from '@tauri-apps/plugin-autostart';
   import { appDataDir, appLocalDataDir } from '@tauri-apps/api/path';
   import { openUrl } from '@tauri-apps/plugin-opener';
+  import { YOOMONEY_BUTTON_URL, YOOMONEY_WALLET_URL } from '$lib/supportLinks';
   import { invoke } from '@tauri-apps/api/core';
   import { onMount, tick } from 'svelte';
   import { withCount } from '$lib/utils/plural';
@@ -206,8 +210,6 @@
   let dataPath = '';
   let localDataPath = '';
   const RELEASES_URL = 'https://github.com/pizxxxxx/LomifyNEXT/releases';
-  const YOOMONEY_BUTTON_URL = 'https://yoomoney.ru/quickpay/fundraise/button?billNumber=1JTH771HF4Q.260827';
-  const YOOMONEY_WALLET_URL = 'https://yoomoney.ru/to/4100116984624656';
   let supportOpen = false;
   let supportTrigger: HTMLButtonElement;
   let supportDialog: HTMLElement;
@@ -246,9 +248,12 @@
 
   $: cacheTotalBytes = cacheAudioBytes + cacheLikedBytes + cacheImageBytes;
 
-  type SettingsTab = 'appearance' | 'music' | 'lyrics' | 'system' | 'data';
-  const settingsTabs: SettingsTab[] = ['appearance', 'music', 'lyrics', 'system', 'data'];
+  type SettingsTab = 'appearance' | 'music' | 'lyrics' | 'system' | 'data' | 'audio' | 'connections';
+  const glassSections = [{ id: 'system', title: 'Общие', icon: MonitorCog }, { id: 'appearance', title: 'Оформление', icon: Palette }, { id: 'audio', title: 'Аудио', icon: Headphones }, { id: 'connections', title: 'Подключения', icon: Music }, { id: 'lyrics', title: 'Тексты', icon: Captions }, { id: 'data', title: 'Дополнительно', icon: Database }];
+  $: visibleGlassSections = glassSections.filter(section => section.title.toLocaleLowerCase('ru').includes(sectionSearch.trim().toLocaleLowerCase('ru')));
+  $: settingsTabs = ($settings.design === 'liquid-glass' ? glassSections.map(section => section.id) : ['appearance', 'music', 'lyrics', 'system', 'data']) as SettingsTab[];
   let settingsTab: SettingsTab = 'appearance';
+  $: if (!settingsTabs.includes(settingsTab)) settingsTab = 'appearance';
   $: settingsTabIndex = settingsTabs.indexOf(settingsTab);
 
   function setSettingsTab(tab: SettingsTab) {
@@ -256,17 +261,19 @@
   }
 
   async function onSettingsTabsKeydown(event: KeyboardEvent) {
-    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault();
 
-    const current = settingsTabs.indexOf(settingsTab);
+    const tabs = inDialog ? visibleGlassSections.map(section => section.id as SettingsTab) : settingsTabs;
+    if (!tabs.length) return;
+    const current = tabs.indexOf(settingsTab);
     let next = current;
     if (event.key === 'Home') next = 0;
-    else if (event.key === 'End') next = settingsTabs.length - 1;
-    else if (event.key === 'ArrowRight') next = (current + 1) % settingsTabs.length;
-    else next = (current - 1 + settingsTabs.length) % settingsTabs.length;
+    else if (event.key === 'End') next = tabs.length - 1;
+    else if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = (current + 1) % tabs.length;
+    else next = current < 0 ? tabs.length - 1 : (current - 1 + tabs.length) % tabs.length;
 
-    settingsTab = settingsTabs[next];
+    settingsTab = tabs[next];
     await tick();
     document.getElementById(`settings-tab-${settingsTab}`)?.focus();
   }
@@ -776,6 +783,7 @@
       // Аватар отдаёт Паспорт, а не Музыка, и права на него у музыкального токена может не
       // быть — поэтому отдельным запросом, который не умеет бросать (вернёт пустую строку).
       const avatarUrl = await yandexAvatarUrl(raw);
+      await saveSecret('yandex_music_token', normalizeYandexToken(raw));
       $settings.yandexToken = normalizeYandexToken(raw);
       $settings.yandexUser = { ...account, avatarUrl };
       $settings.searchSource = 'yandex';
@@ -800,13 +808,21 @@
     ymLoading = false;
   }
 
-  function unlinkYandex() {
+  async function unlinkYandex() {
+    try { await deleteSecret('yandex_music_token'); }
+    catch { notify('Не удалось удалить данные Яндекса из системного хранилища. Повтори отключение.', 'error'); return; }
     $settings.yandexToken = '';
     $settings.yandexUser = null;
     // Оставлять выбранным источник, доступа к которому больше нет, нельзя — поиск бы
     // молча падал в SoundCloud, и было бы непонятно, почему.
     if ($settings.searchSource === 'yandex') $settings.searchSource = 'soundcloud';
     notify('Яндекс Музыка отключена.', 'info');
+  }
+
+  async function unlinkSoundCloud() {
+    try { await clearLegacySecrets(); }
+    catch { notify('Не удалось удалить старые данные SoundCloud. Повтори отключение.', 'error'); return; }
+    $settings.scUser = null;
   }
 
   /**
@@ -960,17 +976,29 @@
     }
   }
 
-  function resetAllData() {
+  async function resetAllData() {
     if (confirm('Снести всё: настройки, историю, лайки, плейлисты. Вернуть не получится. Точно?')) {
+      try { await deleteAllSecrets(); }
+      catch { notify('Не удалось очистить системное хранилище. Данные не сброшены.', 'error'); return; }
       localStorage.clear();
       window.location.reload();
     }
   }
 </script>
 
-<div class="w-full max-w-3xl mx-auto pb-8">
-  <h2 class="page-title mb-5">Настройки</h2>
+<div class="settings-page w-full max-w-3xl mx-auto pb-8" class:is-dialog={inDialog}>
+  <h2 class="page-title mb-5">{inDialog ? glassSections.find(section => section.id === settingsTab)?.title || 'Настройки' : 'Настройки'}</h2>
 
+  {#if inDialog}
+    <aside class="lg-settings-nav">
+      <input aria-label="Поиск раздела настроек" placeholder="Поиск раздела" bind:value={sectionSearch} />
+      <div role="tablist" tabindex="-1" aria-label="Разделы настроек" aria-orientation="vertical" on:keydown={onSettingsTabsKeydown}>
+        {#each visibleGlassSections as section, index (section.id)}
+          <button id="settings-tab-{section.id}" role="tab" aria-controls="settings-tab-panel" aria-selected={settingsTab === section.id} tabindex={settingsTab === section.id || (index === 0 && !visibleGlassSections.some(item => item.id === settingsTab)) ? 0 : -1} on:click={() => setSettingsTab(section.id as SettingsTab)}><svelte:component this={section.icon} size={16} /><span>{section.title}</span></button>
+        {/each}
+      </div>
+    </aside>
+  {:else}
   <div class="settings-tabs-shell">
     <div
       class="seg-control is-lg settings-tabs-control"
@@ -1054,6 +1082,7 @@
     </div>
   </div>
 
+  {/if}
   <!-- Все группы остаются смонтированы внутри одного tabpanel, но CSS показывает только
        выбранную категорию. Так поля ввода и локальное состояние не теряются при переходе,
        а длинный технический список превращается в пять предсказуемых экранов. -->
@@ -1062,7 +1091,8 @@
     class="settings-tab-panels"
     data-settings-tab={settingsTab}
     role="tabpanel"
-    aria-labelledby="settings-tab-{settingsTab}"
+    aria-labelledby={inDialog && !visibleGlassSections.some(section => section.id === settingsTab) ? undefined : `settings-tab-${settingsTab}`}
+    aria-label={inDialog ? glassSections.find(section => section.id === settingsTab)?.title : undefined}
   >
 
     <!-- ── Внешний вид ─────────────────────────────────────────────────────── -->
@@ -1078,13 +1108,14 @@
           <h3 class="section-title">Глобальный дизайн</h3>
           <p class="empty-hint !mt-1.5 !max-w-[54ch] mb-6">
             Выбери общий характер интерфейса. Цвет темы и плотность панелей настраиваются
-            отдельно и работают в обоих вариантах.
+            отдельно. Некий мистер C подбирает цвета по обложке музыки или открытой страницы.
           </p>
-          <div class="grid grid-cols-2 gap-3">
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <!-- Не просто две кнопки, а два превью: разницу между дизайнами видно до
                  переключения, поэтому каждый вариант рисует сам себя в миниатюре. -->
             <button
-              class="design-card {$settings.design !== 'aurora' ? 'is-active' : ''}"
+              class="design-card {$settings.design === 'classic' ? 'is-active' : ''}"
+              aria-pressed={$settings.design === 'classic'}
               on:click={() => $settings.design = 'classic'}
             >
               <span class="design-card-preview design-preview-classic">
@@ -1097,6 +1128,7 @@
             </button>
             <button
               class="design-card {$settings.design === 'aurora' ? 'is-active' : ''}"
+              aria-pressed={$settings.design === 'aurora'}
               on:click={() => $settings.design = 'aurora'}
             >
               <span class="design-card-preview design-preview-aurora">
@@ -1107,7 +1139,36 @@
               <span class="design-card-name">Aurora</span>
               <span class="design-card-hint">Контраст, акцентные кромки, плотный набор</span>
             </button>
+            <button
+              type="button"
+              class="design-card {$settings.design === 'liquid-glass' ? 'is-active' : ''}"
+              aria-pressed={$settings.design === 'liquid-glass'}
+              on:click={() => settings.update(s => ({ ...s, design: 'liquid-glass', liquidGlassSeen: true }))}
+            >
+              <span class="design-card-preview design-preview-liquid">
+                <span class="design-preview-bar"></span>
+                <span class="design-preview-bar is-short"></span>
+                <span class="design-preview-tile"></span>
+                <span class="design-preview-player"></span>
+              </span>
+              <span class="design-card-name">Некий мистер C {#if !$settings.liquidGlassSeen}<span class="design-new-badge">Новое</span>{/if}</span>
+              <span class="design-card-hint">Живые цвета обложек и парящие стеклянные панели</span>
+            </button>
           </div>
+          {#if $settings.design === 'liquid-glass'}
+            <fieldset class="mt-6">
+              <legend class="setting-title mb-3">Качество стекла</legend>
+              <div class="settings-choice-grid">
+                {#each [{ value: 'high', label: 'Высокое', hint: 'Преломление через объёмную линзу' }, { value: 'normal', label: 'Обычное', hint: 'Размытие, блики и объёмная кромка' }, { value: 'off', label: 'Без эффектов', hint: 'Плоские полупрозрачные панели' }] as quality}
+                  <button type="button" class="settings-choice" class:is-active={$settings.glassQuality === quality.value} aria-pressed={$settings.glassQuality === quality.value} on:click={() => $settings.glassQuality = quality.value as 'high' | 'normal' | 'off'}>
+                    <span class="settings-choice-copy"><strong>{quality.label}</strong><small>{quality.hint}</small></span>
+                    <span class="settings-choice-check" aria-hidden="true">{#if $settings.glassQuality === quality.value}<Check size={14} />{/if}</span>
+                  </button>
+                {/each}
+              </div>
+              <p class="setting-hint mt-3">Высокое качество сильнее нагружает видеокарту. Если прокрутка замедляется, выбери Обычное. Режим производительности временно отключает эффекты.</p>
+            </fieldset>
+          {/if}
         </div>
 
         <!-- Interface Blur & Theme Depth -->
@@ -1151,7 +1212,7 @@
             <div class="flex-1 min-w-0">
               <div class="setting-title">Кнопки окна</div>
               <div class="setting-hint">
-                Оба варианта нарисованы Lomify, системная рамка Windows не используется.
+                {$settings.design === 'liquid-glass' ? 'В стиле «Некий мистер C» используются кнопки Windows справа.' : 'Оба варианта нарисованы Lomify, системная рамка Windows не используется.'}
               </div>
             </div>
             <div
@@ -1162,9 +1223,9 @@
               <button
                 type="button"
                 role="radio"
-                aria-checked={$settings.windowControlsStyle !== 'macos'}
-                class:is-active={$settings.windowControlsStyle !== 'macos'}
-                on:click={() => $settings.windowControlsStyle = 'windows'}
+                aria-checked={$settings.design === 'liquid-glass' || $settings.windowControlsStyle !== 'macos'}
+                class:is-active={$settings.design === 'liquid-glass' || $settings.windowControlsStyle !== 'macos'}
+                on:click={() => { if ($settings.design !== 'liquid-glass') $settings.windowControlsStyle = 'windows'; }}
               >
                 <span class="window-controls-preview is-windows" aria-hidden="true">
                   <i></i><i></i><i></i>
@@ -1174,8 +1235,9 @@
               <button
                 type="button"
                 role="radio"
-                aria-checked={$settings.windowControlsStyle === 'macos'}
-                class:is-active={$settings.windowControlsStyle === 'macos'}
+                aria-checked={$settings.design !== 'liquid-glass' && $settings.windowControlsStyle === 'macos'}
+                class:is-active={$settings.design !== 'liquid-glass' && $settings.windowControlsStyle === 'macos'}
+                disabled={$settings.design === 'liquid-glass'}
                 on:click={() => $settings.windowControlsStyle = 'macos'}
               >
                 <span class="window-controls-preview is-macos" aria-hidden="true">
@@ -1307,22 +1369,6 @@
 
           <div class="setting-row mt-3">
             <div>
-              <div class="setting-title">Треки слева</div>
-              <div class="setting-hint">Списки треков прижимаются к левому краю. Остальной интерфейс не двигается.</div>
-            </div>
-              <button
-              aria-label="Левосторонний список треков"
-              role="switch"
-              aria-checked={$settings.leftAlignTracks}
-              class="switch"
-              on:click={() => $settings.leftAlignTracks = !$settings.leftAlignTracks}
-            >
-              <span class="switch-knob"></span>
-            </button>
-          </div>
-
-          <div class="setting-row mt-3">
-            <div>
               <div class="setting-title">Окно приветствия при запуске</div>
               <div class="setting-hint">Показывать стартовое окно со статусом версии при открытии приложения.</div>
             </div>
@@ -1341,6 +1387,9 @@
         <!-- Theme Selection -->
         <div class="plate p-8">
           <h3 class="section-title">Тема оформления</h3>
+          {#if $settings.design === 'liquid-glass'}
+            <p class="empty-hint !mt-1.5 !max-w-[54ch]">В стиле «Некий мистер C» цвета подбираются по обложке трека или открытой страницы. Ручной выбор темы недоступен.</p>
+          {:else}
           <p class="empty-hint !mt-1.5 !max-w-[54ch] mb-6">Акцентный цвет интерфейса: подписи, активные элементы и свечение.</p>
 
           <!-- The adaptive accent used to live in another plate entirely, which made the
@@ -1380,6 +1429,7 @@
 
           {#if $settings.accentFromCover}
             <p class="empty-hint !max-w-[56ch]">Пока адаптивная тема включена, цвет диктует обложка. Выключи тумблер, чтобы выбрать вручную.</p>
+          {/if}
           {/if}
         </div>
       </div>
@@ -1528,7 +1578,7 @@
     </section>
 
     <!-- ── Музыка ──────────────────────────────────────────────────────────── -->
-    <section class="settings-pane" data-settings-pane="music">
+    <section class="settings-pane" data-settings-pane={$settings.design === 'liquid-glass' ? 'connections' : 'music'}>
       <div class="settings-group">
         <span class="settings-group-title">Музыка</span>
         <span class="settings-group-rule"></span>
@@ -1833,7 +1883,7 @@
                   <button type="button" class="is-secondary" on:click={refreshSCPlaylists} disabled={scLoading}>
                     Обновить плейлисты
                   </button>
-                  <button type="button" class="is-danger" on:click={() => $settings.scUser = null}>Отвязать</button>
+                  <button type="button" class="is-danger" on:click={unlinkSoundCloud}>Отвязать</button>
                 </div>
               </div>
               <PlaylistSyncSettings provider="soundcloud" />
@@ -2010,6 +2060,11 @@
         <SpotifyImport />
 
         <LastFmConnect />
+
+      </div>
+    </section>
+    <section class="settings-pane" data-settings-pane={$settings.design === 'liquid-glass' ? 'audio' : 'music'}>
+      <div class="space-y-6">
 
         <!-- Устройство вывода. Стоит сразу за источниками: группа «Музыка» читается как
              «откуда играем» → «куда играем» → что делаем с кэшем. Выбор оформлен одним

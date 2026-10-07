@@ -10,9 +10,9 @@
  */
 
 import { get } from 'svelte/store';
-import { dislikedTracks, likedTracks, queue, settings } from './stores';
+import { dislikedTracks, likedTracks, queue } from './stores';
 import { setTrackLiked } from './likes';
-import { yandexSetDislikes } from './yandex';
+import { rememberYandexDislike } from './dislikeSync';
 
 function trackId(track: any): string | null {
   const id = `${track?.id ?? ''}`.trim();
@@ -55,6 +55,7 @@ export function isTrackDisliked(list: any[], track: any): boolean {
 export async function setTrackDisliked(track: any, disliked: boolean): Promise<void> {
   if (!track) return;
   const list = get(dislikedTracks);
+  const matches = list.filter(t => sameTrack(t, track));
   const exists = list.some((t) => sameTrack(t, track));
 
   if (disliked) {
@@ -77,16 +78,9 @@ export async function setTrackDisliked(track: any, disliked: boolean): Promise<v
     }
   }
 
-  // Синхронизация с аккаунтом Яндекс Музыки
-  const token = get(settings).yandexToken;
-  const id = trackId(track);
-  if (token && id && (track.source === 'yandex' || track.service === 'yandex' || !track.source)) {
-    try {
-      await yandexSetDislikes(token, [id], disliked);
-    } catch (e) {
-      console.warn('[dislikes] Яндекс не принял отметку скрытия', e);
-    }
-  }
+  if (!disliked && matches.length) {
+    await Promise.all(matches.map(hidden => rememberYandexDislike(hidden, false)));
+  } else await rememberYandexDislike(track, disliked);
 }
 
 /**
@@ -103,5 +97,7 @@ export async function toggleTrackDislike(track: any): Promise<boolean> {
  * Очистить весь список скрытых треков.
  */
 export function clearAllDislikes(): void {
+  const tracks = get(dislikedTracks);
   dislikedTracks.set([]);
+  for (const track of tracks) void rememberYandexDislike(track, false);
 }

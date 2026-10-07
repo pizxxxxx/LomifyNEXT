@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'" />
+    <meta name="description" content="Открой присланный трек или подборку в LomifyNEXT." />
+    <title>Музыка в LomifyNEXT</title>
+    <script type="module" src="./main.ts"></script>
+  </head>
+  <body>
+    <img id="brand-background" class="brand-background" alt="" width="1536" height="1536" aria-hidden="true" />
+    <div class="page-shell">
+      <header class="page-header"><a class="brand" href="https://github.com/pizxxxxx/LomifyNEXT">lomify<span>NEXT</span></a><span class="header-note">Музыка, которой делятся</span></header>
+      <main>
+        <div class="hero">
+          <p class="eyebrow" id="eyebrow">МУЗЫКОЙ ПОДЕЛИЛИСЬ С ТОБОЙ</p>
+          <h1 id="title">Музыка в Lomify</h1>
+          <p class="subtitle" id="subtitle">Открой ссылку на трек или подборку из приложения.</p>
+          <div class="actions" id="actions" hidden>
+            <a id="open-app" class="primary"><span>Открыть в Lomify</span><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 17 17 7M7 7h10v10" /></svg></a>
+            <a id="open-service" class="secondary" target="_blank" rel="noopener noreferrer">Открыть на площадке</a>
+          </div>
+          <p class="launch-status" id="launch-status" role="status" aria-live="polite"></p>
+          <div id="launch-help" class="launch-help" hidden><strong>Lomify не открылся?</strong><p>Запусти обновлённый LomifyNEXT и нажми кнопку ещё раз. При первом открытии разреши браузеру запустить приложение.</p><p>Если у тебя старая версия, пока открой трек на музыкальной площадке. Для новых ссылок нужна версия 9.6.0 или новее.</p><button type="button" id="copy-app-link" class="copy-link">Скопировать ссылку для приложения</button></div>
+          <details class="help"><summary>Как открыть в приложении</summary><p id="help">Запусти LomifyNEXT версии 9.6.0 или новее. Он подключит музыкальные ссылки к Windows. Вернись сюда и нажми «Открыть в Lomify».</p><a class="download" href="https://github.com/pizxxxxx/LomifyNEXT/releases/latest">Скачать LomifyNEXT для Windows</a></details>
+        </div>
+        <section id="tracks" hidden aria-label="Треки подборки"><div class="track-heading"><h2>В этой подборке</h2><span id="count"></span></div><ol id="track-list"></ol></section>
+        <noscript><p>Для открытия ссылки включи JavaScript в браузере.</p></noscript>
+      </main>
+      <footer><span>Твоя музыка. Твоё пространство.</span><span>Открытие ссылки не запускает воспроизведение.</span></footer>
+    </div>
+  </body>
+</html>

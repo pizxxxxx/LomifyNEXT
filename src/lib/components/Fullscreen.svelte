@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { currentTrack, currentView, previousView, isPlaying, settings, lyricsStatus, lyricsReloadTrigger, notify, rebootCurrentTrack } from '$lib/stores';
+  import { currentTrack, currentView, previousView, isPlaying, settings, lyricsStatus, lyricsReloadTrigger, notify, rebootCurrentTrack, effectivePerformanceMode } from '$lib/stores';
+  import { glassRefraction } from '$lib/glassRefraction';
+  import { glassScreenSettings } from '$lib/liquidGlass';
   import {
     Minimize2, AlignLeft, AlignCenter, Settings2, Ghost, Search, Sparkles, Loader2,
     Volume2, Mic2, MessageSquareQuote, Gauge, Layout, Activity, Clapperboard, Maximize2, ChevronRight, X
@@ -7,7 +9,7 @@
   import { refetchLyrics } from '$lib/api';
   import { invoke } from '@tauri-apps/api/core';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { fade, fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import Lyrics from './Lyrics.svelte';
@@ -15,6 +17,7 @@
   import ArtistTag from './ArtistTag.svelte';
   import { FFT_BINS, readFftInto } from '$lib/fft';
   import { coverUrlForTrack, downloadedCoverCache } from '$lib/offlineCovers';
+  import { loadFullscreenCover } from '$lib/utils/fullscreenCover';
   import { getYandexTrackVideoUri, normalizeYandexVideoUri } from '$lib/yandex';
 
   let canvas: HTMLCanvasElement;
@@ -33,6 +36,33 @@
    */
   let showLyrics = false;
   let showSettings = false;
+  let lyricsMotion = true;
+  let settingsMotion = true;
+  let settingsPanel: HTMLDivElement | undefined;
+  function closeScreenSettings(restoreFocus = false) {
+    showSettings = false;
+    activeModule = null;
+    if ($settings.design === 'liquid-glass') {
+      glassScreenSettings.update(state => ({ ...state, open: false }));
+      if (restoreFocus) document.querySelector<HTMLButtonElement>('.lg-screen-settings-trigger')?.focus({ preventScroll: true });
+    }
+  }
+  function settingsOutsideClick(event: PointerEvent) {
+    if ($settings.design !== 'liquid-glass' || !showSettings) return;
+    if (event.target instanceof Element && event.target.closest('.fs-settings-anchor, .lg-screen-settings-trigger')) return;
+    closeScreenSettings();
+  }
+  onMount(() => glassScreenSettings.subscribe(state => {
+    if ($settings.design !== 'liquid-glass') return;
+    settingsMotion = state.motion;
+    showSettings = state.open;
+    if (!state.open) activeModule = null;
+    else void tick().then(() => { if (showSettings) settingsPanel?.focus({ preventScroll: true }); });
+  }));
+  $: glassQuality = $settings.design === 'liquid-glass' && !$effectivePerformanceMode ? $settings.glassQuality || 'normal' : 'off';
+  function glassMotionAllowed() {
+    return !$effectivePerformanceMode && !window.matchMedia('(prefers-reduced-motion: reduce)').matches && document.body.dataset.inputMode !== 'keyboard';
+  }
   let activeModule: 'spatial' | 'lyrics' | 'adlibs' | 'speed' | 'layout' | null = null;
 
   function selectModule(mod: 'spatial' | 'lyrics' | 'adlibs' | 'speed' | 'layout') {
@@ -93,6 +123,17 @@
   $: yandexVideoFill = $settings.fullscreenYandexVideoFill !== false;
   $: fullscreenLyricsSync = $settings.fullscreenLyricsSync !== false;
   $: currentDisplayCover = coverUrlForTrack($currentTrack, $downloadedCoverCache);
+  let fullscreenCover = '';
+  let coverRequest = 0;
+  async function updateFullscreenCover(source: string, design: string) {
+    const request = ++coverRequest;
+    fullscreenCover = source;
+    if (design !== 'liquid-glass') return;
+    const large = await loadFullscreenCover(source);
+    if (request === coverRequest) fullscreenCover = large;
+  }
+  $: updateFullscreenCover(currentDisplayCover, $settings.design);
+  onDestroy(() => { coverRequest++; });
 
   const titleDetailPattern = /\([^()]+\)|\[[^\[\]]+\]/g;
 
@@ -167,7 +208,7 @@
    * `=== 'immersive'` (а не `!== 'panel'`) — чтобы и отсутствие ключа в старых сохранённых
    * настройках, и любое незнакомое значение давали привычную раскладку.
    */
-  $: immersive = $settings.fullscreenStyle === 'immersive';
+  $: immersive = $settings.design !== 'liquid-glass' && $settings.fullscreenStyle === 'immersive';
 
   /**
    * Подпись переключателя текста. Обещать текст на треке, которого нет ни в одной базе, —
@@ -213,9 +254,13 @@
   }
 
   /** Переключить текст, если его есть что показывать. */
-  function toggleLyrics() {
+  $: if ($settings.design === 'liquid-glass' && !lyricsTouched && $lyricsStatus === 'found') showLyrics = true;
+  $: if ($settings.design === 'liquid-glass' && $lyricsStatus === 'none') showLyrics = false;
+
+  function toggleLyrics(event?: MouseEvent) {
     if (noLyrics) return;
     lyricsTouched = true;
+    lyricsMotion = event?.detail !== 0 && glassMotionAllowed();
     showLyrics = !showLyrics;
   }
 
@@ -268,11 +313,19 @@
    * GPU, не касаясь layout и paint.
    */
   function popFade(node: HTMLElement, params: { duration?: number } = {}) {
-    const duration = params.duration ?? 350;
+    const glass = $settings.design === 'liquid-glass';
+    const moving = !glass || (settingsMotion && glassMotionAllowed());
+    const duration = glass ? ($effectivePerformanceMode ? 0 : moving ? 360 : 100) : params.duration ?? 350;
+    const panel = node.getBoundingClientRect();
+    const trigger = glass ? document.querySelector('.lg-screen-settings-trigger')?.getBoundingClientRect() : undefined;
+    const originX = trigger ? trigger.left + trigger.width / 2 - panel.left : panel.width;
+    const originY = trigger ? trigger.top + trigger.height / 2 - panel.top : panel.height;
     return {
       duration,
       easing: cubicOut,
-      css: (t: number) => `opacity: ${t}; transform: scale(${0.95 + 0.05 * t});`
+      css: (t: number) => glass
+        ? `opacity: ${Math.min(1, t * 3)}; transform-origin: ${originX}px ${originY}px; transform: scale(${moving ? .08 + .92 * t : 1}); --screen-content-reveal: ${moving ? Math.max(0, (t - .4) / .6) : t};`
+        : `opacity: ${t}; transform: scale(${0.95 + 0.05 * t});`
     };
   }
 
@@ -347,6 +400,7 @@
   });
 
   onDestroy(() => {
+    glassScreenSettings.set({ open: false, motion: true });
     videoGeneration += 1;
     if (unlistenFft) unlistenFft();
     if (lyricsSearchTimeout) clearTimeout(lyricsSearchTimeout);
@@ -364,12 +418,14 @@
     if (e.key !== 'Escape') return;
     // Esc — «на шаг назад»: сперва закрывается попап настроек, и только потом режим.
     if (showSettings) {
-      showSettings = false;
+      if ($settings.design === 'liquid-glass' && activeModule) activeModule = null;
+      else closeScreenSettings(true);
       return;
     }
     exitOverlay();
   }
 </script>
+<svelte:window on:pointerdown={settingsOutsideClick} />
 
 <div class="relative w-full h-full flex items-center justify-center">
   {#if $currentTrack}
@@ -400,7 +456,7 @@
     
     <BackdropAdlibStage isFullscreen={true} />
 
-    <div class="fs-top-actions">
+    <div class="fs-top-actions" class:lg-screen-controls={$settings.design === 'liquid-glass'}>
       {#if immersive}
         <!-- В иммерсивной раскладке обложка с включённым текстом уходит за экран — вместе с
              ней уезжает и наведение на неё, которым текст переключали. Без этой кнопки
@@ -427,11 +483,12 @@
       {/if}
 
       <div class="fs-settings-anchor">
+        {#if $settings.design !== 'liquid-glass'}
         <button
           type="button"
           class="fs-top-action"
           class:is-active={showSettings}
-          on:click={() => showSettings = !showSettings}
+          on:click={event => { settingsMotion = event.detail > 0 && glassMotionAllowed(); showSettings = !showSettings; }}
           aria-label="Настройки полноэкранного режима"
           aria-expanded={showSettings}
           aria-controls="fullscreen-settings-pop"
@@ -439,19 +496,23 @@
         >
           <Settings2 size={21} strokeWidth={1.8} />
         </button>
+        {/if}
         
         {#if showSettings}
           <div
             id="fullscreen-settings-pop"
             role="dialog"
+            tabindex="-1"
+            bind:this={settingsPanel}
+            inert={!showSettings}
             aria-label="Настройки полноэкранного режима"
             transition:popFade
             class="fs-settings-pop-wrapper origin-top-right"
           >
             <!-- Главный столбец со списком модулей -->
-            <div class="fs-settings-card fs-settings-main">
+            <div class="fs-settings-card fs-settings-main" class:lg-optical={$settings.design === 'liquid-glass'} use:glassRefraction={glassQuality}>
               <div class="fs-modules-heading">
-                <span>Модули экрана</span>
+                {#if $settings.design === 'liquid-glass'}<div><span>Полный экран</span><small>Звук, текст и оформление</small></div><button type="button" class="lg-screen-close" aria-label="Закрыть настройки экрана" on:click={() => closeScreenSettings(true)}><X size={16} /></button>{:else}<span>Модули экрана</span>{/if}
               </div>
 
               <!-- 1. Модуль: Объемный звук -->
@@ -698,7 +759,9 @@
             {#if activeModule}
               <div
                 class="fs-settings-card fs-settings-sub origin-top-right"
-                transition:fly={{ x: 16, duration: 220, easing: cubicOut }}
+                class:lg-optical={$settings.design === 'liquid-glass'}
+                use:glassRefraction={glassQuality}
+                transition:fly={{ x: $settings.design === 'liquid-glass' ? 0 : 16, y: $settings.design === 'liquid-glass' && glassMotionAllowed() ? 8 : 0, duration: $settings.design === 'liquid-glass' && !glassMotionAllowed() ? 0 : 220, easing: cubicOut }}
               >
                 <!-- Заголовок подпанели -->
                 <div class="flex items-center justify-between pb-2 border-b border-white/[0.08]">
@@ -1094,6 +1157,7 @@
         {/if}
       </div>
 
+      {#if $settings.design !== 'liquid-glass'}
       <span class="fs-top-actions-divider" aria-hidden="true"></span>
 
       <button
@@ -1105,6 +1169,7 @@
       >
         <Minimize2 size={21} strokeWidth={1.8} />
       </button>
+      {/if}
     </div>
 
     <!-- Геометрия сцены переехала из инлайновых стилей и утилит в классы `.fs-*` (app.css):
@@ -1112,12 +1177,12 @@
          `.is-immersive`, а не второе дерево элементов. Состояние помечено классами на самой
          сцене, потому что анимируемым свойствам место в CSS: иначе каждое переключение
          перезаписывало бы атрибут `style` у четырёх узлов сразу. -->
-    <div class="fs-stage" class:is-lyrics={showLyrics} class:is-immersive={immersive}>
+    <div class="fs-stage" class:is-lyrics={showLyrics} class:is-immersive={immersive} class:is-still={$settings.design === 'liquid-glass' && (!lyricsMotion || $effectivePerformanceMode)}>
 
       <!-- Обложка с подписью. В «Погружении» с включённым текстом уезжает вверх за край. -->
       <div class="fs-cover-side">
         <div class="fs-cover group">
-          <img src={currentDisplayCover} alt="Cover" class="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
+          <img src={fullscreenCover || currentDisplayCover} alt="Обложка трека" class="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
 
           <!-- svelte-ignore a11y-click-events-have-key-events -->
           <!-- svelte-ignore a11y-no-static-element-interactions -->
@@ -1166,10 +1231,10 @@
 
       <!-- Текст. Стекло панели навешивается классом, а не отключается переопределениями:
            в «Погружении» текст лежит прямо на обложке-фоне — панели там нет вовсе. -->
-      <div class="fs-lyrics-side" class:glass-panel={!immersive}>
+      <div class="fs-lyrics-side" class:glass-panel={!immersive && $settings.design !== 'liquid-glass'} aria-hidden={!showLyrics} inert={!showLyrics}>
         <div class="w-full h-full">
           {#if showLyrics}
-            <div transition:fade={{ duration: 400 }} class="w-full h-full">
+            <div transition:fade={{ duration: $settings.design === 'liquid-glass' ? ($effectivePerformanceMode ? 0 : 250) : 400 }} class="w-full h-full">
               <Lyrics letterSync={fullscreenLyricsSync} />
             </div>
           {/if}

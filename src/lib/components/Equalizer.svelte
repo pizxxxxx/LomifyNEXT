@@ -1,6 +1,7 @@
 <script lang="ts">
   import { RotateCcw, SlidersHorizontal, Sparkles, Waves } from 'lucide-svelte';
-  import { activeEqualizerPreset, equalizerBands } from '$lib/stores';
+  import { activeEqualizerPreset, equalizerBands, settings, effectivePerformanceMode } from '$lib/stores';
+  import { glassRefraction } from '$lib/glassRefraction';
 
   const frequencies = ['32', '64', '125', '250', '500', '1k', '2k', '4k', '8k', '16k'];
 
@@ -46,9 +47,17 @@
   $: activeLabel = $activeEqualizerPreset === 'custom'
     ? 'Свой профиль'
     : presets.find((preset) => preset.id === $activeEqualizerPreset)?.label || 'Ровно';
+  $: glass = $settings.design === 'liquid-glass';
+  $: glassQuality = glass && !$effectivePerformanceMode ? $settings.glassQuality || 'normal' : 'off';
+  $: curvePoints = $equalizerBands.map((gain, i) => ({ x: 28 + i * 82.6667, y: 90 - Number(gain) * 5 }));
+  $: curvePath = curvePoints.reduce((path, point, i) => {
+    if (!i) return `M${point.x},${point.y}`;
+    const previous = curvePoints[i - 1], middle = (point.x + previous.x) / 2;
+    return `${path} C${middle},${previous.y} ${middle},${point.y} ${point.x},${point.y}`;
+  }, '');
 </script>
 
-<div class="eq-page">
+<div class="eq-page" class:lg-equalizer={glass} class:is-direct={$activeEqualizerPreset === 'custom' || $effectivePerformanceMode}>
   <header class="eq-header">
     <div class="eq-title-block">
       <span class="eq-kicker"><SlidersHorizontal size={14} aria-hidden="true" /> Звук</span>
@@ -86,14 +95,27 @@
     {/each}
   </section>
 
-  <section class="eq-board plate" aria-label="Полосы эквалайзера">
+  <section class="eq-board plate" class:lg-optical={glass} use:glassRefraction={glassQuality} aria-label="Полосы эквалайзера">
     <div class="eq-board-head">
       <div>
         <span>Точная настройка</span>
-        <small>Диапазон каждой полосы: −12…+12 дБ</small>
+        <small>{glass ? 'От -12 до +12 дБ. Двойной щелчок по полосе возвращает её к нулю.' : 'Диапазон каждой полосы: −12…+12 дБ'}</small>
       </div>
       <span class="eq-unit">дБ</span>
     </div>
+
+    {#if glass}
+      <div class="eq-response" aria-label="Уровни десяти полос эквалайзера">
+        <svg viewBox="0 0 800 180" preserveAspectRatio="none" aria-hidden="true">
+          <defs><linearGradient id="eq-curve-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--lg-accent)" stop-opacity=".28" /><stop offset="1" stop-color="var(--lg-accent)" stop-opacity="0" /></linearGradient></defs>
+          {#each [30, 90, 150] as y}<path d={`M28,${y}H772`} class="eq-response-guide" />{/each}
+          <path d={`${curvePath} L772,180 L28,180 Z`} fill="url(#eq-curve-fill)" />
+          <path d={curvePath} style={`d:path('${curvePath}')`} class="eq-response-curve" />
+          {#each curvePoints as point}<circle cx={point.x} cy="0" r="3" style={`transform:translateY(${point.y}px)`} class="eq-response-point" />{/each}
+        </svg>
+        <div class="eq-response-caption"><span>Бас</span><span>Середина</span><span>Высокие</span></div>
+      </div>
+    {/if}
 
     <div class="eq-chart">
       <div class="eq-scale" aria-hidden="true">
@@ -130,12 +152,13 @@
                   step="0.1"
                   bind:value={$equalizerBands[i]}
                   on:input={markCustom}
-                  aria-label={`${frequencies[i]} Гц, ${formatGain(Number(band))} децибел`}
+                  on:dblclick={() => { $equalizerBands[i] = 0; markCustom(); }}
+                  aria-label={`${i < 5 ? frequencies[i] : frequencies[i].replace('k', '')} ${i < 5 ? 'Гц' : 'кГц'}, ${formatGain(Number(band))} децибел`}
                 />
               </div>
 
               <div class="eq-frequency">
-                <strong>{frequencies[i]}</strong>
+                <strong>{glass ? frequencies[i].replace('k', '') : frequencies[i]}</strong>
                 <small>{i < 5 ? 'Гц' : 'кГц'}</small>
               </div>
             </div>
@@ -147,6 +170,42 @@
 </div>
 
 <style>
+  .eq-page.lg-equalizer { max-width: 1080px; gap: 18px; padding-top: 4px; }
+  .lg-equalizer .eq-kicker { color: var(--lg-accent); letter-spacing: .04em; font-weight: 600; }
+  .lg-equalizer .eq-title-block :global(.page-title) { color: color-mix(in srgb, var(--lg-accent) 75%, white); font-size: clamp(28px, 3vw, 42px); letter-spacing: -.035em; }
+  .lg-equalizer .eq-title-block p { color: #b8afc3; font-size: 12px; }
+  .lg-equalizer .eq-active, .lg-equalizer .eq-reset { border-radius: 999px; border: 1px solid var(--lg-edge); background: #ffffff08; color: #e5ddea; box-shadow: inset 0 1px 0 #ffffff15; }
+  .lg-equalizer .eq-presets { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+  .lg-equalizer .eq-preset { min-height: 58px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--lg-edge); background: linear-gradient(140deg, #ffffff0e, #ffffff04); box-shadow: inset 0 1px 0 #ffffff12; transition: background-color 180ms ease, border-color 180ms ease, transform 180ms var(--lg-spring); }
+  .lg-equalizer .eq-preset.is-active { background: var(--lg-accent); border-color: transparent; color: #1b1520; box-shadow: inset 0 1px 0 #ffffff50; }
+  .lg-equalizer .eq-preset-icon { display: none; }
+  .lg-equalizer .eq-preset-copy strong { font-size: 11px; }
+  .lg-equalizer .eq-preset-copy small { color: #a99fb5; font-size: 9px; }
+  .lg-equalizer .eq-preset.is-active small { color: #403046; }
+  .lg-equalizer .eq-board { position: relative; overflow: visible; border-radius: 18px; border: 1px solid var(--lg-edge); padding: 22px; background: transparent; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .lg-equalizer .eq-board-head { margin-bottom: 8px; }
+  .lg-equalizer .eq-board-head small { color: #b8afc3 !important; }
+  .eq-response { padding: 0 15px 16px 36px; }
+  .eq-response svg { width: 100%; height: 144px; overflow: visible; }
+  .eq-response-guide { fill: none; stroke: #ffffff12; stroke-width: 1; }
+  .eq-response-curve { fill: none; stroke: var(--lg-accent); stroke-width: 2; vector-effect: non-scaling-stroke; transition: d 240ms var(--lg-spring); }
+  .eq-response-point { fill: #f9efff; transition: transform 240ms var(--lg-spring); }
+  .is-direct .eq-response-curve, .is-direct .eq-response-point { transition: none; }
+  .eq-response-caption { display: flex; justify-content: space-between; color: #b8afc3; font-size: 10px; }
+  .lg-equalizer .eq-chart { padding-left: 28px; }
+  .lg-equalizer .eq-scale { width: 22px; color: #aaa0b6; }
+  .lg-equalizer .eq-bands, .lg-equalizer .eq-guides { min-width: 520px; }
+  .lg-equalizer .eq-bands { grid-template-columns: repeat(10, minmax(40px, 1fr)); gap: 6px; }
+  .lg-equalizer .eq-control { height: 180px; width: 40px; }
+  .lg-equalizer .eq-control input { height: 180px; }
+  .lg-equalizer .eq-value { background: transparent; color: #b9afc6; border: 0; font-weight: 500; }
+  .lg-equalizer .eq-band.is-changed .eq-value { color: var(--lg-accent); }
+  .lg-equalizer .eq-accent { box-shadow: none; background: var(--lg-accent); }
+  .lg-equalizer .eq-frequency strong { color: #e6ddec; }
+  .lg-equalizer .eq-frequency small { color: #aaa0b6; }
+  @media (hover: hover) and (pointer: fine) { .lg-equalizer .eq-preset:hover { transform: translateY(-2px); } .lg-equalizer .eq-preset:active { transform: scale(.97); } }
+  @media (max-width: 1000px) { .lg-equalizer .eq-presets { grid-template-columns: repeat(3, minmax(0, 1fr)); } .lg-equalizer .eq-header { align-items: flex-start; } .lg-equalizer .eq-board { padding: 16px; } }
+  @media (prefers-reduced-motion: reduce) { .eq-response-curve, .eq-response-point, .lg-equalizer .eq-preset { transition: none; } }
   .eq-page {
     width: 100%;
     max-width: 1120px;

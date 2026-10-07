@@ -26,7 +26,7 @@ const CACHE_LIMIT = 120;
  *  GPU does the averaging for us during the draw. */
 const SAMPLE_SIZE = 24;
 
-function rgbToHsl({ r, g, b }: Rgb): [number, number, number] {
+export function rgbToHsl({ r, g, b }: Rgb): [number, number, number] {
   const rn = r / 255;
   const gn = g / 255;
   const bn = b / 255;
@@ -44,7 +44,7 @@ function rgbToHsl({ r, g, b }: Rgb): [number, number, number] {
   return [h, s, l];
 }
 
-function hslToRgb(h: number, s: number, l: number): Rgb {
+export function hslToRgb(h: number, s: number, l: number): Rgb {
   if (s === 0) {
     const v = Math.round(l * 255);
     return { r: v, g: v, b: v };

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { whenSecretsReady } from '$lib/secretStorage';
   import { onMount } from 'svelte';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import {
@@ -65,10 +66,15 @@
   $: isBackupImporting = Boolean(backupProgress && backupProgress.phase !== 'done');
 
   onMount(() => {
+    let disposed = false;
+    void whenSecretsReady().then(() => {
+    if (disposed) return;
     clientId = $settings.spotifyClientId || '';
     if ($settings.spotifyClientId && hasSpotifySession($settings.spotifyClientId) && !profile) {
       void restoreProfile();
     }
+    });
+    return () => { disposed = true; };
   });
 
   async function openExternal(url: string) {
@@ -97,8 +103,6 @@
       const restored = await getSpotifyProfile($settings.spotifyClientId);
       $settings.spotifyUser = restored;
     } catch (error: any) {
-      disconnectSpotify();
-      $settings.spotifyUser = null;
       errorMessage = error?.message || 'Нужно заново подключить Spotify';
     } finally {
       authLoading = false;
@@ -126,9 +130,10 @@
     }
   }
 
-  function unlink() {
+  async function unlink() {
     if (!confirm('Отвязать Spotify? Уже импортированные треки и плейлисты останутся.')) return;
-    disconnectSpotify();
+    try { await disconnectSpotify(); }
+    catch { notify('Не удалось удалить данные Spotify из системного хранилища. Повтори отключение.', 'error'); return; }
     $settings.spotifyUser = null;
     sources = [];
     selected = new Set();

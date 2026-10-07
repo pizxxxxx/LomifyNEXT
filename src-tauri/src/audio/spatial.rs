@@ -11,36 +11,43 @@ use crate::audio::types::{ChannelCount, SampleRate, SpatialParams};
 /// Ring buffer capacity for delay lines.
 /// At 48 kHz, 32768 samples is ~682 ms, giving ample depth for large concert hall reflections.
 const DELAY_CAP: usize = 32768;
-const DELAY_MASK: usize = DELAY_CAP - 1;
 
 /// Fractional-delay circular buffer for click-free acoustic reflection modeling.
 struct DelayLine {
     buffer: Vec<f32>,
     write_pos: usize,
+    mask: usize,
 }
 
 impl DelayLine {
     fn new() -> Self {
+        Self::with_capacity(DELAY_CAP)
+    }
+
+    fn with_capacity(capacity: usize) -> Self {
+        let capacity = capacity.max(4).next_power_of_two();
         Self {
-            buffer: vec![0.0; DELAY_CAP],
+            buffer: vec![0.0; capacity],
             write_pos: 0,
+            mask: capacity - 1,
         }
     }
 
     #[inline(always)]
     fn write(&mut self, sample: f32) {
         self.buffer[self.write_pos] = sample;
-        self.write_pos = (self.write_pos + 1) & DELAY_MASK;
+        self.write_pos = (self.write_pos + 1) & self.mask;
     }
 
     #[inline(always)]
     fn read_fractional(&self, delay_samples: f32) -> f32 {
-        let d = delay_samples.clamp(0.0, (DELAY_CAP - 2) as f32);
+        let capacity = self.buffer.len();
+        let d = delay_samples.clamp(0.0, (capacity - 2) as f32);
         let d_int = d as usize;
         let frac = d - d_int as f32;
 
-        let idx0 = (self.write_pos + DELAY_CAP - 1 - (d_int & DELAY_MASK)) & DELAY_MASK;
-        let idx1 = (idx0 + DELAY_CAP - 1) & DELAY_MASK;
+        let idx0 = (self.write_pos + capacity - 1 - (d_int & self.mask)) & self.mask;
+        let idx1 = (idx0 + capacity - 1) & self.mask;
 
         let s0 = self.buffer[idx0];
         let s1 = self.buffer[idx1];
@@ -171,7 +178,7 @@ fn soft_limit(x: f32) -> f32 {
 ///
 /// Implements binaural head-shadow crossfeed, sub-bass preservation,
 /// multi-tap early wall/ceiling room reflections scaled by `room_size`,
-/// all-pass diffusion stages, mid/side spatial width enhancement,
+/// independent direct-ear delays, all-pass diffusion stages,
 /// acoustic decay tail feedback, and a subtle air-presence shelf.
 pub struct SpatialSource<S: Source<Item = f32>> {
     source: S,
@@ -195,6 +202,8 @@ pub struct SpatialSource<S: Source<Item = f32>> {
     // Delay lines:
     delay_l: DelayLine,
     delay_r: DelayLine,
+    head_delay_l: DelayLine,
+    head_delay_r: DelayLine,
 
     // Crossover & acoustic filters:
     bass_lp_l: OnePoleLp,
@@ -233,9 +242,9 @@ impl<S: Source<Item = f32>> SpatialSource<S> {
         let initial_room = initial_params.room_size.clamp(0.0, 1.0);
         let initial_intensity = initial_params.intensity.clamp(0.0, 1.5);
 
-        // High shelf (+2.5 dB at 9200 Hz) for a little air and openness:
+        // Gentle air shelf; localization comes from arrival time and head shadow.
         let air_coeffs = Coefficients::<f64>::from_params(
-            Type::HighShelf(2.5),
+            Type::HighShelf(1.0),
             fs,
             9200.0.hz(),
             Q_BUTTERWORTH_F64,
@@ -269,12 +278,14 @@ impl<S: Source<Item = f32>> SpatialSource<S> {
             bypassed: initial_mix == 0.0,
             delay_l: DelayLine::new(),
             delay_r: DelayLine::new(),
+            head_delay_l: DelayLine::with_capacity((sr_f32 * 0.001).ceil() as usize + 2),
+            head_delay_r: DelayLine::with_capacity((sr_f32 * 0.001).ceil() as usize + 2),
             bass_lp_l: OnePoleLp::new(200.0, sr_f32),
             bass_lp_r: OnePoleLp::new(200.0, sr_f32),
             reverb_hp_l: OnePoleHp::new(400.0, sr_f32),
             reverb_hp_r: OnePoleHp::new(400.0, sr_f32),
-            head_shadow_l: OnePoleLp::new(2800.0, sr_f32),
-            head_shadow_r: OnePoleLp::new(2800.0, sr_f32),
+            head_shadow_l: OnePoleLp::new(1800.0, sr_f32),
+            head_shadow_r: OnePoleLp::new(1800.0, sr_f32),
             room_damp_l: OnePoleLp::new(3600.0, sr_f32),
             room_damp_r: OnePoleLp::new(3600.0, sr_f32),
             diffuser_l1: Allpass::new(d_l1, 0.65),
@@ -291,6 +302,8 @@ impl<S: Source<Item = f32>> SpatialSource<S> {
     fn clear_effect_state(&mut self) {
         self.delay_l.clear();
         self.delay_r.clear();
+        self.head_delay_l.clear();
+        self.head_delay_r.clear();
         self.bass_lp_l.clear();
         self.bass_lp_r.clear();
         self.reverb_hp_l.clear();
@@ -328,7 +341,9 @@ impl<S: Source<Item = f32>> SpatialSource<S> {
 
         // Once the fade finishes, clear the old room tail exactly once. A later
         // re-enable must not resurrect echoes from a previous track/setting.
-        if self.current_mix < 0.0001 && self.target_mix == 0.0 {
+        if (self.current_mix < 0.0001 && self.target_mix == 0.0)
+            || (self.current_intensity < 0.0001 && self.target_intensity == 0.0)
+        {
             if !self.bypassed {
                 self.clear_effect_state();
                 self.bypassed = true;
@@ -343,29 +358,21 @@ impl<S: Source<Item = f32>> SpatialSource<S> {
         let l_mid_high = l - l_low;
         let r_mid_high = r - r_low;
 
-        // 2. Haas Psychoacoustic 3D Spatial Offset (~0.88 ms = opposite-ear crossfeed):
-        // Cross-feeding opposite channels with pinna shadow and subtle phase offset
-        // breaks the "inside-the-head" sensation and pushes audio outside into physical 3D space.
-        let haas_samples = 0.00088 * sr;
-        let opp_r = self.delay_r.read_fractional(haas_samples);
-        let opp_l = self.delay_l.read_fractional(haas_samples);
-        let shadow_r = self.head_shadow_r.process(opp_r);
-        let shadow_l = self.head_shadow_l.process(opp_l);
-
-        // Antisymmetric crossfeed changes only the side signal. The old subtraction
-        // from both channels attenuated centered vocals and collapsed mono mixes.
-        let crossfeed_side = (shadow_l - shadow_r) * (0.15 * self.current_intensity);
-        let staged_l = l_mid_high + crossfeed_side;
-        let staged_r = r_mid_high - crossfeed_side;
-
-        // 3. Widen the side channel without scaling the mid channel down.
-        let mid = (staged_l + staged_r) * 0.5;
-        let side = (staged_l - staged_r) * 0.5;
-        let side_width = ((1.0 + 0.55 * self.current_room_size)
-            * (0.85 + 0.35 * self.current_intensity))
-            .clamp(1.0, 1.8);
-        let wide_l = mid + side * side_width;
-        let wide_r = mid - side * side_width;
+        // 2. The opposite ear receives a quieter, head-shadowed direct signal
+        // about 0.65 ms later. Keep these tiny delays separate from the room tail:
+        // feedback must never masquerade as a direct acoustic path.
+        let shadow_l = self.head_shadow_l.process(l_mid_high);
+        let shadow_r = self.head_shadow_r.process(r_mid_high);
+        self.head_delay_l.write(shadow_l);
+        self.head_delay_r.write(shadow_r);
+        let ear_delay = 0.00065 * sr;
+        let crossfeed = 0.25 * self.current_intensity;
+        // Subtract the local shadow component to retain correlated steady vocals.
+        // Avoid instant negative opposite-channel widening before sound arrives.
+        let wide_l =
+            l_mid_high + crossfeed * (self.head_delay_r.read_fractional(ear_delay) - shadow_l);
+        let wide_r =
+            r_mid_high + crossfeed * (self.head_delay_l.read_fractional(ear_delay) - shadow_r);
 
         // 4. Filter room send with Abbey Road low-cut (400 Hz) to eliminate standing-wave bass boost:
         let send_l = self.reverb_hp_l.process(wide_l);
@@ -419,14 +426,15 @@ impl<S: Source<Item = f32>> SpatialSource<S> {
         self.delay_r.write(send_r + fb_r);
 
         // 8. Combine direct sound with 3D room reflections:
-        let refl_level =
-            (0.45 + 0.35 * self.current_room_size) * (0.70 + 0.40 * self.current_intensity);
-        let mut wet_l = wide_l + diff_l * refl_level;
-        let mut wet_r = wide_r + diff_r * refl_level;
+        let refl_level = (0.25 + 0.18 * self.current_room_size) * self.current_intensity;
+        let early_level = 0.24 * self.current_intensity;
+        let mut wet_l = wide_l + refl_l_damped * early_level + diff_l * refl_level;
+        let mut wet_r = wide_r + refl_r_damped * early_level + diff_r * refl_level;
 
-        // 9. Air-presence filter (+2.5 dB high shelf):
-        wet_l = Biquad::run(&mut self.air_filter_l, wet_l as f64) as f32;
-        wet_r = Biquad::run(&mut self.air_filter_r, wet_r as f64) as f32;
+        // 9. Keep brightness subordinate to effect strength.
+        let air_mix = self.current_intensity.min(1.0);
+        wet_l += (Biquad::run(&mut self.air_filter_l, wet_l as f64) as f32 - wet_l) * air_mix;
+        wet_r += (Biquad::run(&mut self.air_filter_r, wet_r as f64) as f32 - wet_r) * air_mix;
 
         // 10. Re-inject centered, punchy sub-bass without coloration:
         wet_l += l_low;
@@ -531,6 +539,68 @@ mod tests {
     fn disabled_path_preserves_dry_samples() {
         let mut spatial = source(false);
         assert_eq!(spatial.process_stereo_pair(1.2, -1.2), (1.2, -1.2));
+    }
+
+    #[test]
+    fn zero_intensity_is_bit_exact_and_clears_effect_memory() {
+        let mut spatial = source(true);
+        spatial.current_intensity = 0.0;
+        spatial.target_intensity = 0.0;
+        assert_eq!(spatial.process_stereo_pair(1.2, -1.2), (1.2, -1.2));
+        assert!(spatial.bypassed);
+    }
+
+    #[test]
+    fn direct_crossfeed_reaches_opposite_ear_after_interaural_delay() {
+        let mut spatial = source(true);
+        let (_, right) = spatial.process_stereo_pair(0.5, 0.0);
+        assert_eq!(right, 0.0);
+        let mut arrival = None;
+        for frame in 1..128 {
+            let (_, right) = spatial.process_stereo_pair(0.0, 0.0);
+            if right.abs() > 1e-5 && arrival.is_none() {
+                arrival = Some(frame);
+            }
+        }
+        // 0.65 ms at 48 kHz, well before the first room reflection.
+        assert!(
+            matches!(arrival, Some(30..=33)),
+            "unexpected arrival: {arrival:?}"
+        );
+    }
+
+    #[test]
+    fn spatial_bursts_are_finite_bounded_and_decay_at_supported_rates() {
+        for rate in [44_100, 48_000, 96_000] {
+            let input = SamplesBuffer::new(
+                ChannelCount::new(2).unwrap(),
+                SampleRate::new(rate).unwrap(),
+                vec![0.0_f32, 0.0],
+            );
+            let params = Arc::new(RwLock::new(SpatialParams {
+                enabled: true,
+                room_size: 1.0,
+                intensity: 1.5,
+            }));
+            let mut spatial = SpatialSource::new(input, params);
+            let mut tail_peak = 0.0_f32;
+            for frame in 0..rate {
+                let input = if frame < rate / 100 {
+                    (frame as f32 * 0.43).sin() * 0.95
+                } else {
+                    0.0
+                };
+                let (l, r) = spatial.process_stereo_pair(input, -input * 0.7);
+                assert!(l.is_finite() && r.is_finite() && l.abs() <= 1.0 && r.abs() <= 1.0);
+                if frame > rate * 9 / 10 {
+                    tail_peak = tail_peak.max(l.abs()).max(r.abs());
+                }
+            }
+            assert!(
+                tail_peak < 1e-4,
+                "room tail did not decay at {rate} Hz: {tail_peak}"
+            );
+        }
     }
 
     #[test]
