@@ -114,6 +114,55 @@ test('Yandex launch and continuation reject tracks hidden while a batch is in fl
   wave.stopWave();
 });
 
+test('Yandex never requeues tracks consumed while a continuation is in flight', async () => {
+  let finish;
+  const { wave, stores } = await setup([batch([1, 2, 3]), () => new Promise(resolve => { finish = resolve; }), batch([])]);
+  await wave.startWave();
+  await wave.waveRefill();
+  await new Promise(setImmediate);
+  for (const next of get(stores.queue)) {
+    wave.waveTrackDone(get(stores.currentTrack), 0, 'skip');
+    stores.currentTrack.set(next);
+  }
+  stores.queue.set([]);
+  const waiting = wave.waveRefill();
+  finish(batch([1, 2, 3, 4, 5]));
+  await waiting;
+  assert.deepEqual(Array.from(get(stores.queue), t => t.id), ['4', '5']);
+});
+
+test('Yandex empty-queue refills share one request and reject a fully repeated batch', async () => {
+  let finish;
+  const { wave, stores, requests } = await setup([batch([1, 2]), () => new Promise(resolve => { finish = resolve; })]);
+  await wave.startWave();
+  stores.currentTrack.set(get(stores.queue)[0]);
+  stores.queue.set([]);
+  const first = wave.waveRefill(), second = wave.waveRefill();
+  await new Promise(setImmediate);
+  assert.equal(requests.length, 2);
+  finish(batch([1, 2]));
+  await Promise.all([first, second]);
+  assert.deepEqual(Array.from(get(stores.queue)), []);
+});
+
+test('rebuilding an active Yandex station keeps its session exclusions', async () => {
+  const { wave, stores } = await setup([batch([1, 2]), batch([1, 2, 3, 4]), batch([])]);
+  await wave.startWave();
+  assert.equal(await wave.startWave(), true);
+  assert.equal(get(stores.currentTrack).id, '3');
+  assert.deepEqual(Array.from(get(stores.queue), t => t.id), ['4']);
+  wave.stopWave();
+});
+
+test('stopping Yandex wave clears exclusions for a genuinely new session', async () => {
+  const { wave, stores } = await setup([batch([1, 2]), batch([1, 2])]);
+  await wave.startWave();
+  wave.stopWave();
+  assert.equal(await wave.startWave(), true);
+  assert.equal(get(stores.currentTrack).id, '1');
+  assert.deepEqual(Array.from(get(stores.queue), t => t.id), ['2']);
+});
+
 test('fresh waves in both catalogs recheck hidden tracks after awaiting candidates', async () => {
   for (const source of ['yandex', 'soundcloud']) {
     let finish;

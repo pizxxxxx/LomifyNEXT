@@ -330,7 +330,7 @@ html body[data-design="liquid-glass"] .lyric-pause { display: none; }
 .lg-player::after, .lg-optical::after { content: ''; position: absolute; pointer-events: none; inset: 0; border-radius: inherit; padding: 1px; background: linear-gradient(135deg, rgb(255 255 255 / 65%), transparent 42%, rgb(255 255 255 / 18%)); mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); mask-composite: exclude; }
 .lg-optical { isolation: isolate; background: transparent !important; border-color: transparent; }
 .lg-toolbar .lg-optical { position: relative; }
-.lg-toolbar .lg-toolbar-menu.lg-optical { position: absolute; }
+.lg-toolbar :is(.lg-toolbar-menu, .pl-menu-pop).lg-optical { position: absolute; }
 .lg-toolbar .lg-circle.lg-optical { box-shadow: none; }
 .lg-player-progress { display: flex; align-items: center; gap: 8px; font-size: 10px; line-height: 12px; font-variant-numeric: tabular-nums; color: #bdbac4; margin-bottom: 4px; }
 .lg-player-progress span { width: 34px; transform: translateY(1px); flex-shrink: 0; }
@@ -377,7 +377,8 @@ html body[data-design="liquid-glass"][data-glass-quality="off"] .lg-toolbar .lg-
   .lg-player-controls > :is(button:nth-last-child(1), button:nth-last-child(2)), .lg-player-controls > .pl-menu { display: none; }
 }
 html body[data-design="liquid-glass"] .lomify-titlebar { z-index: 110; height: 34px; padding: 0; }
-html body[data-design="liquid-glass"] .titlebar-drag-region { pointer-events: none; }
+/* Only the empty top edge intercepts dragging; search starts at 18px, toolbar at 23px. */
+html body[data-design="liquid-glass"] .titlebar-drag-region { align-self: flex-start; height: 18px; pointer-events: auto; }
 html body[data-design="liquid-glass"] .window-controls.is-windows { background: none; border: 0; box-shadow: none; }
 html body[data-design="liquid-glass"] .window-control { width: 30px; height: 26px; }
 html body[data-design="liquid-glass"] .app-player-dock {

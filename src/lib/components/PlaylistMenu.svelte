@@ -9,7 +9,7 @@
    * Один компонент на все места: клик открывает, клик вне и Esc закрывают, а оформление — то
    * же стекло, что у настроек в полноэкранном режиме.
    */
-  import { createEventDispatcher, onDestroy } from 'svelte';
+  import { createEventDispatcher, onDestroy, tick } from 'svelte';
   import { Plus, ListMusic, Star } from 'lucide-svelte';
   import { Plus as PlusIcon, Check as CheckIcon } from 'lucide';
   import { MorphIcon } from 'morphicons/svelte';
@@ -45,8 +45,8 @@
   function adjustPosition() {
     if (!root || typeof window === 'undefined') return;
     const rect = root.getBoundingClientRect();
-    const menuWidth = 240;
-    const menuHeight = 240;
+    const menuWidth = popup?.offsetWidth || 176;
+    const menuHeight = popup?.offsetHeight || 240;
 
     if (placement === 'bottom' && rect.bottom + menuHeight > window.innerHeight && rect.top > menuHeight) {
       computedPlacement = 'top';
@@ -83,6 +83,7 @@
   }
 
   let root: HTMLElement;
+  let popup: HTMLDivElement | undefined;
 
   function onDocPointerDown(e: PointerEvent) {
     if (root && !root.contains(e.target as Node)) setOpen(false);
@@ -98,16 +99,18 @@
     if (typeof window === 'undefined') return;
     window.addEventListener('pointerdown', onDocPointerDown, true);
     window.addEventListener('keydown', onKey);
+    window.addEventListener('resize', adjustPosition);
   }
 
   function detach() {
     if (typeof window === 'undefined') return;
     window.removeEventListener('pointerdown', onDocPointerDown, true);
     window.removeEventListener('keydown', onKey);
+    window.removeEventListener('resize', adjustPosition);
   }
 
   $: if (open) {
-    adjustPosition();
+    void tick().then(() => { if (open) adjustPosition(); });
     attach();
   } else {
     detach();
@@ -191,16 +194,18 @@
     <!-- svelte-ignore a11y-click-events-have-key-events -->
     <!-- svelte-ignore a11y-no-static-element-interactions -->
     <div
+      bind:this={popup}
       transition:popFade
       class="pl-menu-pop is-{computedPlacement} is-{computedAlign}"
       class:lg-optical={$settings.design === 'liquid-glass'}
       use:glassRefraction={$settings.design === 'liquid-glass' && !$effectivePerformanceMode ? $settings.glassQuality || 'normal' : 'off'}
       role="menu"
+      aria-label="Плейлисты для трека"
       tabindex="-1"
       on:click|stopPropagation
     >
       <div class="pl-menu-head">
-        <ListMusic size={12} />
+        <ListMusic size={12} aria-hidden="true" />
         Плейлисты
       </div>
 
@@ -217,18 +222,20 @@
               on:click={(e) => toggleMembership(e, pl)}
             >
               <span class="pl-menu-item-title">{pl.title}</span>
-              <MorphIcon
-                icon={inside ? CheckIcon : PlusIcon}
-                size={15}
-                class={inside ? 'text-primary shrink-0' : 'pl-menu-item-add'}
-                spring="snappy"
-                reducedMotion="user"
-              />
+              <span class="pl-menu-item-state" aria-hidden="true">
+                <MorphIcon
+                  icon={inside ? CheckIcon : PlusIcon}
+                  size={15}
+                  class={inside ? 'text-primary shrink-0' : 'pl-menu-item-add'}
+                  spring="snappy"
+                  reducedMotion="user"
+                />
+              </span>
             </button>
           {/each}
         </div>
       {:else}
-        <div class="pl-menu-empty">Плейлистов ещё нет — первый заводится в медиатеке.</div>
+        <div class="pl-menu-empty">Плейлистов пока нет. Создай первый в медиатеке.</div>
       {/if}
     </div>
   {/if}

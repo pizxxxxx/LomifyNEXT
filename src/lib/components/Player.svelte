@@ -525,71 +525,83 @@
     handleTrackEnded('finished');
   }
 
-  async function handleTrackEnded(outcome: TrackOutcome = 'finished') {
-    const endingGeneration = loadGeneration;
-    if (repeatMode === 2) {
-      invoke('audio_seek', { position: 0 });
-      invoke('audio_play').catch(() => {});
-      return;
-    }
+  let pendingTrackAdvance: { track: any } | null = null;
 
-    if ($waveActive) {
-      waveTrackDone($currentTrack, currentTime, outcome);
-      // Порция догружается заранее, но если очередь всё-таки опустела — ждём: без этого
-      // волна кончалась бы на последнем треке порции и уходила в обычный автоплей.
-      await waveRefill();
-      if (endingGeneration !== loadGeneration || !$waveActive) return;
-      if (get(queue).length === 0) {
-        isPlaying.set(false);
-        notify('Продолжение волны пока не пришло. Повторите запуск волны или проверьте соединение.', 'info');
+  async function handleTrackEnded(outcome: TrackOutcome = 'finished') {
+    const endingTrack = get(currentTrack);
+    if (!endingTrack || pendingTrackAdvance?.track === endingTrack) return;
+    const transition = { track: endingTrack };
+    pendingTrackAdvance = transition;
+    try {
+      const endingGeneration = loadGeneration;
+      if (repeatMode === 2) {
+        invoke('audio_seek', { position: 0 });
+        invoke('audio_play').catch(() => {});
         return;
       }
-    }
 
-    const rawQueue = get(queue);
-    const currentDisliked = get(dislikedTracks);
-    const currentQueue = rawQueue.filter(t => !isTrackDisliked(currentDisliked, t));
-    if (currentQueue.length !== rawQueue.length) {
-      queue.set(currentQueue);
-    }
-    if (currentQueue && currentQueue.length > 0) {
-      // Если следующий трек уже подготовлен, берём именно его. Иначе при перемешивании
-      // жребий бросался бы дважды: предзагрузка тянула бы ссылку для одного трека, а играл
-      // бы другой — и вся подготовка каждый раз уходила бы впустую.
-      const prepared = preparedNext && preparedNext.queueRef === currentQueue ? preparedNext : null;
-      let nextIndex = prepared
-        ? prepared.index
-        : isShuffle && currentQueue.length > 1
-          ? Math.floor(Math.random() * currentQueue.length)
-          : 0;
-      const nextTrack = currentQueue[nextIndex];
-      const newQueue = [...currentQueue.slice(0, nextIndex), ...currentQueue.slice(nextIndex + 1)];
-      
-      if (repeatMode === 1 && $currentTrack) {
-        queue.set([...newQueue, $currentTrack]);
-      } else {
-        queue.set(newQueue);
+      if ($waveActive) {
+        waveTrackDone(endingTrack, currentTime, outcome);
+        // Порция догружается заранее, но если очередь всё-таки опустела — ждём: без этого
+        // волна кончалась бы на последнем треке порции и уходила в обычный автоплей.
+        await waveRefill();
+        // Store updates are synchronous, but Svelte can increment loadGeneration later.
+        // A second skip or manual selection must invalidate this transition immediately.
+        if (endingGeneration !== loadGeneration || get(currentTrack) !== endingTrack || !$waveActive) return;
+        if (get(queue).length === 0) {
+          isPlaying.set(false);
+          notify('Продолжение волны пока не пришло. Повторите запуск волны или проверьте соединение.', 'info');
+          return;
+        }
       }
-      
-      if ($currentTrack) {
+
+      const rawQueue = get(queue);
+      const currentDisliked = get(dislikedTracks);
+      const currentQueue = rawQueue.filter(t => !isTrackDisliked(currentDisliked, t));
+      if (currentQueue.length !== rawQueue.length) {
+        queue.set(currentQueue);
+      }
+      if (currentQueue && currentQueue.length > 0) {
+        // Если следующий трек уже подготовлен, берём именно его. Иначе при перемешивании
+        // жребий бросался бы дважды: предзагрузка тянула бы ссылку для одного трека, а играл
+        // бы другой — и вся подготовка каждый раз уходила бы впустую.
+        const prepared = preparedNext && preparedNext.queueRef === currentQueue ? preparedNext : null;
+        let nextIndex = prepared
+          ? prepared.index
+          : isShuffle && currentQueue.length > 1
+            ? Math.floor(Math.random() * currentQueue.length)
+            : 0;
+        const nextTrack = currentQueue[nextIndex];
+        const newQueue = [...currentQueue.slice(0, nextIndex), ...currentQueue.slice(nextIndex + 1)];
+
+        if (repeatMode === 1) {
+          queue.set([...newQueue, endingTrack]);
+        } else {
+          queue.set(newQueue);
+        }
+
         const hist = get(trackHistory);
-        trackHistory.set([...hist, $currentTrack]);
-      }
-      currentTrack.set(nextTrack);
-      isPlaying.set(true);
-    } else if ($currentTrack && $settings.waveContinuation !== false) {
-      import('$lib/api').then(async api => {
-        const trending = await api.getRelatedTracks($currentTrack, $likedTracks, $listenStats, $playlists);
-        if (endingGeneration !== loadGeneration) return;
+        trackHistory.set([...hist, endingTrack]);
+        currentTrack.set(nextTrack);
+        isPlaying.set(true);
+      } else if ($settings.waveContinuation !== false) {
+        const api = await import('$lib/api');
+        const trending = await api.getRelatedTracks(endingTrack, $likedTracks, $listenStats, $playlists);
+        if (endingGeneration !== loadGeneration || get(currentTrack) !== endingTrack) return;
         if (trending && trending.length > 0) {
           const nextTrack = trending[Math.floor(Math.random() * trending.length)];
           currentTrack.set(nextTrack);
         } else {
           $isPlaying = false;
         }
-      });
-    } else {
-      $isPlaying = false;
+      } else {
+        $isPlaying = false;
+      }
+    } catch (error) {
+      console.warn('[player] продолжение не загрузилось', error);
+      if (get(currentTrack) === endingTrack) isPlaying.set(false);
+    } finally {
+      if (pendingTrackAdvance === transition) pendingTrackAdvance = null;
     }
   }
 

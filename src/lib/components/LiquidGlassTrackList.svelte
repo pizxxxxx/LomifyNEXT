@@ -32,9 +32,10 @@
   {#if !top}<div class="lg-list-head"><span>Название</span><span>Источник</span><span>Время</span><span></span></div>{/if}
   {#each visible as track, index (index)}
     {@const active = $currentTrack && key($currentTrack) === key(track)}
+    {@const unheard = !listened.has(`${track.artist}:${track.title}`)}
     <div class="lg-track-row" class:is-active={active} class:has-menu={menuIndex === index}>
-      <button class="lg-track-play" aria-label={active && $isPlaying ? `Пауза: ${track.title}` : `Играть: ${track.title}`} onclick={() => play(track)}>
-        <span class="lg-track-number">{#if active}<span class="lg-track-dot"></span>{:else if !listened.has(`${track.artist}:${track.title}`)}<span class="lg-track-dot is-unheard"></span>{/if}{(indices?.[index] ?? index) + 1}</span>
+      <button class="lg-track-play" aria-label={(active && $isPlaying ? `Пауза: ${track.title}` : `Играть: ${track.title}`) + (unheard && !active ? ', ещё не прослушан в Lomify' : '')} onclick={() => play(track)}>
+        <span class="lg-track-number" title={active ? 'Текущий трек' : unheard ? 'Ещё не прослушан в Lomify' : undefined}>{#if active}<span class="lg-track-dot" aria-hidden="true"></span>{:else if unheard}<span class="lg-track-dot is-unheard" aria-hidden="true"></span>{/if}{(indices?.[index] ?? index) + 1}</span>
         {#if top}
           <span class="lg-top-track-art" aria-hidden="true">
             {#if track.coverUrl}<img class="lg-track-art" src={coverUrlAtSize(track.coverUrl, 80)} alt="" width="32" height="32" loading="lazy" decoding="async" />{:else}<Music2 size={26} />{/if}

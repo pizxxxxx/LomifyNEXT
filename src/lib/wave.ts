@@ -118,9 +118,9 @@ const REFILL_AT = 2;
 /** При активном фильтре просматриваем несколько порций, пока не наберётся очередь. */
 const FILTER_SCAN_BATCHES = 18;
 const FILTER_TARGET_TRACKS = 10;
-const MAX_TRACK_OCCURRENCES = 2;
+const MAX_TRACK_OCCURRENCES = 1;
 
-/** Сколько раз трек уже попадал в очередь текущего сеанса волны. */
+/** Уже предложенные треки сеанса, включая быстро пропущенные и ещё не проигранные. */
 const sessionOccurrences = new Map<string, number>();
 
 /** Не повторяем одно и то же предупреждение при каждом запросе продолжения. */

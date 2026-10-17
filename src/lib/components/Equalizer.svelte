@@ -1,18 +1,11 @@
 <script lang="ts">
   import { RotateCcw, SlidersHorizontal, Sparkles, Waves } from 'lucide-svelte';
-  import { activeEqualizerPreset, equalizerBands, settings, effectivePerformanceMode } from '$lib/stores';
+  import { activeEqualizerPreset, equalizerBands, equalizerProfiles, settings, effectivePerformanceMode } from '$lib/stores';
   import { glassRefraction } from '$lib/glassRefraction';
+  import { EQUALIZER_PRESETS as presets } from '$lib/equalizer';
+  import EqualizerProfiles from './EqualizerProfiles.svelte';
 
   const frequencies = ['32', '64', '125', '250', '500', '1k', '2k', '4k', '8k', '16k'];
-
-  const presets = [
-    { id: 'flat', label: 'Ровно', hint: 'Без коррекции', gains: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
-    { id: 'bass', label: 'Бас', hint: 'Плотный низ', gains: [6, 5, 4, 2, 0, -1, -2, -3, -4, -5] },
-    { id: 'electronic', label: 'Электроника', hint: 'Удар и воздух', gains: [5, 4, 1, 0, -2, -1, 2, 4, 5, 6] },
-    { id: 'vocal', label: 'Вокал', hint: 'Голос ближе', gains: [-2, -1, 0, 2, 4, 5, 4, 2, 0, -2] },
-    { id: 'rock', label: 'Рок', hint: 'Гитары и атака', gains: [4, 3, 2, 0, -1, -1, 1, 3, 4, 4] },
-    { id: 'priora', label: 'Приора', hint: 'Под окном', gains: [12, 12, 12, 12, 5, -12, -12, -12, -12, -12] },
-  ] as const;
 
   function setPreset(preset: typeof presets[number]) {
     $equalizerBands = [...preset.gains];
@@ -24,7 +17,7 @@
   }
 
   function markCustom() {
-    $activeEqualizerPreset = 'custom';
+    if (!$activeEqualizerPreset.startsWith('profile:')) $activeEqualizerPreset = 'custom';
   }
 
   function formatGain(value: number) {
@@ -44,7 +37,11 @@
     return Math.abs(50 - bandPosition(value));
   }
 
-  $: activeLabel = $activeEqualizerPreset === 'custom'
+  $: activeProfile = $equalizerProfiles.find(profile => `profile:${profile.id}` === $activeEqualizerPreset);
+  $: profileChanged = activeProfile?.gains.some((gain, i) => gain !== $equalizerBands[i]) ?? false;
+  $: activeLabel = activeProfile
+    ? `${activeProfile.name}${profileChanged ? ' (изменён)' : ''}`
+    : $activeEqualizerPreset === 'custom'
     ? 'Свой профиль'
     : presets.find((preset) => preset.id === $activeEqualizerPreset)?.label || 'Ровно';
   $: glass = $settings.design === 'liquid-glass';
@@ -57,12 +54,12 @@
   }, '');
 </script>
 
-<div class="eq-page" class:lg-equalizer={glass} class:is-direct={$activeEqualizerPreset === 'custom' || $effectivePerformanceMode}>
+<div class="eq-page" class:lg-equalizer={glass} class:is-direct={$activeEqualizerPreset === 'custom' || profileChanged || $effectivePerformanceMode}>
   <header class="eq-header">
     <div class="eq-title-block">
       <span class="eq-kicker"><SlidersHorizontal size={14} aria-hidden="true" /> Звук</span>
       <h1 class="page-title">Эквалайзер</h1>
-      <p>Десять полос от глубокого баса до воздуха. Изменения слышны сразу.</p>
+      <p>Изменения слышны сразу. Полосы и выбранный пресет сохраняются автоматически.</p>
     </div>
 
     <div class="eq-header-actions">
@@ -94,6 +91,8 @@
       </button>
     {/each}
   </section>
+
+  <EqualizerProfiles />
 
   <section class="eq-board plate" class:lg-optical={glass} use:glassRefraction={glassQuality} aria-label="Полосы эквалайзера">
     <div class="eq-board-head">
@@ -271,11 +270,14 @@
   }
 
   .eq-active {
+    max-width: min(42vw, 360px);
     padding: 0 14px;
     color: color-mix(in srgb, var(--color-primary) 46%, white);
     background: color-mix(in srgb, var(--color-primary) 12%, rgba(255, 255, 255, 0.035));
     border: 1px solid color-mix(in srgb, var(--color-primary) 20%, rgba(255, 255, 255, 0.06));
   }
+
+  .eq-active span { min-width: 0; overflow-wrap: anywhere; }
 
   .eq-reset {
     padding: 0 15px;

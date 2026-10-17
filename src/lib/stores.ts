@@ -2,6 +2,7 @@ import { derived, readable, writable, get } from 'svelte/store';
 import { redactText } from './logRedaction';
 import { cachedSecret, publicSettings, secretStartupErrors, settingsSecretsRemoved, whenSecretsReady, SECRETS_READY_EVENT } from './secretStorage';
 import { dedupePlaylists, loadPlaylistSnapshot, savePlaylistSnapshot } from '$lib/playlistStorage';
+import { EQUALIZER_PRESETS, EQUALIZER_STORAGE_KEY, equalizerProfileKey, normalizeEqualizerState, normalizeProfileName, type EqualizerProfile } from './equalizer';
 
 // Global app state
 export const currentTrack = writable<{
@@ -404,7 +405,6 @@ function getInitialLibraryTab(): LibraryTab {
 }
 
 export const activeLibraryTab = writable<LibraryTab>(getInitialLibraryTab());
-export const activeEqualizerPreset = writable<string>('flat');
 
 /**
  * Есть ли текст у играющего трека. Нужно ДО того, как текст открыли: кнопка «Показать текст»
@@ -622,6 +622,8 @@ export function initStore() {
     if (storesInitialized) return;
     storesInitialized = true;
 
+    initEqualizerStorage();
+
     const stored = localStorage.getItem('lomifynext_settings');
     if (stored) {
       try {
@@ -716,7 +718,89 @@ export function initStore() {
 }
 
 // Equalizer state (10 bands: 32, 64, 125, 250, 500, 1k, 2k, 4k, 8k, 16k)
-export const equalizerBands = writable([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+export const equalizerBands = writable<number[]>([...EQUALIZER_PRESETS[0].gains]);
+export const activeEqualizerPreset = writable<string>('flat');
+export const equalizerProfiles = writable<EqualizerProfile[]>([]);
+export const equalizerSaveError = writable(false);
+
+export function saveEqualizerProfile(name: string): { ok: true; profile: EqualizerProfile } | { ok: false; error: string } {
+  const normalizedName = normalizeProfileName(name);
+  if (!normalizedName) return { ok: false, error: 'Введи название профиля.' };
+  if (get(equalizerProfiles).some(profile => profile.name.toLocaleLowerCase('ru') === normalizedName.toLocaleLowerCase('ru'))) {
+    return { ok: false, error: 'Такое название уже есть. Укажи другое или выбери существующий профиль и нажми Обновить.' };
+  }
+  const profile = { id: crypto.randomUUID(), name: normalizedName, gains: [...get(equalizerBands)] };
+  equalizerProfiles.update(profiles => [...profiles, profile]);
+  activeEqualizerPreset.set(equalizerProfileKey(profile.id));
+  return { ok: true, profile };
+}
+
+export function applyEqualizerProfile(id: string): boolean {
+  const profile = get(equalizerProfiles).find(profile => profile.id === id);
+  if (!profile) return false;
+  equalizerBands.set([...profile.gains]);
+  activeEqualizerPreset.set(equalizerProfileKey(id));
+  return true;
+}
+
+export function updateEqualizerProfile(id: string): boolean {
+  if (!get(equalizerProfiles).some(profile => profile.id === id)) return false;
+  const gains = [...get(equalizerBands)];
+  equalizerProfiles.update(profiles => profiles.map(profile => profile.id === id ? { ...profile, gains } : profile));
+  activeEqualizerPreset.set(equalizerProfileKey(id));
+  return true;
+}
+
+export function deleteEqualizerProfile(id: string): EqualizerProfile | null {
+  const profile = get(equalizerProfiles).find(profile => profile.id === id);
+  if (!profile) return null;
+  equalizerProfiles.update(profiles => profiles.filter(profile => profile.id !== id));
+  if (get(activeEqualizerPreset) === equalizerProfileKey(id)) activeEqualizerPreset.set('custom');
+  return profile;
+}
+
+export function restoreEqualizerProfile(profile: EqualizerProfile): boolean {
+  const profiles = get(equalizerProfiles);
+  if (profiles.some(item => item.id === profile.id || item.name.toLocaleLowerCase('ru') === profile.name.toLocaleLowerCase('ru'))) return false;
+  equalizerProfiles.set([...profiles, profile]);
+  return true;
+}
+
+function initEqualizerStorage() {
+  // Restore both stores before subscribing: the initial flat profile must not
+  // overwrite the saved sound. Player applies restored gains without opening EQ.
+  try {
+    const stored = localStorage.getItem(EQUALIZER_STORAGE_KEY);
+    if (stored) {
+      const restored = normalizeEqualizerState(JSON.parse(stored));
+      equalizerProfiles.set(restored.profiles);
+      equalizerBands.set(restored.bands);
+      activeEqualizerPreset.set(restored.preset);
+    }
+  } catch {
+    console.warn('Не удалось прочитать сохранённый эквалайзер.');
+  }
+
+  let lastSaved = '';
+  let errorShown = false;
+  derived([equalizerBands, activeEqualizerPreset, equalizerProfiles], ([bands, preset, profiles]) =>
+    JSON.stringify(normalizeEqualizerState({ bands, preset, profiles }))
+  ).subscribe(value => {
+    if (value === lastSaved) return;
+    try {
+      // Ten gains are small enough to save immediately, including the last
+      // slider movement immediately before the application is closed.
+      localStorage.setItem(EQUALIZER_STORAGE_KEY, value);
+      lastSaved = value;
+      equalizerSaveError.set(false);
+    } catch {
+      equalizerSaveError.set(true);
+      if (errorShown) return;
+      errorShown = true;
+      notify('Не удалось сохранить эквалайзер. Проверь свободное место и измени настройку ещё раз.', 'error');
+    }
+  });
+}
 
 /**
  * Перезапуск текущего трека с начала (0:00) с полным сбросом прогресса и повторной загрузкой текста.
