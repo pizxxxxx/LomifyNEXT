@@ -14,6 +14,7 @@ mod audio;
 mod secrets;
 mod backup;
 mod google_auth;
+mod auth_browser;
 mod lastfm;
 mod discord;
 mod import;

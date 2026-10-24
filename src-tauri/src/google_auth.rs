@@ -1,4 +1,5 @@
-use std::{io::{Read, Write}, net::TcpListener, time::{Duration, Instant}};
+use std::{io::Read, net::TcpListener, time::{Duration, Instant}};
+use crate::auth_browser::{self, AuthProvider, AuthResult};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use sha2::{Digest, Sha256};
 use tauri_plugin_opener::OpenerExt;
@@ -56,9 +57,8 @@ pub async fn google_sign_in(app: tauri::AppHandle, window: tauri::WebviewWindow,
                     let mut segments = line.split_whitespace();
                     if segments.next() != Some("GET") { continue; }
                     let result = callback(segments.next().unwrap_or(""), &state);
-                    let body = if result.is_ok() { "<!doctype html><meta charset=utf-8><title>LomifyNEXT</title><p>Ответ Google получен. Вернись в LomifyNEXT для завершения входа.</p>" }
-                        else { "<!doctype html><meta charset=utf-8><title>LomifyNEXT</title><p>Вход не завершён. Вернись в LomifyNEXT и повтори попытку.</p>" };
-                    let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\n{body}", body.len());
+                    let page = match &result { Ok(_) => AuthResult::Received, Err(reason) if *reason == "denied" => AuthResult::Cancelled, _ => AuthResult::Invalid };
+                    let _ = auth_browser::write_response(&mut stream, AuthProvider::Google, page);
                     match result {
                         Ok(code) => return Ok(code),
                         Err("denied") => return Err("Вход Google отменён. Данные не изменены.".into()),

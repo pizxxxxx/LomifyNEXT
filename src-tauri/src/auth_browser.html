@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="referrer" content="no-referrer">
+  <title>{{title}} · LomifyNEXT</title>
+  <link rel="icon" href="data:image/png;base64,{{logo}}">
+  <style>
+    :root{font-family:Inter,"Segoe UI",Arial,sans-serif;color:#f5f3f5;background:#121214;color-scheme:dark;font-synthesis:none;--accent:#e1aab6;--muted:#b8b1b8}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;min-height:100dvh;display:grid;grid-template-rows:auto 1fr auto;background:radial-gradient(ellipse at 15% 18%,#c88e9b12,transparent 44%),radial-gradient(ellipse at 88% 80%,#af927c0d,transparent 48%),#121214}
+    .topbar{width:min(1040px,100%);margin:auto;display:flex;align-items:center;justify-content:space-between;gap:24px;padding:20px 32px}.brand{display:flex;align-items:center;gap:10px}.brand img{display:block;width:42px;height:42px;object-fit:contain}.wordmark{font-size:15px;letter-spacing:.12em;font-weight:700}.wordmark small{display:block;margin-top:4px;font-size:8px;letter-spacing:.46em;color:#bbb3be;font-weight:500}.topbar>span{font-size:11px;letter-spacing:.12em;color:#a39aa6;text-transform:uppercase}
+    main{display:grid;place-items:center;padding:24px}.card{position:relative;isolation:isolate;width:min(100%,540px);overflow:hidden;padding:32px;border-radius:26px;border:1px solid #ffffff27;background:#202023c7;-webkit-backdrop-filter:blur(24px);backdrop-filter:blur(24px);box-shadow:0 24px 100px #0004}.watermark{position:absolute;z-index:-1;width:270px;height:270px;right:-60px;top:-66px;opacity:.07;filter:grayscale(1);pointer-events:none}.service{display:inline-flex;align-items:center;gap:8px;padding:7px 11px;border:1px solid #ffffff18;border-radius:999px;background:#ffffff05;color:#cdc5d0;font-size:11px;font-weight:550}.service svg{width:14px;height:14px;color:var(--accent)}
+    .status-icon{display:grid;place-items:center;width:52px;height:52px;margin:22px 0 18px;border:1px solid #ffffff24;border-radius:19px;background:#ffffff06;color:var(--accent)}.status-icon svg{width:27px;height:27px}.cancel-glyph{display:none}[data-result="cancelled"] .received-glyph,[data-result="invalid"] .received-glyph{display:none}[data-result="cancelled"] .cancel-glyph,[data-result="invalid"] .cancel-glyph{display:block}
+    .eyebrow{margin:0 0 10px;color:var(--accent);font-size:10px;font-weight:600;letter-spacing:.12em;text-transform:uppercase}h1{margin:0;font-size:clamp(26px,4.5vw,32px);letter-spacing:-.035em;font-weight:650;line-height:1.15;text-wrap:balance}.description{margin:17px 0 0;font-size:14px;line-height:1.6;color:var(--muted);max-width:43ch}.next-step{display:flex;align-items:flex-start;gap:12px;margin:24px 0 0;padding:14px;border:1px solid #ffffff19;border-radius:14px;background:#00000018}.step-icon{display:grid;place-items:center;flex-shrink:0;width:30px;height:30px;border-radius:9px;background:#ffffff08;color:#d8c9d3}.step-icon svg{width:16px;height:16px}.next-step strong{display:block;font-size:13px;font-weight:600;line-height:1.5}.next-step p{margin:5px 0 0;font-size:12px;line-height:1.65;color:var(--muted)}
+    .actions{margin-top:24px}button{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;min-height:46px;padding:12px 18px;border:1px solid #ffffff28;border-radius:999px;background:#ffffff0a;color:#f2edf4;font:600 13px/1.5 Inter,"Segoe UI",Arial,sans-serif;cursor:pointer;transition:background-color .15s}button:hover{background:#ffffff16}button:focus-visible{outline:2px solid var(--accent);outline-offset:4px}button svg{width:16px;height:16px}.close-hint{margin:12px 4px 0;color:#a49ba7;font-size:11px;line-height:1.65;text-align:center}.close-hint[hidden]{display:none}kbd{font-family:inherit;color:#d4c9d8;white-space:nowrap}footer{padding:0 24px 18px;text-align:center;font-size:11px;line-height:1.7;color:#817886}
+    @media(max-width:520px){.topbar{padding:22px 22px 12px}.topbar>span{display:none}main{padding:24px 16px 32px}.card{padding:27px 23px;border-radius:22px}.description{font-size:14px}.status-icon{margin-top:25px}footer{padding-bottom:20px}}@media(prefers-reduced-transparency:reduce){.card{background:#202023;-webkit-backdrop-filter:none;backdrop-filter:none}}@media(prefers-reduced-motion:reduce){button{transition:none}}
+  </style>
+</head>
+<body data-result="{{result}}">
+  <header class="topbar"><div class="brand" aria-label="LomifyNEXT"><img src="data:image/png;base64,{{logo}}" alt="" width="42" height="42"><span class="wordmark">LOMIFY<small>NEXT</small></span></div><span>Твоя музыка. Твой ритм.</span></header>
+  <main>
+    <section class="card" aria-labelledby="result-title">
+      <img class="watermark" src="data:image/png;base64,{{logo}}" alt="" aria-hidden="true" width="270" height="270">
+      <div class="service"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>{{provider}}</div>
+      <div class="status-icon" aria-hidden="true"><svg class="received-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4 4L19 6"/></svg><svg class="cancel-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="m7 7 10 10M17 7 7 17"/></svg></div>
+      <p class="eyebrow">{{eyebrow}}</p>
+      <h1 id="result-title">{{title}}</h1>
+      <p class="description">{{description}}</p>
+      <div class="next-step"><span class="step-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/></svg></span><div><strong>{{next-title}}</strong><p>{{next-description}}</p></div></div>
+      <div class="actions"><button id="close-tab" type="button">Закрыть вкладку<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg></button><p id="close-hint" class="close-hint" role="status" hidden>Браузер оставил вкладку открытой. Нажми <kbd id="close-shortcut">Ctrl + W</kbd>, затем открой Lomify на панели задач.</p></div>
+    </section>
+  </main>
+  <footer>Вход проходит на сайте {{provider}}.<br>Завершение подключения и его результат доступны в приложении Lomify.</footer>
+  <script>{{script}}</script>
+</body>
+</html>

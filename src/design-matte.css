@@ -1,5 +1,8 @@
 .design-preview-matte { background:linear-gradient(120deg,#292929 65%,#704f59); }
-.design-preview-matte .design-preview-tile { background:#ffffff12; border:1px solid #ffffff55; box-shadow:none; }
+.design-preview-matte .design-preview-bar { background:rgb(255 255 255 / 65%); }
+.design-preview-matte .design-preview-bar.is-short { background:rgb(255 255 255 / 38%); }
+.design-preview-matte .design-preview-tile { bottom:26px; border-radius:10px; background:#ffffff12; border:1px solid #ffffff55; box-shadow:none; }
+.design-preview-matte .design-preview-player { background:rgb(255 255 255 / 9%); box-shadow:none; }
 html body[data-design="liquid-glass"][data-glass-material="matte"] {
   --color-dark:var(--matte-background,#292929);
   --color-dark-gradient:var(--matte-background,#292929);

@@ -9,7 +9,7 @@
   let emailInput = $state<HTMLInputElement>();
   let replaceCloud = $state(false), replaceLocal = $state(false);
   $effect(() => { $cloudProfile.head?.revision; replaceCloud = false; replaceLocal = false; });
-  async function revealEmail() { emailVisible = true; await tick(); emailInput?.focus(); }
+  async function revealEmail(create = false) { register = create; emailVisible = true; await tick(); emailInput?.focus(); }
   async function submit(event: SubmitEvent) {
     event.preventDefault(); const supplied = password; password = '';
     await cloudSignIn(email, supplied, register);
@@ -27,10 +27,10 @@
     {#if !welcome || emailVisible}
     <form onsubmit={submit}>
       <div class="fields"><label>Почта<input type="email" bind:this={emailInput} bind:value={email} autocomplete="email" placeholder="name@example.com" required disabled={$cloudProfile.busy} /></label><label>Пароль<input type="password" bind:value={password} autocomplete={register ? 'new-password' : 'current-password'} minlength={register ? 6 : undefined} required disabled={$cloudProfile.busy} /></label></div>
-      <div class="actions"><button type="submit" class="glass-button" disabled={$cloudProfile.busy}>{#if $cloudProfile.busy}<Loader2 size={15} class="animate-spin" />{/if}{register ? 'Создать аккаунт' : 'Войти'}</button><button type="button" class="glass-button" disabled={$cloudProfile.busy} onclick={() => { register = !register; password = ''; }}>{register ? 'Уже есть аккаунт' : 'Регистрация'}</button><button type="button" class="text-button" disabled={$cloudProfile.busy || !email.trim()} onclick={() => cloudResetPassword(email)}>Восстановить пароль</button></div>
+      <div class="actions"><button type="submit" class="glass-button" disabled={$cloudProfile.busy}>{#if $cloudProfile.busy}<Loader2 size={15} class="animate-spin" />{/if}{register ? 'Создать аккаунт' : 'Войти'}</button><button type="button" class="glass-button" disabled={$cloudProfile.busy} onclick={() => { register = !register; password = ''; }}>{register ? 'Уже есть аккаунт' : 'Создать аккаунт'}</button><button type="button" class="text-button" disabled={$cloudProfile.busy || !email.trim()} onclick={() => cloudResetPassword(email)}>Восстановить пароль</button></div>
     </form>
     {:else}
-      <button type="button" class="glass-button email-entry" onclick={revealEmail}><Mail size={17} aria-hidden="true" />Войти по почте</button>
+      <div class="email-choices"><button type="button" class="glass-button email-entry" onclick={() => revealEmail(false)}><Mail size={17} aria-hidden="true" />Войти по почте</button><button type="button" class="glass-button email-entry" onclick={() => revealEmail(true)}>Создать аккаунт</button></div>
     {/if}
     {#if !cloudDesktopAvailable()}<p class="note">Вход через Google доступен в установленном приложении Lomify.</p>{:else if !cloudGoogleConfigured || !$cloudGoogleReady}<p class="note">Вход через Google появится после завершения подключения проекта.</p>{/if}
     <p class="note">Используй отдельный пароль для Lomify. Аудиофайлы и подключения музыкальных сервисов в облако не передаются.{#if !cloudDesktopAvailable()}{' '}В браузерном предпросмотре вход действует до закрытия страницы.{/if}</p>
@@ -55,6 +55,7 @@
   {#if $cloudProfile.message}<p class="note" role="status">{$cloudProfile.message}</p>{/if}
 </article>
 <style>
+  .email-choices{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}.email-choices .email-entry{margin-top:0;padding-inline:9px}@media(max-width:420px){.email-choices{grid-template-columns:1fr}}
   .email-entry{width:100%;border-radius:999px;margin-top:10px;min-height:42px;background:#ffffff08;border:1px solid #ffffff32;color:#edeaf0}.email-entry:hover{background:#ffffff13}
   .google-button{background:#fff;color:#242424;border:1px solid #e0e0e0;font-weight:550;min-height:42px;padding:10px 16px}.google-button:hover:not(:disabled){background:#f0f3f8}.google-button:disabled{opacity:.62}.auth-divider{display:flex;align-items:center;gap:12px;margin:22px 0 0;color:#9ca1aa;font-size:10px}.auth-divider::before,.auth-divider::after{content:'';height:1px;flex:1;background:#ffffff16}.welcome-auth .google-action{margin-top:0}.welcome-auth .google-button{width:100%;border-radius:999px}.welcome-auth .fields{grid-template-columns:1fr;gap:14px;margin-top:18px}.welcome-auth .fields input{border-radius:12px;background:#0002;padding:12px 14px}.welcome-auth form .actions{display:grid;grid-template-columns:1fr auto;align-items:center}.welcome-auth form button[type=submit]{background:var(--color-primary);color:var(--color-dark);border:0;border-radius:999px;font-weight:650;min-height:40px}.welcome-auth form button[type=button]:not(.text-button){border-radius:999px}.welcome-auth .text-button{grid-column:1/-1;justify-self:center;padding:5px 8px}
   .cloud-card{padding:24px}header{display:flex;gap:12px;align-items:flex-start}.cloud-icon{width:40px;height:40px;display:grid;place-items:center;flex-shrink:0;background:#ffffff08;border-radius:12px;color:var(--color-primary)}

@@ -5,10 +5,11 @@
 //! этот модуль на несколько минут поднимает узкий HTTP-listener только на `127.0.0.1` и
 //! передаёт результат главному окну событием. Токены здесь не проходят и не сохраняются.
 
-use std::io::{Read, Write};
+use std::io::Read;
 use std::net::{TcpListener, TcpStream};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
+use crate::auth_browser::{self, AuthProvider, AuthResult};
 
 const CALLBACK_PATH: &str = "/callback";
 const CALLBACK_PORT: u16 = 43_827;
@@ -51,31 +52,6 @@ fn parse_callback_target(target: &str) -> Result<SpotifyOauthCallback, String> {
     Ok(result)
 }
 
-fn write_browser_response(stream: &mut TcpStream, ok: bool) {
-    let (status, title, message) = if ok {
-        (
-            "200 OK",
-            "Spotify подключён",
-            "Можно закрыть эту вкладку и вернуться в LomifyNEXT.",
-        )
-    } else {
-        (
-            "400 Bad Request",
-            "Подключение не завершено",
-            "Вернитесь в LomifyNEXT и попробуйте ещё раз.",
-        )
-    };
-    let body = format!(
-        "<!doctype html><html lang=\"ru\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>{title}</title><style>body{{margin:0;min-height:100vh;display:grid;place-items:center;background:#121212;color:#fff;font:16px system-ui,sans-serif}}main{{max-width:32rem;padding:2rem;text-align:center}}i{{display:grid;place-items:center;width:4rem;height:4rem;margin:0 auto 1rem;border-radius:1.25rem;background:#1ed760;color:#101010;font-style:normal;font-size:2rem}}h1{{font-size:1.45rem}}p{{color:#b3b3b3;line-height:1.55}}</style><main><i>✓</i><h1>{title}</h1><p>{message}</p></main><script>setTimeout(()=>window.close(),1200)</script></html>"
-    );
-    let response = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n{body}",
-        body.len()
-    );
-    let _ = stream.write_all(response.as_bytes());
-    let _ = stream.flush();
-}
-
 fn handle_connection(stream: &mut TcpStream) -> Result<SpotifyOauthCallback, String> {
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -112,12 +88,13 @@ pub fn spotify_oauth_start(app: AppHandle) -> Result<SpotifyOauthStart, String> 
             match listener.accept() {
                 Ok((mut stream, _)) => match handle_connection(&mut stream) {
                     Ok(payload) => {
-                        write_browser_response(&mut stream, payload.error.is_none());
+                        let page = if payload.error.is_none() { AuthResult::Received } else { AuthResult::Cancelled };
+                        let _ = auth_browser::write_response(&mut stream, AuthProvider::Spotify, page);
                         let _ = app.emit("spotify:oauth-callback", payload);
                         return;
                     }
                     Err(error) => {
-                        write_browser_response(&mut stream, false);
+                        let _ = auth_browser::write_response(&mut stream, AuthProvider::Spotify, AuthResult::Invalid);
                         let _ = app.emit(
                             "spotify:oauth-callback",
                             SpotifyOauthCallback {
