@@ -54,7 +54,7 @@ function render() {
   element('open-service').textContent = selection.source === 'yandex' ? 'Открыть в Яндекс Музыке' : 'Найти на SoundCloud';
   element('open-service').hidden = !selection.sharedTrack;
   element('actions').hidden = false;
-  element('help').textContent = 'Запусти LomifyNEXT версии 9.6.0 или новее. Он подключит музыкальные ссылки к Windows. Вернись сюда, нажми «Открыть в Lomify» и разреши браузеру запустить приложение. Для Яндекс Музыки нужен вход в аккаунт.';
+  element('help').textContent = 'Запусти LomifyNEXT версии 9.6.3 или новее. Он подключит музыкальные ссылки к Windows. Вернись сюда, нажми «Открыть в Lomify» и разреши браузеру запустить приложение. Для Яндекс Музыки нужен вход в аккаунт.';
   if (selection.sharedTrack) return;
   element('tracks').hidden = false;
   element('count').textContent = `${selection.mix.tracks.length} треков`;

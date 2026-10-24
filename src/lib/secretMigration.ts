@@ -1,7 +1,9 @@
 export type SecretName =
   | 'yandex_music_token' | 'spotify_access_token' | 'spotify_refresh_token'
   | 'lastfm_shared_secret' | 'lastfm_session_key' | 'lastfm_auth_token'
-  | 'lastfm_pending_shared_secret';
+  | 'lastfm_pending_shared_secret' | 'lomify_cloud_refresh_token';
+
+export const CURRENT_SECRET_KEYS: SecretName[] = ['lomify_cloud_refresh_token'];
 
 export interface MigrationStorage {
   getItem(key: string): string | null;

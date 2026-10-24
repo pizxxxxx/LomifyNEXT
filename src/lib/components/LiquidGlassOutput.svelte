@@ -29,7 +29,7 @@
 <div class="lg-output" bind:this={root}>
   <button type="button" aria-label="Устройство вывода" title="Устройство вывода" aria-expanded={open} onclick={toggle}><Headphones size={16} /></button>
   {#if open}
-    <div class="lg-popover lg-output-pop lg-optical" use:glassRefraction={$effectivePerformanceMode ? 'off' : $settings.glassQuality || 'normal'} role="dialog" aria-label="Устройство вывода">
+    <div class="lg-popover lg-output-pop lg-optical" use:glassRefraction={$effectivePerformanceMode || $settings.glassMaterial === 'matte' ? 'off' : $settings.glassQuality || 'normal'} role="dialog" aria-label="Устройство вывода">
       <strong>Устройство вывода</strong>
       {#if loading}<Loader2 size={18} class="animate-spin" />{:else}
         <button type="button" onclick={() => select(null, '')}>Системное устройство {#if !$settings.outputDevice}<Check size={14} />{/if}</button>

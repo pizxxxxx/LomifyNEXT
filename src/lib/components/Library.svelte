@@ -465,9 +465,17 @@
     };
     window.addEventListener('cacheCleared', handleCacheCleared);
     window.addEventListener('trackCacheChanged', handleTrackCacheChanged);
+    let libraryMounted = true;
+    const handleLibraryRestored = () => {
+      void getTracks().then(tracks => { if (libraryMounted) localTracks = tracks; })
+        .catch(() => notify('Не удалось обновить локальные файлы. Открой медиатеку повторно.', 'error'));
+    };
+    window.addEventListener('lomify:library-restored', handleLibraryRestored);
     window.addEventListener('pointerdown', onTrackMenuPointerDown, true);
     window.addEventListener('keydown', onTrackMenuKeydown);
     return () => {
+      libraryMounted = false;
+      window.removeEventListener('lomify:library-restored', handleLibraryRestored);
       window.removeEventListener('cacheCleared', handleCacheCleared);
       window.removeEventListener('trackCacheChanged', handleTrackCacheChanged);
       window.removeEventListener('pointerdown', onTrackMenuPointerDown, true);
@@ -953,7 +961,8 @@
         <div class="w-full py-20 px-10 flex flex-col items-start plate mt-4">
           <Heart size={26} class="mb-5 text-white/20" />
           <p class="display-title">Пока ни одного лайка</p>
-          <p class="empty-hint">Жми на сердечко у трека — он окажется здесь и останется доступным даже без сети.</p>
+          <p class="empty-hint">Нажми на сердечко рядом с песней. Здесь соберутся любимые треки.</p>
+          <button type="button" class="glass-button mt-6 px-5 py-2.5 rounded-xl text-sm" on:click={() => currentView.set('search')}>Найти музыку</button>
         </div>
       {:else}
         <div class="library-liked-toolbar">

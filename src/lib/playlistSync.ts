@@ -10,6 +10,8 @@ type Status = { busy: boolean; error: string; message: string; lastSynced: numbe
 const empty = (): Status => ({ busy: false, error: '', message: '', lastSynced: 0 });
 export const playlistSyncStatus = writable<Record<Provider, Status>>({ yandex: empty(), soundcloud: empty() });
 let tail = Promise.resolve();
+/** Call after disabling sync to let already-started reconciliation finish before restore. */
+export async function settlePlaylistSync(): Promise<void> { await tail; }
 let applying = false;
 let wake: (() => void) | null = null;
 const EXCLUDED = 'lomifynext_playlist_sync_excluded';

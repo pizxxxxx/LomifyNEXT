@@ -288,6 +288,9 @@ export interface LikesSyncResult {
 }
 
 let syncing: { promise: Promise<LikesSyncResult>; silent: boolean } | null = null;
+export async function settleLikesSync(): Promise<void> {
+  await Promise.allSettled([syncing?.promise, flushing].filter(Boolean));
+}
 
 /**
  * Свести «Любимое» с лайками привязанных аккаунтов.

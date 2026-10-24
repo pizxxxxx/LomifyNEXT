@@ -59,7 +59,7 @@
     if (!state.open) activeModule = null;
     else void tick().then(() => { if (showSettings) settingsPanel?.focus({ preventScroll: true }); });
   }));
-  $: glassQuality = $settings.design === 'liquid-glass' && !$effectivePerformanceMode ? $settings.glassQuality || 'normal' : 'off';
+  $: glassQuality = $settings.design === 'liquid-glass' && !$effectivePerformanceMode && $settings.glassMaterial !== 'matte' ? $settings.glassQuality || 'normal' : 'off';
   function glassMotionAllowed() {
     return !$effectivePerformanceMode && !window.matchMedia('(prefers-reduced-motion: reduce)').matches && document.body.dataset.inputMode !== 'keyboard';
   }

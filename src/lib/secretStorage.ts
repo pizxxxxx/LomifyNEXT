@@ -1,6 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { rememberSecret } from './logRedaction';
-import { LEGACY_RECORDS, legacySecrets, migrateRecord, readLegacyRecord, withoutSecretFields, type SecretName } from './secretMigration';
+import { LEGACY_RECORDS, CURRENT_SECRET_KEYS, legacySecrets, migrateRecord, readLegacyRecord, withoutSecretFields, type SecretName } from './secretMigration';
 
 export type SecretKey = SecretName;
 export const SECRETS_READY_EVENT = 'lomify:secrets-ready';
@@ -77,7 +77,7 @@ export function whenSecretsReady(): Promise<void> {
         startupErrors.push(`Перенос ${account} не завершён. Старая копия сохранена.`);
       }
     }
-    for (const key of new Set(LEGACY_RECORDS.flatMap((record) => record.fields.map((field) => field.key)))) {
+    for (const key of new Set([...CURRENT_SECRET_KEYS, ...LEGACY_RECORDS.flatMap((record) => record.fields.map((field) => field.key))])) {
       try {
         if (key.startsWith('lastfm_')) {
           if (failedKeys.has(key) && fallback.has(key)) present.add(key);
@@ -150,7 +150,7 @@ export async function deleteSecrets(keys: SecretKey[]): Promise<void> {
 }
 
 export async function deleteAllSecrets(): Promise<void> {
-  await deleteSecrets([...new Set(LEGACY_RECORDS.flatMap((record) => record.fields.map((field) => field.key)))]);
+  await deleteSecrets([...new Set([...CURRENT_SECRET_KEYS, ...LEGACY_RECORDS.flatMap((record) => record.fields.map((field) => field.key))])]);
   await clearLegacySecrets();
 }
 

@@ -1,6 +1,9 @@
 import { get } from 'svelte/store';
 import { searchSoundCloud } from './api';
-import { likedTracks, playlists, settings } from './stores';
+import { flushPlaylistStorage, likedTracks, playlists, playlistsReady, settings } from './stores';
+import { whenSecretsReady } from './secretStorage';
+import { bestImportMatch, normalizeImportText } from './musicImportMatching';
+export { normalizeImportText } from './musicImportMatching';
 import { searchYandex } from './yandex';
 
 export interface MusicImportSeed {
@@ -15,8 +18,9 @@ export interface MusicImportCollection {
   id: string;
   kind: 'liked' | 'playlist';
   name: string;
-  origin: 'spotify' | 'file';
+  origin: 'spotify' | 'file' | 'apple-music';
   originUrl?: string;
+  sourceSkipped?: number;
   tracks: MusicImportSeed[];
 }
 
@@ -35,107 +39,20 @@ export interface MusicImportResult {
   skipped: number;
   likedAdded: number;
   playlistsImported: number;
-}
-
-export function normalizeImportText(value: string): string {
-  return value
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLocaleLowerCase('ru-RU')
-    .replace(/\b(feat|ft)\.?\b/g, ' ')
-    .replace(/[^a-zа-яё0-9]+/gi, ' ')
-    .trim();
-}
-
-function tokenSimilarity(left: string, right: string): number {
-  const a = new Set(normalizeImportText(left).split(' ').filter(Boolean));
-  const b = new Set(normalizeImportText(right).split(' ').filter(Boolean));
-  if (!a.size || !b.size) return 0;
-  let overlap = 0;
-  for (const token of a) if (b.has(token)) overlap++;
-  return (2 * overlap) / (a.size + b.size);
-}
-
-const COVER_OR_AI_PATTERNS = [
-  /\b(?:ai|ии)\b/i,
-  /\b(?:ai|ии)[\s_-]*(?:cover|кавер|remake|ремейк|version|версия|mix|микс)\b/i,
-  /\bнейро[а-яё]*/i,
-  /\b(?:suno|udio)\b/i,
-  /\b(?:cover|кавер)\b/i,
-  /\b(?:tribute|parody|пародия)\b/i,
-  /\b(?:karaoke|караоке)\b/i,
-  /\b(?:instrumental|инструментал)\b/i,
-];
-
-function hasCoverOrAiMarker(text: string): boolean {
-  if (!text) return false;
-  return COVER_OR_AI_PATTERNS.some((p) => p.test(text));
-}
-
-function scoreCandidate(seed: MusicImportSeed, candidate: any): number {
-  const seedTitle = normalizeImportText(seed.title);
-  const rawCandidateTitle = String(candidate?.title || '');
-  const candidateTitle = normalizeImportText(rawCandidateTitle);
-  const rawCandidateArtists = (candidate?.artists?.length ? candidate.artists : [candidate?.artist])
-    .map((artist: unknown) => String(artist || ''))
-    .join(' ');
-
-  // Никогда не подменять оригинальный трек на AI-кавер или кавер, если в исходнике его не было
-  if (
-    !hasCoverOrAiMarker(seed.title) &&
-    (hasCoverOrAiMarker(rawCandidateTitle) || hasCoverOrAiMarker(rawCandidateArtists))
-  ) {
-    return 0;
-  }
-
-  let titleScore = tokenSimilarity(seedTitle, candidateTitle) * 50;
-  if (seedTitle === candidateTitle) titleScore = 55;
-  else if (seedTitle.includes(candidateTitle) || candidateTitle.includes(seedTitle)) {
-    titleScore = Math.max(titleScore, 40);
-  }
-
-  const expectedArtists = seed.artists.map(normalizeImportText).filter(Boolean);
-  const actualArtists = (candidate?.artists?.length ? candidate.artists : [candidate?.artist])
-    .map((artist: unknown) => normalizeImportText(String(artist || '')))
-    .filter(Boolean);
-  let artistScore = 0;
-  for (const expected of expectedArtists) {
-    for (const actual of actualArtists) {
-      if (expected === actual) artistScore = Math.max(artistScore, 35);
-      else if (expected.includes(actual) || actual.includes(expected)) artistScore = Math.max(artistScore, 27);
-      else artistScore = Math.max(artistScore, tokenSimilarity(expected, actual) * 30);
-    }
-  }
-
-  const duration = Number(candidate?.duration) || 0;
-  const difference = duration && seed.durationMs
-    ? Math.abs(duration - seed.durationMs)
-    : Number.POSITIVE_INFINITY;
-  const durationScore = difference <= 3000 ? 15 : difference <= 9000 ? 8 : 0;
-  if (titleScore < 35 || artistScore < 12) return 0;
-  return titleScore + artistScore + durationScore;
-}
-
-function bestMatch(seed: MusicImportSeed, candidates: any[]): any | null {
-  let best: any | null = null;
-  let score = 0;
-  for (const candidate of candidates) {
-    const candidateScore = scoreCandidate(seed, candidate);
-    if (candidateScore > score) {
-      best = candidate;
-      score = candidateScore;
-    }
-  }
-  return score >= 65 ? best : null;
+  unmatched: MusicImportSeed[];
 }
 
 function decorateMatch(match: any, collection: MusicImportCollection, seed: MusicImportSeed) {
-  const imported = {
+  const imported: any = {
     ...match,
     importedFrom: collection.origin,
     importSourceId: seed.id,
     importSourceUrl: seed.externalUrl
   };
+  if (collection.origin === 'apple-music') {
+    imported.appleMusicId = seed.id;
+    imported.appleMusicUrl = seed.externalUrl;
+  }
   if (collection.origin === 'spotify') {
     imported.spotifyId = seed.id;
     imported.spotifyUrl = seed.externalUrl;
@@ -143,9 +60,23 @@ function decorateMatch(match: any, collection: MusicImportCollection, seed: Musi
   return imported;
 }
 
+async function importRequest<T>(request: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
+  const controller = new AbortController();
+  let rejectAbort: () => void = () => {};
+  const aborted = new Promise<never>((_, reject) => {
+    rejectAbort = () => reject(new DOMException('Запрос импорта отменён или не ответил', 'AbortError'));
+    controller.signal.addEventListener('abort', rejectAbort, { once: true });
+  });
+  const abort = () => controller.abort();
+  signal?.addEventListener('abort', abort, { once: true });
+  if (signal?.aborted) abort();
+  const timer = setTimeout(abort, 20_000);
+  try { return await Promise.race([request(controller.signal), aborted]); }
+  finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); controller.signal.removeEventListener('abort', rejectAbort); }
+}
+
 async function matchTrack(
   seed: MusicImportSeed,
-  collection: MusicImportCollection,
   signal?: AbortSignal
 ): Promise<any | null> {
   if (signal?.aborted) throw new DOMException('Импорт отменён', 'AbortError');
@@ -153,20 +84,22 @@ async function matchTrack(
   const yandexToken = get(settings).yandexToken;
   if (yandexToken) {
     try {
-      const candidates = await searchYandex(yandexToken, query, 8);
-      const match = bestMatch(seed, candidates);
-      if (match) return decorateMatch(match, collection, seed);
+      const candidates = await importRequest(requestSignal => searchYandex(yandexToken, query, 8, 0, requestSignal), signal);
+      const match = bestImportMatch(seed, candidates);
+      if (match) return match;
     } catch (error) {
+      if (signal?.aborted) throw new DOMException('Импорт отменён', 'AbortError');
       console.warn('[music-import] Yandex match failed', error);
     }
   }
 
   if (signal?.aborted) throw new DOMException('Импорт отменён', 'AbortError');
   try {
-    const candidates = await searchSoundCloud(query, 10);
-    const match = bestMatch(seed, candidates);
-    return match ? decorateMatch(match, collection, seed) : null;
+    const candidates = await importRequest(requestSignal => searchSoundCloud(query, 10, true, requestSignal), signal);
+    const match = bestImportMatch(seed, candidates);
+    return match;
   } catch (error) {
+    if (signal?.aborted) throw new DOMException('Импорт отменён', 'AbortError');
     console.warn('[music-import] SoundCloud match failed', error);
     return null;
   }
@@ -209,6 +142,9 @@ export async function importMusicCollections(
   signal?: AbortSignal
 ): Promise<MusicImportResult> {
   if (!collections.length) throw new Error('В выбранных данных нет треков для импорта');
+  await playlistsReady;
+  await whenSecretsReady();
+  if (signal?.aborted) throw new DOMException('Импорт отменён', 'AbortError');
 
   const indexed = collections.map((collection, index) => ({
     collection,
@@ -232,13 +168,14 @@ export async function importMusicCollections(
 
   await concurrent(work, 3, async ({ collection, key, track, index }) => {
     if (signal?.aborted) throw new DOMException('Импорт отменён', 'AbortError');
-    const cacheKey = `${normalizeImportText(`${track.artists[0] || ''} ${track.title}`)}:${Math.round(track.durationMs / 3000)}`;
+    const cacheKey = JSON.stringify([track.artists.map(normalizeImportText), normalizeImportText(track.title), track.durationMs]);
     let pending = cache.get(cacheKey);
     if (!pending) {
-      pending = matchTrack(track, collection, signal);
+      pending = matchTrack(track, signal);
       cache.set(cacheKey, pending);
     }
-    const result = await pending;
+    const match = await pending;
+    const result = match ? decorateMatch(match, collection, track) : null;
     if (signal?.aborted) throw new DOMException('Импорт отменён', 'AbortError');
     matches.get(key)![index] = result;
     current++;
@@ -250,7 +187,7 @@ export async function importMusicCollections(
       current,
       matched,
       skipped,
-      currentTrack: `${track.artists[0] || 'Неизвестный артист'} — ${track.title}`
+      currentTrack: `${track.artists[0] || 'Неизвестный артист'} - ${track.title}`
     });
   });
 
@@ -270,25 +207,28 @@ export async function importMusicCollections(
     .flatMap(({ key }) => matches.get(key)?.filter(Boolean) || []);
   if (likedMatches.length) {
     likedTracks.update((existing) => {
-      const additions = likedMatches.filter((track) => !existing.some((known) => sameLocalTrack(known, track)));
+      const additions = uniqueTracks(likedMatches).filter((track) => !existing.some((known) => sameLocalTrack(known, track)));
       likedAdded = additions.length;
       return [...additions, ...existing];
     });
   }
 
   const playlistCollections = indexed.filter(({ collection }) => collection.kind === 'playlist');
+  let playlistsImported = 0;
   playlists.update((existing) => {
     const next = [...existing];
     for (const { collection, key } of playlistCollections) {
       const id = `${collection.origin}:${collection.id}`;
       const importedTracks = matches.get(key)?.filter(Boolean) || [];
+      if (!importedTracks.length) continue;
+      playlistsImported++;
       const index = next.findIndex((playlist) => playlist.id === id);
       const currentTracks = index >= 0 ? next[index]?.tracks || [] : [];
       const value = {
         ...(index >= 0 ? next[index] : {}),
         id,
         title: collection.name,
-        tracks: uniqueTracks([...importedTracks, ...currentTracks]),
+        tracks: [...importedTracks, ...currentTracks.filter((track: any) => !importedTracks.some(imported => sameLocalTrack(track, imported)))],
         origin: collection.origin,
         originId: collection.id,
         originUrl: collection.originUrl || '',
@@ -300,12 +240,16 @@ export async function importMusicCollections(
     return next;
   });
 
+  if (playlistsImported) await flushPlaylistStorage();
+
+  const unmatched = work.filter(({ key, index }) => !matches.get(key)?.[index]).map(({ track }) => track);
   const result = {
     total: work.length,
     matched,
     skipped,
     likedAdded,
-    playlistsImported: playlistCollections.length
+    playlistsImported,
+    unmatched
   };
   onProgress({
     phase: 'done',

@@ -109,11 +109,15 @@ const defaultSettings = {
   // Глобальный дизайн: 'classic' — исходное оформление, 'aurora' — контрастная
   // альтернатива (см. src/design-aurora.css). Живёт отдельно от uiStyle, который
   // отвечает только за плотность стекла, чтобы обе настройки не перебивали друг друга.
-  design: 'classic' as 'classic' | 'aurora' | 'liquid-glass',
-  liquidGlassSeen: false,
+  // First launch uses Некий мистер C; hydration keeps an existing saved choice.
+  design: 'liquid-glass' as 'classic' | 'aurora' | 'liquid-glass',
+  liquidGlassSeen: true,
   glassPanelWidth: null as number | null,
   glassPlaylistsCollapsed: false,
   glassQuality: 'normal' as 'high' | 'normal' | 'off',
+  glassMaterial: 'optical' as 'optical' | 'matte',
+  mattePalette: 'graphite-rose',
+  matteBlur: true,
   waveContinuation: true,
   followedArtists: [] as { name: string; source: string }[],
 
@@ -367,8 +371,18 @@ const STATS_PERSIST_DELAY_MS = 15_000;
 let latestStats = defaultStats;
 let statsPersistTimer: ReturnType<typeof setTimeout> | null = null;
 let storesInitialized = false;
+const storageWarnings = new Set<string>();
+function persistLocalStore(key: string, value: unknown) {
+  try { localStorage.setItem(key, JSON.stringify(value)); }
+  catch {
+    if (!storageWarnings.has(key)) {
+      storageWarnings.add(key);
+      notify('Не удалось сохранить данные на компьютере. Проверь свободное место и сохрани файл .lomi.', 'error');
+    }
+  }
+}
 
-function flushListenStats() {
+export function flushListenStats() {
   if (typeof localStorage === 'undefined') return;
   if (statsPersistTimer !== null) {
     clearTimeout(statsPersistTimer);
@@ -383,7 +397,10 @@ function scheduleListenStatsPersist(value: typeof defaultStats) {
   // Player updates listenSeconds every second. Serialising a large listening history at
   // the same rate creates needless allocations and disk writes; one batched write keeps
   // the data current while pagehide/visibilitychange below guarantee a final flush.
-  statsPersistTimer = setTimeout(flushListenStats, STATS_PERSIST_DELAY_MS);
+  statsPersistTimer = setTimeout(() => {
+    statsPersistTimer = null;
+    persistLocalStore('lomifynext_stats', latestStats);
+  }, STATS_PERSIST_DELAY_MS);
 }
 
 // Navigation state
@@ -642,7 +659,7 @@ export function initStore() {
     }
     settings.subscribe(val => {
       if (settingsSecretsRemoved()) {
-        localStorage.setItem('lomifynext_settings', JSON.stringify(publicSettings(val)));
+        persistLocalStore('lomifynext_settings', publicSettings(val));
       }
     });
     let secretsApplied = false;
@@ -678,7 +695,7 @@ export function initStore() {
       }
     }
     likedTracks.subscribe(val => {
-      localStorage.setItem('lomifynext_likes', JSON.stringify(val));
+      persistLocalStore('lomifynext_likes', val);
     });
 
     const storedDislikes = localStorage.getItem('lomifynext_dislikes');
@@ -690,7 +707,7 @@ export function initStore() {
       }
     }
     dislikedTracks.subscribe(val => {
-      localStorage.setItem('lomifynext_dislikes', JSON.stringify(val));
+      persistLocalStore('lomifynext_dislikes', val);
     });
 
     const storedSearch = localStorage.getItem('lomifynext_search_history');
@@ -702,7 +719,7 @@ export function initStore() {
       }
     }
     searchHistory.subscribe(val => {
-      localStorage.setItem('lomifynext_search_history', JSON.stringify(val));
+      persistLocalStore('lomifynext_search_history', val);
     });
 
     const storedActiveTab = localStorage.getItem('lomifynext_active_library_tab') as LibraryTab | null;

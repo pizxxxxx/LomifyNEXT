@@ -51,6 +51,7 @@ Thumbs.db
 # Environment & secrets
 .env
 .env.*
+src-tauri/google-desktop.local.json
 auth_session.json
 sc-auth.json
 soundcloud-bypass-playback.json

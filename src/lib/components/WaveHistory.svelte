@@ -24,7 +24,7 @@
   onMount(() => panel.querySelector<HTMLInputElement>('input')?.focus({ preventScroll: true }));
 </script>
 <svelte:window onpointerdown={event => { if (event.target instanceof Element && !event.target.closest('.lg-wave-history, .wave-history-trigger')) onclose(); }} onkeydowncapture={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onclose(); } }} />
-<div class="lg-wave-history lg-optical" bind:this={panel} use:portal use:glassRefraction={$effectivePerformanceMode ? 'off' : $settings.glassQuality || 'normal'} transition:scale={{ start: .94, duration: motion ? 220 : 0, easing: cubicOut }} role="dialog" aria-label="История моей волны" tabindex="-1">
+<div class="lg-wave-history lg-optical" bind:this={panel} use:portal use:glassRefraction={$effectivePerformanceMode || $settings.glassMaterial === 'matte' ? 'off' : $settings.glassQuality || 'normal'} transition:scale={{ start: .94, duration: motion ? 220 : 0, easing: cubicOut }} role="dialog" aria-label="История моей волны" tabindex="-1">
   <header><div><History size={18}/><h2>История моей волны</h2></div><button onclick={onclose} aria-label="Закрыть историю волны"><X size={18}/></button></header>
   <p>Последние 200 прослушиваний. Учитываются 60 секунд или 80% короткого трека.</p>
   <label class="lg-wave-history-search"><Search size={16}/><input type="search" bind:value={query} aria-label="Найти в истории волны" placeholder="Название или исполнитель"/></label>

@@ -32,6 +32,6 @@
       <button class="lg-pastel" disabled={!tracks.length} onclick={add}><Plus size={15} />Добавить</button>
       <button class="lg-pastel lg-media-more" aria-label="Действия с подборкой" aria-expanded={menu} onclick={() => menu = !menu}><Ellipsis size={17} /></button>
     </div>
-    {#if menu}<div class="lg-popover lg-media-menu lg-optical" use:glassRefraction={$effectivePerformanceMode ? 'off' : $settings.glassQuality || 'normal'}>{#if actions}{@render actions()}{:else}<button onclick={() => { add(); menu = false; }}><Plus size={15} />В медиатеку</button>{/if}</div>{/if}
+    {#if menu}<div class="lg-popover lg-media-menu lg-optical" use:glassRefraction={$effectivePerformanceMode || $settings.glassMaterial === 'matte' ? 'off' : $settings.glassQuality || 'normal'}>{#if actions}{@render actions()}{:else}<button onclick={() => { add(); menu = false; }}><Plus size={15} />В медиатеку</button>{/if}</div>{/if}
   </div>
 </header>

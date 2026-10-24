@@ -7,6 +7,7 @@
 </script>
 
 <script lang="ts">
+  import Achievements from './Achievements.svelte';
   import { onMount, onDestroy } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { openUrl } from '@tauri-apps/plugin-opener';
@@ -549,6 +550,8 @@
       </article>
     </div>
   </section>
+
+  <Achievements />
 
   <section aria-labelledby="profile-lastfm-title">
     <div class="profile-section-head profile-lastfm-section-head">

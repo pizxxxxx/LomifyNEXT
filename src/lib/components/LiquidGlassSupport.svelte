@@ -19,7 +19,7 @@
     <h3>Помоги LomifyNEXT<br/>стать лучше</h3>
     <p>Поддержи развитие приложения или расскажи о нём другим.</p>
   </div>
-  <section class="lg-support-card lg-optical" use:glassRefraction={$effectivePerformanceMode ? 'off' : $settings.glassQuality || 'normal'} aria-labelledby="lg-support-money">
+  <section class="lg-support-card lg-optical" use:glassRefraction={$effectivePerformanceMode || $settings.glassMaterial === 'matte' ? 'off' : $settings.glassQuality || 'normal'} aria-labelledby="lg-support-money">
     <Wallet size={21} aria-hidden="true"/>
     <h3 id="lg-support-money">Поддержать на ЮMoney</h3>
     <p>Оплата откроется в твоём браузере.</p>

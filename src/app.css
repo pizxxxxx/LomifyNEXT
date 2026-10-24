@@ -17,6 +17,7 @@
    базовые классы независимо от порядка @import — а базовый дизайн остаётся неизменным. */
 @import "./design-aurora.css";
 @import "./design-liquid-glass.css";
+@import "./design-matte.css";
 
 @theme {
   --color-primary: var(--app-primary);

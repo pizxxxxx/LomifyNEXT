@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Shuffle, SkipBack, SkipForward, Repeat, Play, Pause, Heart, ListMusic, Volume2, Maximize2, Minimize2, Share2, Music2, Settings2 } from 'lucide-svelte';
-  import { currentTrack, currentView, isPlaying, globalVolume, likedTracks, settings, effectivePerformanceMode } from '$lib/stores';
+  import { currentTrack, currentView, isPlaying, globalVolume, likedTracks, settings, effectivePerformanceMode, queue, trackHistory } from '$lib/stores';
   import { glassRefraction } from '$lib/glassRefraction';
   import { glassQueueOpen, glassPanelMode, toggleGlassQueue, playbackShuffle, playbackRepeat, glassScreenSettings } from '$lib/liquidGlass';
   import { isTrackLiked } from '$lib/likes';
@@ -33,14 +33,14 @@
   }
 </script>
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="lg-player lg-optical" class:is-fullscreen={$currentView === 'fullscreen'} onwheel={changeVolume} use:glassRefraction={$effectivePerformanceMode ? 'off' : $settings.glassQuality || 'normal'}>
+<div class="lg-player lg-optical" class:is-fullscreen={$currentView === 'fullscreen'} onwheel={changeVolume} use:glassRefraction={$effectivePerformanceMode || $settings.glassMaterial === 'matte' ? 'off' : $settings.glassQuality || 'normal'}>
   <div class="lg-player-progress"><span>{time(position)}</span><input type="range" min="0" max={total || 1} step="0.1" value={Math.min(position, total)} disabled={!total} style={`--played: ${total ? Math.min(100, position / total * 100) : 0}%`} aria-label="Позиция воспроизведения" oninput={event => scrub = Number(event.currentTarget.value)} onchange={event => { onseek(Number(event.currentTarget.value)); scrub = null; }} /><span>-{time(total - position)}</span></div>
   <div class="lg-player-bottom">
     <div class="lg-player-controls">
       <button aria-label="Перемешивание" aria-pressed={$playbackShuffle} class:is-active={$playbackShuffle} onclick={() => $playbackShuffle = !$playbackShuffle}><Shuffle size={15} /></button>
-      <button aria-label="Предыдущий трек" onclick={onprev}><SkipBack size={18} /></button>
+      <button aria-label="Предыдущий трек" title="Предыдущий трек" disabled={!$currentTrack && !$trackHistory.length} onclick={onprev}><SkipBack size={18} /></button>
       <button class="lg-player-play" aria-label={$isPlaying ? 'Пауза' : 'Играть'} disabled={!$currentTrack} onclick={() => isPlaying.set(!$isPlaying)}>{#if $isPlaying}<Pause size={24} fill="currentColor" />{:else}<Play size={24} fill="currentColor" />{/if}</button>
-      <button aria-label="Следующий трек" onclick={onnext}><SkipForward size={18} /></button>
+      <button aria-label="Следующий трек" title="Следующий трек" disabled={!$currentTrack && !$queue.length} onclick={onnext}><SkipForward size={18} /></button>
       <button aria-label={`Повтор: ${$playbackRepeat === 0 ? 'выключен' : $playbackRepeat === 1 ? 'всё' : 'один трек'}`} class:is-active={$playbackRepeat > 0} onclick={() => $playbackRepeat = ($playbackRepeat + 1) % 3}><Repeat size={15} />{#if $playbackRepeat === 2}<small>1</small>{/if}</button>
       <button aria-label={liked ? 'Убрать из любимых' : 'В любимые'} aria-pressed={liked} class:lg-liked={liked} disabled={!$currentTrack} onclick={onlike}><Heart size={15} fill={liked ? 'currentColor' : 'none'} /></button>
       {#if $currentTrack}<PlaylistMenu track={$currentTrack} iconSize={15} star={true} placement="top" buttonClass="lg-player-favourite" />{/if}
@@ -51,12 +51,12 @@
     <div class="lg-player-track">
       {#if $currentTrack}
         {#if cover}<img src={cover} alt="" width="26" height="26" />{/if}
-        <div class="lg-player-track-copy"><strong>{$currentTrack.title}</strong><span><ArtistTag artist={$currentTrack.artist} artists={$currentTrack.artists} /></span></div>
+        <div class="lg-player-track-copy"><strong title={$currentTrack.title}>{$currentTrack.title}</strong><span title={$currentTrack.artist}><ArtistTag artist={$currentTrack.artist} artists={$currentTrack.artists} /></span></div>
         <div class="lg-player-track-tools"><TrackSourceIcon source={$currentTrack.source} size={10} /><button aria-label="Поделиться треком" onclick={onshare}><Share2 size={10} /></button></div>
-      {:else}<Music2 size={23} aria-hidden="true" /><span class="lg-player-placeholder" aria-hidden="true"><i></i><i></i></span><span class="sr-only">Нет текущего трека</span>{/if}
+      {:else}<Music2 size={23} aria-hidden="true" /><div class="lg-player-track-copy"><strong>Выбери трек</strong><span>В поиске или медиатеке</span></div>{/if}
     </div>
-    <div class="lg-player-output"><Volume2 size={14} /><input type="range" min="0" max="1" step="0.01" value={$globalVolume} aria-label="Громкость" oninput={event => onvolume(Number(event.currentTarget.value))} /><LiquidGlassOutput />
+    <div class="lg-player-output"><Volume2 size={14} /><input type="range" min="0" max="1" step="0.01" value={$globalVolume} aria-label="Громкость" aria-valuetext={`${Math.round($globalVolume * 100)}%`} title={`Громкость: ${Math.round($globalVolume * 100)}%`} oninput={event => onvolume(Number(event.currentTarget.value))} /><LiquidGlassOutput />
       {#if $currentView === 'fullscreen'}<button class="lg-screen-settings-trigger" class:is-active={$glassScreenSettings.open} aria-label="Настройки полноэкранного режима" aria-expanded={$glassScreenSettings.open} aria-controls="fullscreen-settings-pop" disabled={!$currentTrack} onclick={toggleScreenSettings}><Settings2 size={16} /></button>{/if}
-      <button aria-label={$currentView === 'fullscreen' ? 'Выйти из полного экрана' : 'Полный экран'} onclick={onfullscreen}>{#if $currentView === 'fullscreen'}<Minimize2 size={16} />{:else}<Maximize2 size={16} />{/if}</button></div>
+      <button aria-label={$currentView === 'fullscreen' ? 'Выйти из полного экрана' : 'Полный экран'} title={$currentView === 'fullscreen' ? 'Выйти из полного экрана' : 'Полный экран'} disabled={!$currentTrack} onclick={onfullscreen}>{#if $currentView === 'fullscreen'}<Minimize2 size={16} />{:else}<Maximize2 size={16} />{/if}</button></div>
   </div>
 </div>

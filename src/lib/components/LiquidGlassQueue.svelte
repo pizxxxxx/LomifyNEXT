@@ -17,6 +17,9 @@
   let now = $state(Date.now());
   let visibleCount = $state(40);
   const visibleQueue = $derived($queue.slice(0, visibleCount));
+  const itemForms = { one: 'элемент', few: 'элемента', many: 'элементов', other: 'элемента' };
+  const itemPlural = new Intl.PluralRules('ru-RU');
+  const itemCount = $derived($queue.length + ($currentTrack ? 1 : 0));
   const minutes = $derived($sleepDeadline === null ? 0 : Math.max(1, Math.ceil(($sleepDeadline - now) / 60000)));
   const timerLabel = $derived(minutes >= 60 ? `${Math.floor(minutes / 60)} ч ${minutes % 60} мин` : `${minutes} мин`);
   function motionDuration(duration = 200) {
@@ -58,13 +61,13 @@
         <button aria-label={`Повтор: ${$playbackRepeat === 0 ? 'выключен' : $playbackRepeat === 1 ? 'всё' : 'один трек'}`} class:is-active={$playbackRepeat > 0} onclick={() => $playbackRepeat = ($playbackRepeat + 1) % 3}><Repeat size={14} />{#if $playbackRepeat === 2}<small>1</small>{/if}</button>
         <button aria-label="Волна продолжит" aria-pressed={$settings.waveContinuation !== false} class:is-active={$settings.waveContinuation !== false} onclick={toggleContinuation}><InfinityIcon size={14} /></button>
       </div>
-      <span class="lg-count">{$queue.length + ($currentTrack ? 1 : 0)} элементов</span>
+      <span class="lg-count">{itemCount} {itemForms[itemPlural.select(itemCount) as keyof typeof itemForms] || itemForms.many}</span>
     </div>
     <div class="lg-queue-heading"><h2>Сейчас играет</h2><span class="lg-count" title="Треков в истории текущего сеанса"><History size={11} />{$trackHistory.length}</span></div>
     {#if $currentTrack}
       <div class="lg-queue-current">
         {#if $currentTrack.coverUrl}<img src={coverUrlAtSize(coverUrlForTrack($currentTrack, $downloadedCoverCache), 80)} alt="" width="36" height="36" />{:else}<Music2 size={28} />{/if}
-        <div><strong>{$currentTrack.title}</strong><span>{$currentTrack.artist}</span></div><TrackSourceIcon source={$currentTrack.source} />
+        <div><strong title={$currentTrack.title}>{$currentTrack.title}</strong><span title={$currentTrack.artist}>{$currentTrack.artist}</span></div><TrackSourceIcon source={$currentTrack.source} />
       </div>
     {:else}<p class="lg-queue-empty">Выбери трек для воспроизведения.</p>{/if}
     <div class="lg-queue-next-head"><div class="lg-queue-heading"><h2>Далее</h2><span>{#if $glassQueueContext}{Math.max(1, $glassQueueContext.total - $queue.length)} из {$glassQueueContext.total}{:else}{$queue.length} в очереди{/if}</span></div>
@@ -72,7 +75,7 @@
     </div>
     <div class="lg-queue-list">
       {#each visibleQueue as track, index (index)}
-        <button class="lg-queue-row" onclick={() => playQueueItem(index)} aria-label={`Воспроизвести «${track.title}»`}>
+        <button class="lg-queue-row" title={`${track.artist} - ${track.title}`} onclick={() => playQueueItem(index)} aria-label={`Воспроизвести «${track.title}», ${track.artist}`}>
           <span class="lg-queue-number">{index + 1}</span>
           {#if track.coverUrl}<img src={coverUrlAtSize(coverUrlForTrack(track, $downloadedCoverCache), 80)} alt="" width="32" height="32" loading="lazy" />{:else}<Music2 size={24} />{/if}
           <span class="lg-queue-copy"><strong>{track.title}</strong><span>{track.artist}</span></span><TrackSourceIcon source={track.source} size={11} />
@@ -84,7 +87,7 @@
     <div class="lg-queue-bottom" bind:this={timerRoot}>
       <button class="lg-wave-continuation" aria-pressed={$settings.waveContinuation !== false} onclick={toggleContinuation}><InfinityIcon size={18} /><span><strong>Волна продолжит</strong><small>{$settings.waveContinuation === false ? 'Автоподбор выключен' : 'Похожая музыка после очереди'}</small></span></button>
       <button class="lg-sleep-pill" aria-expanded={timerOpen} onclick={() => timerOpen = !timerOpen}><Moon size={14} />{#if $sleepDeadline}{timerLabel} · {new Date($sleepDeadline).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}{:else}Таймер сна{/if}</button>
-      {#if timerOpen}<div class="lg-popover lg-timer-pop lg-optical" use:glassRefraction={$effectivePerformanceMode ? 'off' : $settings.glassQuality || 'normal'} transition:scale={{ start: .96, duration: motionDuration(), easing: cubicOut }} inert={!timerOpen} role="dialog" aria-label="Таймер сна"><strong>Остановить музыку через</strong>{#each [15, 30, 60, 90] as minutes}<button onclick={() => setTimer(minutes)}>{minutes} мин</button>{/each}{#if $sleepDeadline}<button onclick={() => setTimer(0)}>Отменить таймер</button>{/if}</div>{/if}
+      {#if timerOpen}<div class="lg-popover lg-timer-pop lg-optical" use:glassRefraction={$effectivePerformanceMode || $settings.glassMaterial === 'matte' ? 'off' : $settings.glassQuality || 'normal'} transition:scale={{ start: .96, duration: motionDuration(), easing: cubicOut }} inert={!timerOpen} role="dialog" aria-label="Таймер сна"><strong>Остановить музыку через</strong>{#each [15, 30, 60, 90] as minutes}<button onclick={() => setTimer(minutes)}>{minutes} мин</button>{/each}{#if $sleepDeadline}<button onclick={() => setTimer(0)}>Отменить таймер</button>{/if}</div>{/if}
     </div>
     </div>
     {/if}

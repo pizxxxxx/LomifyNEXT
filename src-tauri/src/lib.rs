@@ -12,6 +12,8 @@ mod app;
 mod rockium;
 mod audio;
 mod secrets;
+mod backup;
+mod google_auth;
 mod lastfm;
 mod discord;
 mod import;
@@ -326,6 +328,9 @@ pub fn run() {
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![exit_app,
+            backup::save_lomi_backup,
+            google_auth::google_sign_in,
+            google_auth::google_sign_in_available,
             secrets::secret_save,
             secrets::secret_get,
             secrets::secret_exists,

@@ -33,7 +33,7 @@
     measure();
     return () => { resize.disconnect(); mutation.disconnect(); panel.removeEventListener('scroll', measure); };
   });
-  const flat = $derived($effectivePerformanceMode || $settings.glassQuality === 'off');
+  const flat = $derived($effectivePerformanceMode || $settings.glassQuality === 'off' || $settings.glassMaterial === 'matte');
   function droplet(_node: Element) {
     return { duration: reduced ? 0 : 340, easing: cubicOut, css: (t: number) => `transform:translateY(${(1 - t) * -52}px) scale(${.82 + .18 * t});opacity:${t}` };
   }

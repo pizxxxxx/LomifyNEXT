@@ -1,4 +1,7 @@
 <script lang="ts">
+  import LomiBackup from './LomiBackup.svelte';
+  import CloudAccount from './CloudAccount.svelte';
+  import MattePalettes from './MattePalettes.svelte';
   import { saveSecret, deleteSecret, deleteAllSecrets, clearLegacySecrets } from '$lib/secretStorage';
   import PlaylistSyncSettings from './PlaylistSyncSettings.svelte';
   import { playlistSyncStatus, syncPlaylists } from '$lib/playlistSync';
@@ -6,6 +9,7 @@
   import { clearAllDislikes } from '$lib/dislikes';
   export let inDialog = false;
   let sectionSearch = '';
+  let sectionSearchInput: HTMLInputElement;
   import {
     Download,
     FolderDown,
@@ -50,6 +54,7 @@
   import SelectMenu from './SelectMenu.svelte';
   import { cubicOut } from 'svelte/easing';
   import SpotifyImport from './SpotifyImport.svelte';
+  import AppleMusicImport from './AppleMusicImport.svelte';
   import LastFmConnect from './LastFmConnect.svelte';
   import MusicServiceIcon from './MusicServiceIcon.svelte';
   import { importLinkedPlaylist, saveImportedPlaylists } from '$lib/playlistImport';
@@ -991,12 +996,16 @@
 
   {#if inDialog}
     <aside class="lg-settings-nav">
-      <input aria-label="Поиск раздела настроек" placeholder="Поиск раздела" bind:value={sectionSearch} />
+      <input bind:this={sectionSearchInput} aria-label="Поиск раздела настроек" placeholder="Поиск раздела" bind:value={sectionSearch} />
       <div role="tablist" tabindex="-1" aria-label="Разделы настроек" aria-orientation="vertical" on:keydown={onSettingsTabsKeydown}>
         {#each visibleGlassSections as section, index (section.id)}
           <button id="settings-tab-{section.id}" role="tab" aria-controls="settings-tab-panel" aria-selected={settingsTab === section.id} tabindex={settingsTab === section.id || (index === 0 && !visibleGlassSections.some(item => item.id === settingsTab)) ? 0 : -1} on:click={() => setSettingsTab(section.id as SettingsTab)}><svelte:component this={section.icon} size={16} /><span>{section.title}</span></button>
         {/each}
       </div>
+      {#if !visibleGlassSections.length}
+        <p class="lg-settings-search-empty" role="status">Раздел не найден. Попробуй «Аудио» или «Подключения».</p>
+        <button type="button" class="lg-settings-search-reset" on:click={async () => { sectionSearch = ''; await tick(); sectionSearchInput?.focus(); }}>Сбросить поиск</button>
+      {/if}
     </aside>
   {:else}
   <div class="settings-tabs-shell">
@@ -1108,9 +1117,9 @@
           <h3 class="section-title">Глобальный дизайн</h3>
           <p class="empty-hint !mt-1.5 !max-w-[54ch] mb-6">
             Выбери общий характер интерфейса. Цвет темы и плотность панелей настраиваются
-            отдельно. Некий мистер C подбирает цвета по обложке музыки или открытой страницы.
+            отдельно. Некий мистер C подбирает цвета по обложке; Матовый использует выбранную палитру.
           </p>
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <!-- Не просто две кнопки, а два превью: разницу между дизайнами видно до
                  переключения, поэтому каждый вариант рисует сам себя в миниатюре. -->
             <button
@@ -1141,9 +1150,9 @@
             </button>
             <button
               type="button"
-              class="design-card {$settings.design === 'liquid-glass' ? 'is-active' : ''}"
-              aria-pressed={$settings.design === 'liquid-glass'}
-              on:click={() => settings.update(s => ({ ...s, design: 'liquid-glass', liquidGlassSeen: true }))}
+              class="design-card {$settings.design === 'liquid-glass' && $settings.glassMaterial !== 'matte' ? 'is-active' : ''}"
+              aria-pressed={$settings.design === 'liquid-glass' && $settings.glassMaterial !== 'matte'}
+              on:click={() => settings.update(s => ({ ...s, design: 'liquid-glass', glassMaterial: 'optical', liquidGlassSeen: true }))}
             >
               <span class="design-card-preview design-preview-liquid">
                 <span class="design-preview-bar"></span>
@@ -1152,10 +1161,16 @@
                 <span class="design-preview-player"></span>
               </span>
               <span class="design-card-name">Некий мистер C {#if !$settings.liquidGlassSeen}<span class="design-new-badge">Новое</span>{/if}</span>
-              <span class="design-card-hint">Живые цвета обложек и парящие стеклянные панели</span>
+              <span class="design-card-hint">По умолчанию при установке. Цвета обложек и стеклянные панели</span>
+            </button>
+            <button type="button" class="design-card" class:is-active={$settings.design === 'liquid-glass' && $settings.glassMaterial === 'matte'} aria-pressed={$settings.design === 'liquid-glass' && $settings.glassMaterial === 'matte'} on:click={() => settings.update(s => ({ ...s, design: 'liquid-glass', glassMaterial: 'matte', liquidGlassSeen: true }))}>
+              <span class="design-card-preview design-preview-matte"><span class="design-preview-bar"></span><span class="design-preview-bar is-short"></span><span class="design-preview-tile"></span><span class="design-preview-player"></span></span>
+              <span class="design-card-name">Матовый</span><span class="design-card-hint">Компоновка третьего стиля, ровное размытие и шесть цветовых пар</span>
             </button>
           </div>
-          {#if $settings.design === 'liquid-glass'}
+          {#if $settings.design === 'liquid-glass' && $settings.glassMaterial === 'matte'}
+            <MattePalettes />
+          {:else if $settings.design === 'liquid-glass'}
             <fieldset class="mt-6">
               <legend class="setting-title mb-3">Качество стекла</legend>
               <div class="settings-choice-grid">
@@ -1388,7 +1403,7 @@
         <div class="plate p-8">
           <h3 class="section-title">Тема оформления</h3>
           {#if $settings.design === 'liquid-glass'}
-            <p class="empty-hint !mt-1.5 !max-w-[54ch]">В стиле «Некий мистер C» цвета подбираются по обложке трека или открытой страницы. Ручной выбор темы недоступен.</p>
+            <p class="empty-hint !mt-1.5 !max-w-[54ch]">{$settings.glassMaterial === 'matte' ? 'В стиле Матовый цветовая пара выбирается в блоке Палитра матового стиля выше.' : 'В стиле «Некий мистер C» цвета подбираются по обложке трека или открытой страницы. Ручной выбор темы недоступен.'}</p>
           {:else}
           <p class="empty-hint !mt-1.5 !max-w-[54ch] mb-6">Акцентный цвет интерфейса: подписи, активные элементы и свечение.</p>
 
@@ -1450,7 +1465,7 @@
           <h3 class="section-title">Движение под курсором</h3>
           <p class="empty-hint !mt-1.5 !max-w-[54ch] mb-6">
             Здесь можно оставить только те движения, которые тебе нравятся. В режиме
-            производительности все пять эффектов временно отключаются автоматически.
+            производительности эффекты временно отключаются автоматически.
           </p>
 
           <div class="flex flex-col gap-3">
@@ -1528,6 +1543,7 @@
               </button>
             </div>
 
+            {#if $settings.design !== 'liquid-glass'}
             <div class="setting-row">
               <div>
                 <div class="setting-title">Терминальный след</div>
@@ -1572,6 +1588,7 @@
                 </div>
               </div>
             {/if}
+            {/if}
           </div>
         </div>
       </div>
@@ -1579,6 +1596,7 @@
 
     <!-- ── Музыка ──────────────────────────────────────────────────────────── -->
     <section class="settings-pane" data-settings-pane={$settings.design === 'liquid-glass' ? 'connections' : 'music'}>
+      <CloudAccount />
       <div class="settings-group">
         <span class="settings-group-title">Музыка</span>
         <span class="settings-group-rule"></span>
@@ -2058,6 +2076,8 @@
         </div>
 
         <SpotifyImport />
+
+        <AppleMusicImport />
 
         <LastFmConnect />
 
@@ -2619,6 +2639,8 @@
         <span class="settings-group-rule"></span>
       </div>
 
+      <LomiBackup />
+
       <div class="plate settings-cache-card p-8">
         <div class="settings-cache-head">
           <span class="settings-cache-icon" aria-hidden="true"><HardDrive size={21} /></span>
@@ -2713,7 +2735,7 @@
         </div>
 
         <p class="text-xs text-neutral-400 mb-5 italic max-w-[64ch] leading-relaxed">
-          если ты например илья и ты живешь в туле и тебе надо скачать отцу в машину на флешку треков да таких чтобы при их прослушивании он не разъебался об первый столб
+          Включи экспорт, выбери формат и папку. У сохранённого трека появится действие для экспорта в аудиофайл.
         </p>
 
         {#if $settings.exportEnabled}

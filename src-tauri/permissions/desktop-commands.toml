@@ -3,6 +3,9 @@ identifier = "allow-desktop-commands"
 description = "Preserve existing desktop commands while account credential commands use a separate restricted permission."
 commands.allow = [
   "exit_app",
+  "save_lomi_backup",
+  "google_sign_in",
+  "google_sign_in_available",
   "rockium_publish",
   "rockium_configure",
   "check_and_download_update",

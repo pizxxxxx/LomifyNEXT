@@ -64,7 +64,7 @@
    * the mode must not pretend that the user left Home or close an open tuning panel.
    */
   export let motionEnabled: boolean = true;
-  $: glassQuality = $settings.design === 'liquid-glass' && motionEnabled ? $settings.glassQuality || 'normal' : 'off';
+  $: glassQuality = $settings.design === 'liquid-glass' && $settings.glassMaterial !== 'matte' && motionEnabled ? $settings.glassQuality || 'normal' : 'off';
 
   let busy = false;
   let tuneOpen = false;

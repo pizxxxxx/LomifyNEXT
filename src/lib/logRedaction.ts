@@ -1,6 +1,6 @@
 const MASK = '[скрыто]';
 const knownSecrets = new Set<string>();
-const sensitiveKey = /^(?:authorization|cookie|setcookie|xsessionid|accesstoken|refreshtoken|token|sessionkey|sk|sharedsecret|clientsecret|password|apisig|yandextoken|spotifyaccesstoken|spotifyrefreshtoken|lastfmsessionkey|lastfmsharedsecret)$/i;
+const sensitiveKey = /^(?:authorization|cookie|setcookie|xsessionid|idtoken|accesstoken|refreshtoken|token|sessionkey|sk|sharedsecret|clientsecret|password|apisig|yandextoken|spotifyaccesstoken|spotifyrefreshtoken|lastfmsessionkey|lastfmsharedsecret)$/i;
 
 export function rememberSecret(value: string): void {
   if (value.length < 6) return;
@@ -14,8 +14,8 @@ export function redactText(value: string): string {
   for (const secret of knownSecrets) text = text.split(secret).join(MASK);
   text = text.replace(/\b((?:authorization)["']?\s*[:=]\s*["']?\s*(?:(?:Bearer|OAuth|Basic)\s+)?)[^"'\s,;}]+/gi, `$1${MASK}`);
   text = text.replace(/\b(Bearer|OAuth|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, `$1 ${MASK}`);
-  text = text.replace(/\b((?:access[_ -]?token|refresh[_ -]?token|yandexToken|spotifyAccessToken|spotifyRefreshToken|lastfmSharedSecret|lastfmSessionKey|token|session[_ -]?key|shared[_ -]?secret|client[_ -]?secret|api_sig|sk|x-session-id)["']?\s*[:=]\s*["']?)[^"'&,;\s}\]]+/gi, `$1${MASK}`);
-  text = text.replace(/\b((?:access_token|refresh_token|token|session_key|sk)%3[Dd])[^%&\s]+/gi, `$1${MASK}`);
+  text = text.replace(/\b((?:id[_ -]?token|access[_ -]?token|refresh[_ -]?token|yandexToken|spotifyAccessToken|spotifyRefreshToken|lastfmSharedSecret|lastfmSessionKey|token|session[_ -]?key|shared[_ -]?secret|client[_ -]?secret|api_sig|sk|x-session-id)["']?\s*[:=]\s*["']?)[^"'&,;\s}\]]+/gi, `$1${MASK}`);
+  text = text.replace(/\b((?:id_token|access_token|refresh_token|token|session_key|sk)%3[Dd])[^%&\s]+/gi, `$1${MASK}`);
   text = text.replace(/\b((?:set-cookie|cookie)\s*:\s*)[^\r\n]+/gi, `$1${MASK}`);
   return text;
 }

@@ -22,8 +22,8 @@ pub(crate) fn redact_text(value: &str) -> String {
     let patterns = PATTERNS.get_or_init(|| vec![
         Regex::new(r#"(?i)\b(authorization["']?\s*[:=]\s*["']?\s*(?:(?:Bearer|OAuth|Basic)\s+)?)[^"'\s,;}]+"#).unwrap(),
         Regex::new(r"(?i)\b((?:Bearer|OAuth|Basic)\s+)[A-Za-z0-9._~+/=-]+").unwrap(),
-        Regex::new(r#"(?i)\b((?:access[_ -]?token|refresh[_ -]?token|yandexToken|spotifyAccessToken|spotifyRefreshToken|lastfmSharedSecret|lastfmSessionKey|token|session[_ -]?key|shared[_ -]?secret|client[_ -]?secret|api_sig|sk|x-session-id)["']?\s*[:=]\s*["']?)[^"'&,;\s}\]]+"#).unwrap(),
-        Regex::new(r"(?i)\b((?:access_token|refresh_token|token|session_key|sk)%3d)[^%&\s]+").unwrap(),
+        Regex::new(r#"(?i)\b((?:id[_ -]?token|access[_ -]?token|refresh[_ -]?token|yandexToken|spotifyAccessToken|spotifyRefreshToken|lastfmSharedSecret|lastfmSessionKey|token|session[_ -]?key|shared[_ -]?secret|client[_ -]?secret|api_sig|sk|x-session-id)["']?\s*[:=]\s*["']?)[^"'&,;\s}\]]+"#).unwrap(),
+        Regex::new(r"(?i)\b((?:id_token|access_token|refresh_token|token|session_key|sk)%3d)[^%&\s]+").unwrap(),
         Regex::new(r"(?i)\b((?:set-cookie|cookie)\s*:\s*)[^\r\n]+").unwrap(),
     ]);
     for pattern in patterns { text = pattern.replace_all(&text, format!("${{1}}{MASK}")).into_owned(); }

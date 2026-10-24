@@ -45,7 +45,7 @@
     ? 'Свой профиль'
     : presets.find((preset) => preset.id === $activeEqualizerPreset)?.label || 'Ровно';
   $: glass = $settings.design === 'liquid-glass';
-  $: glassQuality = glass && !$effectivePerformanceMode ? $settings.glassQuality || 'normal' : 'off';
+  $: glassQuality = glass && !$effectivePerformanceMode && $settings.glassMaterial !== 'matte' ? $settings.glassQuality || 'normal' : 'off';
   $: curvePoints = $equalizerBands.map((gain, i) => ({ x: 28 + i * 82.6667, y: 90 - Number(gain) * 5 }));
   $: curvePath = curvePoints.reduce((path, point, i) => {
     if (!i) return `M${point.x},${point.y}`;

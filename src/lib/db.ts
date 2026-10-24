@@ -68,3 +68,17 @@ export async function removeTrack(id: string): Promise<void> {
     tx.onerror = () => reject(tx.error);
   });
 }
+
+/** Replace metadata only; audio files on disk are never touched by a backup restore. */
+export async function replaceTracks(tracks: any[]): Promise<void> {
+  const db = await getDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    store.clear();
+    for (const track of tracks) store.put(track);
+    tx.oncomplete = () => { db.close(); resolve(); };
+    tx.onabort = () => { db.close(); reject(tx.error); };
+    tx.onerror = () => { db.close(); reject(tx.error); };
+  });
+}

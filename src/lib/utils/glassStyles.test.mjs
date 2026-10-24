@@ -25,3 +25,15 @@ test('production Wave tuning retains the single optical layer instead of a neste
   assert(root, 'Wave tuning must override the legacy component blur');
   assert.match(root[2], /(?:^|;)backdrop-filter:none/, 'Chromium must disable the root blur while the optical pseudo-element refracts');
 });
+
+test('matte production material keeps plain Chromium blur with no optical displacement and an opaque fallback', () => {
+  const source = readFileSync(new URL('../../design-matte.css', import.meta.url), 'utf8');
+  const compiled = optimize(source, { minify: true }).code;
+  const rules = [...compiled.matchAll(/([^{}]+)\{([^{}]*)\}/g)];
+  const matte = rules.find(([, selector, declarations]) => selector.includes('data-glass-material=matte') && selector.includes('.lg-optical') && declarations.includes('blur(14px)'));
+  assert.ok(matte, 'matte blur must survive the production CSS transform');
+  assert.match(matte[2], /(?:^|;)backdrop-filter:blur\(14px\)/);
+  assert.doesNotMatch(matte[2], /url\(|saturate|--lg-refraction/);
+  const off = rules.find(([, selector, declarations]) => selector.includes('data-matte-blur=off') && selector.includes('.lg-optical') && declarations.includes('backdrop-filter:none'));
+  assert.ok(off, 'turning matte blur off must retain its opaque fallback');
+});

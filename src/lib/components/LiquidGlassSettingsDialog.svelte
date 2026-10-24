@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { X } from 'lucide-svelte';
   import Settings from './Settings.svelte';
   import { isChangelogModalOpen } from '$lib/changelog';
@@ -10,6 +10,7 @@
   let animations: Animation[] = [];
   let generation = 0;
   let disposed = false;
+  let changelogTrigger: HTMLElement | null = null;
 
   function cancelMotion() {
     generation++;
@@ -58,8 +59,18 @@
   onMount(() => {
     const previous = document.activeElement as HTMLElement | null;
     const unsubscribe = isChangelogModalOpen.subscribe(open => {
-      if (open) { cancelMotion(); dialog.close(); if (closing) onclose(); }
-      else if (!dialog.open && !closing) { dialog.showModal(); void dissolve(true); }
+      if (open) {
+        if (document.activeElement instanceof HTMLElement && dialog.contains(document.activeElement)) changelogTrigger = document.activeElement;
+        cancelMotion(); dialog.close(); if (closing) onclose();
+      }
+      else if (!dialog.open && !closing) {
+        dialog.showModal(); void dissolve(true);
+        const target = changelogTrigger;
+        changelogTrigger = null;
+        if (target) void tick().then(() => {
+          if (!disposed && !closing && dialog.open && target.isConnected) target.focus({ preventScroll: true });
+        });
+      }
     });
     return () => {
       disposed = true;

@@ -198,7 +198,7 @@
       transition:popFade
       class="pl-menu-pop is-{computedPlacement} is-{computedAlign}"
       class:lg-optical={$settings.design === 'liquid-glass'}
-      use:glassRefraction={$settings.design === 'liquid-glass' && !$effectivePerformanceMode ? $settings.glassQuality || 'normal' : 'off'}
+      use:glassRefraction={$settings.design === 'liquid-glass' && !$effectivePerformanceMode && $settings.glassMaterial !== 'matte' ? $settings.glassQuality || 'normal' : 'off'}
       role="menu"
       aria-label="Плейлисты для трека"
       tabindex="-1"

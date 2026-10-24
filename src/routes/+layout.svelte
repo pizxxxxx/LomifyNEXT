@@ -1,4 +1,8 @@
 <script lang="ts">
+  import { startAchievements } from '$lib/achievements';
+  import { startCloudProfile } from '$lib/cloudProfile';
+  import AccountWelcome from '$lib/components/AccountWelcome.svelte';
+  import { accountWelcome, initializeAccountWelcome } from '$lib/accountWelcome';
   import { whenSecretsReady } from '$lib/secretStorage';
   import { startPlaylistSync } from '$lib/playlistSync';
   import { startDislikeSync } from '$lib/dislikeSync';
@@ -8,7 +12,7 @@
   import Titlebar from '$lib/components/Titlebar.svelte';
   import { glassSidebarOpen, glassQueueOpen, glassPanelDragWidth } from '$lib/liquidGlass';
   import UpdateNotification from '$lib/components/UpdateNotification.svelte';
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { Check, X, ChevronDown, ChevronUp, Sparkles } from 'lucide-svelte';
   import { APP_NAME, APP_VERSION } from '$lib/version';
   import { getCurrentVersionChangelog, isChangelogModalOpen, CHANGELOG_HISTORY } from '$lib/changelog';
@@ -182,21 +186,22 @@
     }
   }
 
-  // Клавиатура закрывает окно так же, как кнопка: пока оно висит поверх всего, Enter и Esc
-  // больше ни на что не назначены, а тянуться к мыши ради одной кнопки незачем.
+  async function onReleaseVersionsKeydown(event: KeyboardEvent) {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const current = recentVersions.findIndex(version => version.version === selectedVersion);
+    const index = event.key === 'Home' ? 0 : event.key === 'End' ? recentVersions.length - 1
+      : (current + (event.key === 'ArrowRight' ? 1 : -1) + recentVersions.length) % recentVersions.length;
+    selectedVersion = recentVersions[index].version;
+    showFullDetails = false;
+    await tick();
+    document.getElementById(`release-version-${selectedVersion}`)?.focus();
+  }
+
+  // The native dialog owns Tab, Enter and Escape while release notes are open.
+  // Global playback shortcuts must not intercept its controls.
   function onWindowKeydown(e: KeyboardEvent) {
-    if (showStartupNotice) {
-      if (e.key === 'Tab') {
-        e.preventDefault();
-        startupAction?.focus();
-        return;
-      }
-      if (e.key === 'Escape' || e.key === 'Enter') {
-        e.preventDefault();
-        dismissStartupNotice();
-        return;
-      }
-    }
+    if (showStartupNotice || get(accountWelcome).open) return;
 
     if (e.code === 'Space' || e.key === ' ') {
       const target = e.target as HTMLElement | null;
@@ -212,23 +217,23 @@
     }
   }
 
-  // Фокус на кнопке, а не на теле страницы: иначе Tab уводит в интерфейс под окном, который
-  // пока трогать нельзя. Именно action, а не реактивное присваивание: в этом режиме `$:`
-  // компилируется в эффект, который срабатывает до обновления DOM, то есть на ссылке из
-  // `bind:this`, которой в этот момент ещё нет.
-  //
-  // Через задачу, а не сразу: окно поднимается из `onMount`, то есть пока роутер ещё
-  // доводит переход, а он в конце сбрасывает фокус на `<body>` — синхронный вызов
-  // затирается. Проверено: без задержки `document.activeElement` остаётся `<body>`.
-  // `setTimeout`, а не `requestAnimationFrame`: кадров может не быть вовсе, пока окно
-  // приложения скрыто или свёрнуто, и тогда фокус не встал бы никогда.
-  function focusOnMount(node: HTMLElement) {
-    const task = setTimeout(() => node.focus());
-    return { destroy: () => clearTimeout(task) };
+  function openReleaseDialog(node: HTMLDialogElement) {
+    const previous = document.activeElement as HTMLElement | null;
+    node.showModal();
+    // SvelteKit can restore route focus after mount; defer the initial button focus.
+    const task = setTimeout(() => startupAction?.focus());
+    return { destroy: () => {
+      clearTimeout(task);
+      node.close();
+      if (previous?.isConnected) previous.focus({ preventScroll: true });
+    } };
   }
 
   onMount(() => {
+    initializeAccountWelcome();
     initStore();
+    const releaseAchievements = startAchievements();
+    const releaseCloud = startCloudProfile();
     let startupDisposed = false;
     let releasePlaylistSync: (() => void) | null = null;
     let releaseDislikeSync: (() => void) | null = null;
@@ -412,7 +417,7 @@
 
       // Каждое обновление (когда версия сменилась) показываем окно обязательно,
       // даже если в старой версии стояла галочка «не показывать».
-      if (!seenThisSession && (lastSeenNoticeVer !== APP_VERSION || $settings.showStartupNotice !== false)) {
+      if (!get(accountWelcome).open && !seenThisSession && (lastSeenNoticeVer !== APP_VERSION || $settings.showStartupNotice !== false)) {
         if (!get(showStartupUpdateModal)) {
           isChangelogModalOpen.set(true);
           dontShowAgain = true;
@@ -430,6 +435,8 @@
 
     return () => {
       startupDisposed = true;
+      releaseAchievements();
+      releaseCloud();
       releasePlaylistSync?.();
       releaseDislikeSync?.();
       downloadedCoversDisposed = true;
@@ -478,6 +485,8 @@
       // материалы и типографику (src/design-aurora.css), а не только оттенок.
       setBodyFlag('data-design', ['aurora', 'liquid-glass'].includes($settings.design) ? $settings.design : 'classic');
       setBodyFlag('data-glass-quality', $effectivePerformanceMode ? 'off' : $settings.glassQuality || 'normal');
+      setBodyFlag('data-glass-material', $settings.design === 'liquid-glass' && $settings.glassMaterial === 'matte' ? 'matte' : 'optical');
+      setBodyFlag('data-matte-blur', !$effectivePerformanceMode && $settings.matteBlur !== false ? 'on' : 'off');
       setBodyFlag('data-glass-sidebar', $glassSidebarOpen ? 'open' : 'closed');
       setBodyFlag('data-glass-queue', $glassQueueOpen ? 'open' : 'closed');
       const panelWidth = $glassPanelDragWidth ?? $settings.glassPanelWidth;
@@ -562,16 +571,14 @@
 <Titlebar />
 <UpdateNotification />
 <slot />
+<AccountWelcome />
 
 {#if showStartupNotice}
   <!-- svelte-ignore a11y-no-static-element-interactions -->
   <!-- svelte-ignore a11y-click-events-have-key-events -->
-  <div class="startup-veil" on:click|self={dismissStartupNotice}>
+  <dialog class="startup-veil" aria-labelledby="startup-title" use:openReleaseDialog on:cancel|preventDefault={dismissStartupNotice} on:click|self={dismissStartupNotice}>
     <div
       class="startup-card"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="startup-title"
     >
       <div class="startup-head">
         <div class="startup-badge-row">
@@ -584,12 +591,15 @@
         </div>
         <div class="flex items-center gap-2">
           {#if recentVersions.length > 1}
-            <div class="flex items-center gap-1 p-0.5 rounded-lg bg-white/[0.05] border border-white/[0.08]" role="tablist" aria-label="Версии">
+            <div class="flex items-center gap-1 p-0.5 rounded-lg bg-white/[0.05] border border-white/[0.08]" role="tablist" tabindex="-1" aria-label="Версии" on:keydown={onReleaseVersionsKeydown}>
               {#each recentVersions as ver}
                 <button
                   type="button"
                   role="tab"
+                  id="release-version-{ver.version}"
+                  aria-controls="release-notes-panel"
                   aria-selected={selectedVersion === ver.version}
+                  tabindex={selectedVersion === ver.version ? 0 : -1}
                   class="px-2 py-0.5 rounded text-[11px] font-medium transition-colors {selectedVersion === ver.version ? 'bg-white/15 text-white' : 'text-neutral-400 hover:text-neutral-200'}"
                   on:click={() => { selectedVersion = ver.version; showFullDetails = false; }}
                 >
@@ -609,7 +619,7 @@
         </div>
       </div>
 
-      <div class="startup-body">
+      <div id="release-notes-panel" class="startup-body" role="tabpanel" aria-labelledby="release-version-{selectedVersion}">
         <div class="startup-title-group">
           <h2 id="startup-title" class="startup-title">{activeChangelog.title}</h2>
           <p class="startup-subhead">Основные улучшения и изменения версии v{activeChangelog.version}:</p>
@@ -692,7 +702,6 @@
           <button
             class="startup-action"
             bind:this={startupAction}
-            use:focusOnMount
             on:click={dismissStartupNotice}
           >
             Понятно
@@ -700,13 +709,20 @@
         </div>
       </div>
     </div>
-  </div>
+  </dialog>
 {/if}
 
 <style>
   .startup-veil {
     position: fixed;
     inset: 0;
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    border: 0;
+    color: inherit;
     z-index: 9999;
     display: flex;
     align-items: center;
@@ -1070,6 +1086,11 @@
   .startup-checkbox-box.checked {
     background: var(--color-primary, #1DB954);
     border-color: var(--color-primary, #1DB954);
+  }
+
+  .startup-checkbox-label:has(input:focus-visible) .startup-checkbox-box {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 3px;
   }
 
   .startup-checkbox-input {

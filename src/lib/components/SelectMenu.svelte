@@ -156,7 +156,7 @@
   </button>
 
   {#if open}
-    <div id={menuId} class="select-menu-pop" class:lg-optical={$settings.design === 'liquid-glass'} use:glassRefraction={$settings.design === 'liquid-glass' && !$effectivePerformanceMode ? $settings.glassQuality || 'normal' : 'off'} role="menu" tabindex="-1" aria-label={ariaLabel} on:keydown={onMenuKeydown}>
+    <div id={menuId} class="select-menu-pop" class:lg-optical={$settings.design === 'liquid-glass'} use:glassRefraction={$settings.design === 'liquid-glass' && !$effectivePerformanceMode && $settings.glassMaterial !== 'matte' ? $settings.glassQuality || 'normal' : 'off'} role="menu" tabindex="-1" aria-label={ariaLabel} on:keydown={onMenuKeydown}>
       {#each options as option, index (option.value)}
         {@const selected = option.value === value}
         <button

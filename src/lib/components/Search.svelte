@@ -68,7 +68,7 @@
 
   const SEARCH_PAGE_SIZE = 20;
   $: glass = $settings.design === 'liquid-glass';
-  $: glassQuality = glass && !$effectivePerformanceMode ? $settings.glassQuality || 'normal' : 'off';
+  $: glassQuality = glass && !$effectivePerformanceMode && $settings.glassMaterial !== 'matte' ? $settings.glassQuality || 'normal' : 'off';
 
   $: localResults = $searchResults.filter((track: any) => sourceKind(track) === 'local');
   $: artistMatches = collectArtistMatches($searchResults).slice(0, 6);

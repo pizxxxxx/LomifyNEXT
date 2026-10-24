@@ -1,0 +1,26 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function owner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+    match /users/{userId}/state/current {
+      allow read, delete: if owner(userId);
+      allow create, update: if owner(userId)
+        && request.resource.data.keys().hasOnly(['revision', 'chunks', 'bytes', 'hash', 'createdAt', 'appVersion'])
+        && request.resource.data.revision is string && request.resource.data.revision.size() <= 80
+        && request.resource.data.chunks is int && request.resource.data.chunks >= 1 && request.resource.data.chunks <= 128
+        && request.resource.data.bytes is int && request.resource.data.bytes > 0 && request.resource.data.bytes <= 4194304
+        && request.resource.data.hash is string && request.resource.data.hash.size() == 64
+        && request.resource.data.createdAt is string && request.resource.data.createdAt.size() <= 40
+        && request.resource.data.appVersion is string && request.resource.data.appVersion.size() <= 80;
+    }
+    match /users/{userId}/chunks/{part} {
+      allow read, delete: if owner(userId) && part.matches('part[0-9]{1,3}');
+      allow create, update: if owner(userId) && part.matches('part[0-9]{1,3}')
+        && request.resource.data.keys().hasOnly(['revision', 'payload'])
+        && request.resource.data.revision is string && request.resource.data.revision.size() <= 80
+        && request.resource.data.payload is string && request.resource.data.payload.size() <= 400000;
+    }
+  }
+}

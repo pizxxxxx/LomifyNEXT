@@ -6,7 +6,7 @@ use tauri_plugin_keyring_store::{KeyringExt, KeyringStore};
 const KEYS: &[&str] = &[
     "yandex_music_token", "spotify_access_token", "spotify_refresh_token",
     "lastfm_shared_secret", "lastfm_session_key", "lastfm_auth_token",
-    "lastfm_pending_shared_secret", "legacy_auth_session", "legacy_sc_session",
+    "lastfm_pending_shared_secret", "legacy_auth_session", "legacy_sc_session", "lomify_cloud_refresh_token",
 ];
 static SECRET_LOCK: Mutex<()> = Mutex::new(());
 
